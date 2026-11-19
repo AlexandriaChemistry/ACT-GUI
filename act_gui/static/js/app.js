@@ -1,0 +1,686 @@
+/*
+ * This source file is part of the Alexandria Chemistry Toolkit.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ */
+/**
+ * @file The page of the molecule workspace: it sends the molecule and the
+ * choices of the user to the server, follows the calculations and shows
+ * their results in the viewer, the tables and the plots.
+ *
+ * All text that comes from the server or from files is put on the page as
+ * text, never as markup.
+ */
+import { css, esc, limits, plot, redrawPlots } from "./plot.js";
+
+/* global $3Dmol */
+
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+/** A number with a real minus sign. */
+const fmt = (x, d = 2) => (x < 0 ? "−" : "") + Math.abs(x).toFixed(d);
+/** Coordinates in the files of ACT are in nm, the viewer works in Å. */
+const NM = 10;
+
+/** What the page knows. */
+const state = {
+  token: "",            // for requests that change something
+  input: null,          // { smiles } or { file, label }
+  forcefield: {},       // {} for the default or { file, label }
+  mol: null,            // the molecule that was loaded, see moleculeFrom()
+  xyz: null,            // the coordinates shown in the charges tab
+  min: null,            // result of the minimization
+  nma: null,            // result of the normal mode analysis
+  sim: { points: [], series: "EPOT", job: null, pdb: null, nsteps: 0 },
+  ui: { style: "ball", colour: "charge", labels: true, tab: "charges", focus: -1, ghost: true, mode: 0 },
+};
+
+/* ---------- messages ---------- */
+
+let toastTimer;
+/**
+ * Show a short message at the bottom of the page.
+ * @param {string} msg The message.
+ */
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.add("on");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("on"), 3600);
+}
+
+/**
+ * Show an error above the workspace, or remove it.
+ * @param {string} msg The message, empty to remove it.
+ */
+function alertBox(msg) {
+  const a = $("#alert");
+  a.textContent = msg || "";
+  a.hidden = !msg;
+}
+
+/* ---------- the server ---------- */
+
+/**
+ * Send a request to the server.
+ * @param {string} path  The path below /api.
+ * @param {object} opts  method, json (an object to send), body (a file), params.
+ * @returns {Promise<object>} The answer.
+ * @throws {Error} With the message of the server if it refuses.
+ */
+async function call(path, { method = "GET", json, body, params } = {}) {
+  const url = new URL("/api" + path, location.origin);
+  for (const k in params || {}) url.searchParams.set(k, params[k]);
+  const headers = { "X-ACT-Token": state.token };
+  if (json !== undefined) { headers["Content-Type"] = "application/json"; body = JSON.stringify(json); }
+  const answer = await fetch(url, { method, headers, body, credentials: "same-origin" });
+  if (!answer.ok) {
+    let detail = "The server answered with status " + answer.status;
+    try { detail = (await answer.json()).detail || detail; } catch (e) { /* not JSON */ }
+    throw new Error(detail);
+  }
+  return answer;
+}
+
+/**
+ * Start a calculation and wait for its result.
+ * @param {string} task       charges, minimize, nma or simulate.
+ * @param {object} options    The options of the task.
+ * @param {function} onUpdate Called with the job each time it is asked for.
+ * @returns {Promise<object>} The job when it has finished.
+ * @throws {Error} If the calculation failed or was stopped.
+ */
+async function runJob(task, options = {}, onUpdate = null) {
+  const molecule = state.input.smiles ? { smiles: state.input.smiles } : { file: state.input.file };
+  const forcefield = state.forcefield.file ? { file: state.forcefield.file } : {};
+  let job = await (await call("/jobs", { method: "POST", json: { task, molecule, forcefield, options } })).json();
+  let seen = 0;
+  for (;;) {
+    if (onUpdate) onUpdate(job);
+    seen += job.progress.length;
+    if (job.status === "finished") return job;
+    if (job.status === "failed") throw new Error(job.error || "The calculation failed");
+    if (job.status === "cancelled") throw new Error("The calculation was stopped");
+    await new Promise(r => setTimeout(r, 250));
+    job = await (await call("/jobs/" + job.id, { params: { progress_from: seen } })).json();
+  }
+}
+
+/* ---------- tabs and buttons ---------- */
+
+/**
+ * Put the underline of a row of tabs under the selected tab.
+ * @param {Element} nav The row of tabs.
+ */
+function moveInk(nav) {
+  const b = $('button[aria-selected="true"]', nav), ink = $(".ink", nav);
+  if (!b || !ink || !b.offsetWidth) return;
+  if (!ink.dataset.placed) {
+    // The first time without motion
+    ink.style.transition = "none";
+    ink.dataset.placed = "1";
+    requestAnimationFrame(() => requestAnimationFrame(() => { ink.style.transition = ""; }));
+  }
+  ink.style.width = b.offsetWidth + "px";
+  ink.style.transform = `translateX(${b.offsetLeft}px)`;
+}
+
+/**
+ * Make a row of tabs work.
+ * @param {Element} nav        The row of tabs.
+ * @param {function} onSelect  Called with the name of the selected tab.
+ */
+function tabs(nav, onSelect) {
+  nav.addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    $$("button", nav).forEach(x => x.setAttribute("aria-selected", x === b));
+    moveInk(nav);
+    onSelect(b.dataset.tab || b.dataset.view);
+  });
+}
+
+/**
+ * Make a group of buttons work of which one is pressed.
+ * @param {Element} root     The group.
+ * @param {function} onPick  Called with the value of the pressed button.
+ */
+function seg(root, onPick) {
+  root.addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    $$("button", root).forEach(x => x.setAttribute("aria-pressed", x === b));
+    onPick(b.dataset.v);
+  });
+}
+
+/**
+ * Show one of a set of elements.
+ * @param {string[]} ids The ids of the elements.
+ * @param {string} on    The id of the one to show.
+ */
+function showOnly(ids, on) {
+  ids.forEach(i => { const p = document.getElementById(i); if (p) p.hidden = i !== on; });
+  requestAnimationFrame(() => { redrawPlots(); $$(".tabs").forEach(moveInk); });
+}
+
+/**
+ * Show the state of a calculation in a pill.
+ * @param {string} id    The id of the pill.
+ * @param {string} text  The text, empty to hide the pill.
+ * @param {string} kind  good, warn or bad.
+ */
+function pill(id, text, kind = "") {
+  const p = document.getElementById(id);
+  p.hidden = !text;
+  p.textContent = text;
+  p.className = "pill" + (kind ? " " + kind : "");
+}
+
+/* ---------- the molecule ---------- */
+
+/**
+ * Turn the description of a molecule from ACT into what the page shows:
+ * the atoms with their net charge, that of the atom and its shells, and
+ * the bonds between the atoms.
+ * @param {object} molecule The object "molecule" of a result.
+ * @returns {object} name, formula, charge, atoms, bonds, nshell and index,
+ * the position of each atom in the list of particles.
+ */
+function moleculeFrom(molecule) {
+  const particles = molecule.particles;
+  const index = [], local = new Map();
+  particles.forEach((p, i) => { if (p.particletype === "Atom") { local.set(i, index.length); index.push(i); } });
+  const atoms = index.map(i => ({ elem: particles[i].element, name: particles[i].name, type: particles[i].type,
+                                  q: particles[i].charge + (particles[i].charge_vs || 0) }));
+  let nshell = 0;
+  particles.forEach(p => {
+    if (p.particletype === "Atom") return;
+    nshell += 1;
+    // The charge of a shell or virtual site counts for the atom it belongs to
+    const parent = (p.parents || []).find(i => local.has(i));
+    if (parent !== undefined) atoms[local.get(parent)].q += p.charge;
+  });
+  const bonds = molecule.bonds.filter(b => local.has(b.atoms[0]) && local.has(b.atoms[1]))
+    .map(b => [local.get(b.atoms[0]), local.get(b.atoms[1]), b.order]);
+  return { name: molecule.name, formula: molecule.formula, charge: molecule.charge, mass: molecule.mass,
+           atoms, bonds, nshell, index };
+}
+
+/**
+ * The coordinates of the atoms in Å.
+ * @param {number[][]} coords The coordinates of all particles in nm.
+ * @returns {number[][]} The coordinates of the atoms.
+ */
+const atomCoords = coords => state.mol.index.map(i => coords[i].map(v => v * NM));
+
+/**
+ * The largest charge on an atom, for the colour scale.
+ * @returns {number} At least 0.1 e, rounded up to a tenth.
+ */
+function chargeScale() {
+  const qmax = Math.max(0.1, ...state.mol.atoms.map(a => Math.abs(a.q)));
+  return Math.ceil(qmax * 10 - 1e-9) / 10;
+}
+
+/* ---------- the viewer ---------- */
+
+let V = null, triedV = false, zoomed = false;
+
+/**
+ * Make the viewer, or tell that the browser cannot show it.
+ * @returns {object|null} The viewer.
+ */
+function makeViewer() {
+  const host = $("#gl");
+  try {
+    if (typeof $3Dmol === "undefined") throw new Error("no viewer");
+    const v = $3Dmol.createViewer(host, { backgroundColor: css("--stage"), antialias: true });
+    if (!v) throw new Error("no viewer");
+    return v;
+  } catch (e) {
+    const note = document.createElement("div");
+    note.className = "nogl";
+    note.textContent = "The 3D view needs WebGL, which this browser does not offer here.";
+    host.parentNode.appendChild(note);
+    return null;
+  }
+}
+
+/**
+ * The atoms in the form that the viewer takes.
+ * @param {number[][]} xyz  The coordinates of the atoms in Å.
+ * @param {number[][]} disp The displacement of each atom, for a vibration.
+ * @returns {object[]} The atoms with their bonds.
+ */
+function viewerAtoms(xyz, disp = null) {
+  const a = state.mol.atoms.map((at, i) => ({ elem: at.elem, atom: at.elem + (i + 1), serial: i + 1,
+    x: xyz[i][0], y: xyz[i][1], z: xyz[i][2], bonds: [], bondOrder: [], hetflag: true, properties: { charge: at.q } }));
+  state.mol.bonds.forEach(([i, j, o]) => {
+    const order = Math.max(1, Math.round(o));
+    a[i].bonds.push(j); a[i].bondOrder.push(order); a[j].bonds.push(i); a[j].bondOrder.push(order);
+  });
+  if (disp) a.forEach((at, i) => { at.dx = disp[i][0]; at.dy = disp[i][1]; at.dz = disp[i][2]; });
+  return a;
+}
+
+/**
+ * How the atoms are drawn.
+ * @returns {object} The style for the viewer.
+ */
+function styleSpec() {
+  const s = chargeScale();
+  const cs = state.ui.colour === "charge" ? { colorscheme: { prop: "charge", gradient: new $3Dmol.Gradient.RWB(-s, s) } } : {};
+  if (state.ui.style === "stick") return { stick: { radius: 0.16, ...cs } };
+  if (state.ui.style === "sphere") return { sphere: { scale: 0.85, ...cs } };
+  return { stick: { radius: 0.12, ...cs }, sphere: { scale: 0.26, ...cs } };
+}
+
+/**
+ * Put the charge or the name on the atoms.
+ * @param {number[][]} xyz The coordinates of the atoms in Å.
+ */
+function labelAtoms(xyz) {
+  if (!state.ui.labels) return;
+  xyz.forEach((c, i) => {
+    const at = state.mol.atoms[i];
+    if (at.elem === "H" && state.ui.tab !== "charges") return;
+    const text = state.ui.colour === "charge" ? (at.q > 0 ? "+" : "−") + Math.abs(at.q).toFixed(2) : at.elem + (i + 1);
+    V.addLabel(text, { position: { x: c[0], y: c[1], z: c[2] }, fontSize: 11, fontColor: css("--ink"),
+      backgroundColor: css("--surface"), backgroundOpacity: 0.82, borderThickness: 0, inFront: true,
+      showBackground: true, alignment: "center" });
+  });
+}
+
+/** Draw what belongs to the selected tab in the viewer. */
+function scene() {
+  const ui = state.ui;
+  $("#qlegend").hidden = ui.colour !== "charge" || !state.mol;
+  const titles = { charges: "Structure and charges", minimize: state.min ? "Minimized and original" : "Structure",
+    modes: state.nma ? `Vibration at ${state.nma.modes[ui.mode].frequency.value.toFixed(0)} cm⁻¹` : "Structure",
+    simulate: state.sim.pdb ? "Trajectory" : "Structure" };
+  $("#scene-title").textContent = titles[ui.tab];
+  if ($("#view-molecule").hidden || !state.mol) return;   // never draw into a hidden canvas
+  if (!V && !triedV) { triedV = true; V = makeViewer(); }
+  if (!V) return;
+  V.stopAnimate(); V.removeAllModels(); V.removeAllShapes(); V.removeAllLabels();
+  V.setBackgroundColor(css("--stage"));
+  const s = chargeScale();
+  $("#qlo").textContent = `−${s.toFixed(1)} e`;
+  $("#qhi").textContent = `+${s.toFixed(1)} e`;
+  if (ui.tab === "modes" && state.nma) {
+    const mode = state.nma.modes[ui.mode];
+    const disp = state.mol.index.map(i => mode.displacements[i]);
+    const m = V.addModel();
+    m.addAtoms(viewerAtoms(atomCoords(state.nma.coordinates.minimized), disp));
+    m.frames = [m.atoms];   // vibrate() needs a first frame
+    m.setStyle({}, styleSpec());
+    m.vibrate(12, 0.55, true, V, { radius: 0.06, radiusRatio: 2.2, mid: 0.7, color: css("--accent") });
+    V.animate({ loop: "backAndForth", interval: 45 });
+  } else if (ui.tab === "minimize" && state.min) {
+    const x = state.min.coordinates;
+    if (ui.ghost) {
+      const g = V.addModel();
+      g.addAtoms(viewerAtoms(atomCoords(x.before)));
+      g.setStyle({}, { stick: { radius: 0.09, color: css("--series2"), opacity: 0.55 } });
+    }
+    const m = V.addModel();
+    m.addAtoms(viewerAtoms(atomCoords(x.after)));
+    m.setStyle({}, styleSpec());
+    labelAtoms(atomCoords(x.after));
+  } else if (ui.tab === "simulate" && state.sim.pdb) {
+    // The viewer leaves out the hydrogen atoms of a pdb file unless told otherwise
+    const m = V.addModelsAsFrames(state.sim.pdb, "pdb", { keepH: true });
+    // The trajectory has the atoms in the order of the molecule, in every frame
+    const frames = m.frames && m.frames.length ? m.frames : [m.selectedAtoms({})];
+    frames.forEach(frame => {
+      if (Array.isArray(frame)) frame.forEach((at, i) => { if (state.mol.atoms[i]) at.properties = { ...at.properties, charge: state.mol.atoms[i].q }; });
+    });
+    m.setStyle({}, styleSpec());
+    V.animate({ loop: "forward", interval: 70 });
+  } else {
+    const m = V.addModel();
+    m.addAtoms(viewerAtoms(state.xyz));
+    m.setStyle({}, styleSpec());
+    labelAtoms(state.xyz);
+    if (ui.tab === "charges" && ui.focus >= 0) {
+      const c = state.xyz[ui.focus];
+      V.addSphere({ center: { x: c[0], y: c[1], z: c[2] }, radius: 0.62, color: css("--accent"), opacity: 0.35 });
+    }
+  }
+  if (!zoomed) { V.zoomTo(); V.zoom($("#gl").clientWidth < 500 ? 0.9 : 1.15); zoomed = true; }
+  V.render();
+}
+
+/* ---------- loading a molecule ---------- */
+
+/**
+ * Send a file to the server.
+ * @param {File} file   The file.
+ * @param {string} kind molecule or forcefield.
+ * @returns {Promise<object>} The identifier and the label of the file.
+ */
+async function upload(file, kind) {
+  return (await call("/uploads", { method: "POST", body: file, params: { kind, name: file.name } })).json();
+}
+
+/** Fill the line of facts about the molecule. */
+function chips() {
+  const m = state.mol, host = $("#molchips");
+  host.textContent = "";
+  const add = (label, value) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    if (label) chip.append(label + " ");
+    const b = document.createElement("b");
+    b.textContent = value;
+    chip.append(b);
+    host.append(chip);
+  };
+  if (m.name) add("", m.name);
+  add("", m.formula);
+  add("", `${m.atoms.length} atoms` + (m.nshell ? ` and ${m.nshell} shells` : ""));
+  add("net charge", `${m.charge} e`);
+  add("mass", `${m.mass.value.toFixed(2)} ${m.mass.unit}`);
+  add("force field", state.forcefield.label || state.defaultForcefield);
+}
+
+/** Fill the table of charges. */
+function chargeTable() {
+  const s = chargeScale(), table = $("#qtable");
+  table.innerHTML = `<tr><th>Atom</th><th>Type</th><th class="n">Charge (e)</th></tr>` + state.mol.atoms.map((a, i) =>
+    `<tr class="pick${i === state.ui.focus ? " sel" : ""}" data-i="${i}"><td>${esc(a.elem)}${i + 1}</td><td class="num">${esc(a.type)}</td>` +
+    `<td class="n">${fmt(a.q, 3)}<span class="qbar"><i></i></span></td></tr>`).join("");
+  // The bars are sized here: the page cannot carry style attributes
+  $$("tr.pick", table).forEach((row, i) => {
+    const q = state.mol.atoms[i].q, bar = $(".qbar i", row), w = Math.min(1, Math.abs(q) / s) * 50;
+    bar.style.width = w + "%";
+    bar.style.background = q < 0 ? "var(--neg)" : "var(--pos)";
+    bar.style[q < 0 ? "right" : "left"] = "50%";
+  });
+  $("#q-empty").hidden = true;
+}
+
+/** Forget the results of the previous molecule. */
+function resetResults() {
+  state.min = null; state.nma = null;
+  state.sim = { points: [], series: state.sim.series, job: null, pdb: null, nsteps: 0 };
+  state.ui.focus = -1; state.ui.mode = 0;
+  $("#rmsd").textContent = "–"; $("#dE").textContent = "–";
+  for (const id of ["etable", "modetable", "thermo"]) document.getElementById(id).textContent = "";
+  for (const id of ["irplot", "eplot"]) document.getElementById(id).textContent = "";
+  for (const id of ["min-pill", "nma-pill"]) pill(id, "");
+  $("#simbar").style.width = "0";
+  $("#simtime").textContent = "";
+}
+
+/** Load the molecule of the input line: make its charges and show it. */
+async function loadMolecule() {
+  const smiles = $("#smiles").value.trim();
+  if (!state.pendingFile && !smiles) { toast("Give a SMILES string or upload a file with a molecule."); return; }
+  const button = $("#load");
+  button.disabled = true; button.textContent = "Loading…";
+  alertBox("");
+  try {
+    if (state.pendingFile) {
+      const up = await upload(state.pendingFile, "molecule");
+      state.input = { file: up.id, label: up.label };
+    } else {
+      state.input = { smiles };
+    }
+    if (state.pendingForcefield) {
+      const up = await upload(state.pendingForcefield, "forcefield");
+      state.forcefield = { file: up.id, label: up.label };
+      state.pendingForcefield = null;
+    }
+    const job = await runJob("charges");
+    const compound = job.result.molecules[0];
+    state.mol = moleculeFrom(compound.molecule);
+    state.xyz = atomCoords(compound.coordinates.positions);
+    resetResults();
+    chips(); chargeTable();
+    for (const id of ["run-min", "run-nma", "run-sim"]) document.getElementById(id).disabled = false;
+    zoomed = false;
+    scene();
+  } catch (e) {
+    alertBox("The molecule could not be loaded. " + e.message);
+  } finally {
+    button.disabled = false; button.textContent = "Load molecule";
+  }
+}
+
+/* ---------- minimize ---------- */
+
+/** The names of the energy terms for a person. */
+const TERMS = { BONDS: "Bonds", ANGLES: "Angles", LINEAR_ANGLES: "Linear angles", PROPER_DIHEDRALS: "Dihedrals",
+  IMPROPER_DIHEDRALS: "Improper dihedrals", DISPERSION: "Dispersion", EXCHANGE: "Exchange", COULOMB: "Coulomb",
+  INDUCTION: "Induction", POLARIZATION: "Polarization", VDW: "Van der Waals", EPOT: "Potential energy" };
+
+/** Minimize the energy and show the result. */
+async function minimize() {
+  const button = $("#run-min");
+  button.disabled = true; pill("min-pill", "Minimizing…", "warn"); alertBox("");
+  try {
+    const job = await runJob("minimize");
+    const r = job.result;
+    state.min = r;
+    pill("min-pill", r.converged ? "Converged" : "Not converged: " + r.status, r.converged ? "good" : "warn");
+    $("#rmsd").innerHTML = `${(r.rmsd.value * NM).toFixed(3)} <small>Å</small>`;
+    const before = r["Energies before"], after = r["Energies after"];
+    $("#dE").innerHTML = `${fmt(after.EPOT.value - before.EPOT.value, 1)} <small>kJ/mol</small>`;
+    const rows = Object.keys(TERMS).filter(k => k in before && k in after && (before[k].value !== 0 || after[k].value !== 0));
+    $("#etable").innerHTML = `<tr><th>Term (kJ/mol)</th><th class="n">Before</th><th class="n">After</th><th class="n">Change</th></tr>` +
+      rows.map(k => `<tr class="${k === "EPOT" ? "total" : ""}"><td>${TERMS[k]}</td><td class="n">${fmt(before[k].value)}</td>` +
+        `<td class="n">${fmt(after[k].value)}</td><td class="n">${fmt(after[k].value - before[k].value)}</td></tr>`).join("");
+    scene();
+  } catch (e) {
+    pill("min-pill", "Failed", "bad"); alertBox("The minimization failed. " + e.message);
+  } finally { button.disabled = false; }
+}
+
+/* ---------- normal modes ---------- */
+
+/**
+ * Read the columns of an xvg file.
+ * @param {string} text The content of the file.
+ * @returns {number[][]} The rows of numbers.
+ */
+function parseXvg(text) {
+  return text.split("\n").filter(l => l.trim() && !"#@&".includes(l.trim()[0]))
+    .map(l => l.trim().split(/\s+/).map(Number)).filter(r => r.every(isFinite));
+}
+
+/**
+ * Select a normal mode and show its vibration.
+ * @param {number} i The number of the mode, from zero.
+ */
+function pickMode(i) {
+  state.ui.mode = i;
+  modesPanel();
+  scene();
+  const row = $(`#modetable tr[data-i="${i}"]`);
+  if (row) row.scrollIntoView({ block: "nearest" });
+}
+
+/**
+ * The rows of a table for nested values with units.
+ * @param {object} obj    The values.
+ * @param {string} prefix The name of the group the values are in.
+ * @returns {string} The rows.
+ */
+function unitRows(obj, prefix = "") {
+  let rows = "";
+  for (const [key, v] of Object.entries(obj)) {
+    if (v && typeof v === "object" && "value" in v) {
+      rows += `<tr><td>${esc(prefix ? prefix + ", " + key.toLowerCase() : key)}</td><td class="n">${fmt(v.value)}</td><td>${esc(v.unit)}</td></tr>`;
+    } else if (v && typeof v === "object") {
+      rows += unitRows(v, key);
+    }
+  }
+  return rows;
+}
+
+/** Draw the spectrum and fill the tables of the normal modes. */
+function modesPanel() {
+  const r = state.nma;
+  if (!r) return;
+  const freq = r.modes.map(m => m.frequency.value), inten = r.modes.map(m => m.intensity.value);
+  const imax = Math.max(...inten, 1e-12), spec = state.spectrum || [];
+  const smax = Math.max(...spec.map(p => p[1]), 1e-12);
+  const xmax = Math.ceil((Math.max(...freq, 1000) + 200) / 200) * 200;
+  plot("irplot", { label: "Infrared spectrum", xlim: [0, xmax], ylim: [0, 1.08], xlabel: "Wavenumber (cm⁻¹)",
+    ylabel: "Relative intensity", height: 230, aspect: 0.5, yfmt: v => v.toFixed(1),
+    series: [{ type: "line", x: spec.map(p => p[0]), y: spec.map(p => p[1] / smax), fill: true },
+             { type: "sticks", x: freq, selected: state.ui.mode }], onPick: pickMode });
+  $("#modetable").innerHTML = `<tr><th class="n">Mode</th><th class="n">cm⁻¹</th><th class="n">Rel. int.</th><th class="n">Red. mass</th></tr>` +
+    freq.map((f, i) => `<tr class="pick${i === state.ui.mode ? " sel" : ""}" data-i="${i}"><td class="n">${i + 1}</td><td class="n">${f.toFixed(1)}</td>` +
+      `<td class="n">${(inten[i] / imax).toFixed(2)}</td><td class="n">${r.modes[i].reduced_mass.value.toFixed(2)}</td></tr>`).join("");
+  const thermo = r.Thermochemistry && r.Thermochemistry.Alexandria;
+  if (thermo) {
+    const key = Object.keys(thermo).filter(k => k.startsWith("T=")).pop();
+    $("#thermo-title").textContent = "Thermochemistry at " + key.slice(2) + " K";
+    $("#thermo").innerHTML = `<tr><th>Quantity</th><th class="n">Value</th><th>Unit</th></tr>` + unitRows(thermo[key]);
+  }
+}
+
+/** Run the normal mode analysis and show the result. */
+async function normalModes() {
+  const button = $("#run-nma");
+  button.disabled = true; pill("nma-pill", "Running…", "warn"); alertBox("");
+  try {
+    const job = await runJob("nma");
+    state.nma = job.result;
+    state.spectrum = parseXvg(await (await call(`/jobs/${job.id}/files/ir`)).text());
+    const inten = state.nma.modes.map(m => m.intensity.value);
+    state.ui.mode = inten.indexOf(Math.max(...inten));
+    pill("nma-pill", `${state.nma.modes.length} modes`, "good");
+    modesPanel(); scene();
+  } catch (e) {
+    pill("nma-pill", "Failed", "bad"); alertBox("The normal mode analysis failed. " + e.message);
+  } finally { button.disabled = false; }
+}
+$("#modetable").addEventListener("click", e => { const r = e.target.closest("tr.pick"); if (r) pickMode(+r.dataset.i); });
+
+/* ---------- simulate ---------- */
+
+/** Draw the energy or the temperature of the simulation so far. */
+function energyPlot() {
+  const pts = state.sim.points, key = state.sim.series;
+  if (!pts.length) return;
+  const x = pts.map(p => p.time.value), y = pts.map(p => key === "T" ? p.temperature.value : p.energies[key]);
+  const names = { EPOT: "Potential energy (kJ/mol)", EKIN: "Kinetic energy (kJ/mol)", ETOT: "Total energy (kJ/mol)", T: "Temperature (K)" };
+  const last = pts[pts.length - 1];
+  const xmax = Math.max(last.time.value * (last.nsteps / Math.max(1, last.step)), last.time.value, 1e-6);
+  plot("eplot", { label: names[key] + " during the simulation", xlim: [0, last.step ? xmax : 1], ylim: limits(y),
+    xlabel: "Time (ps)", ylabel: names[key], height: 260, yfmt: v => Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(1),
+    series: [{ type: "line", x, y, endpoint: true }] });
+}
+
+/** Run a simulation, plot the energies as they come and show the trajectory. */
+async function simulate() {
+  const nsteps = Math.round(+$("#nsteps").value), deltat = +$("#dt").value / 1000, temp = +$("#temp").value;
+  if (!(nsteps > 0) || !(deltat > 0) || !(temp >= 0)) { toast("Give the number of steps, the time step and the temperature."); return; }
+  // About two hundred points in the plot and fifty frames in the viewer
+  const options = { nsteps, deltat, temp, minimize: true, nstener: Math.max(1, Math.round(nsteps / 200)),
+                    nstxout: Math.max(1, Math.round(nsteps / 50)) };
+  const button = $("#run-sim"), stop = $("#stop-sim");
+  button.disabled = true; stop.hidden = false; alertBox("");
+  state.sim.points = []; state.sim.pdb = null; state.sim.nsteps = nsteps;
+  $("#simbar").style.width = "0";
+  scene();
+  try {
+    const job = await runJob("simulate", options, j => {
+      state.sim.job = j.id;
+      if (j.progress.length) {
+        state.sim.points.push(...j.progress);
+        const last = state.sim.points[state.sim.points.length - 1];
+        $("#simbar").style.width = Math.min(100, 100 * last.step / nsteps) + "%";
+        $("#simtime").textContent = `${last.time.value.toFixed(3)} ps · ${last.temperature.value.toFixed(0)} K`;
+        energyPlot();
+      } else if (j.status === "running" && !state.sim.points.length) {
+        $("#simtime").textContent = "Minimizing first…";
+      }
+    });
+    $("#simbar").style.width = "100%";
+    state.sim.pdb = await (await call(`/jobs/${job.id}/files/o`)).text();
+    scene();
+  } catch (e) {
+    if (e.message !== "The calculation was stopped") alertBox("The simulation failed. " + e.message);
+    $("#simtime").textContent = e.message === "The calculation was stopped" ? "Stopped" : "";
+  } finally { button.disabled = false; stop.hidden = true; state.sim.job = null; }
+}
+$("#stop-sim").onclick = () => { if (state.sim.job) call("/jobs/" + state.sim.job, { method: "DELETE" }).catch(() => {}); };
+seg($("#eseries"), v => { state.sim.series = v; energyPlot(); });
+
+/* ---------- wiring ---------- */
+
+seg($("#style"), v => { state.ui.style = v; scene(); });
+seg($("#colour"), v => { state.ui.colour = v; scene(); });
+$("#labels").onchange = e => { state.ui.labels = e.target.checked; scene(); };
+$("#ghost").onchange = e => { state.ui.ghost = e.target.checked; scene(); };
+$("#reset").onclick = () => { zoomed = false; scene(); };
+$("#qtable").onclick = e => {
+  const r = e.target.closest("tr.pick");
+  if (!r) return;
+  state.ui.focus = state.ui.focus === +r.dataset.i ? -1 : +r.dataset.i;
+  chargeTable(); scene();
+};
+$("#load").onclick = loadMolecule;
+$("#smiles").addEventListener("keydown", e => { if (e.key === "Enter") loadMolecule(); });
+$("#smiles").addEventListener("input", () => { state.pendingFile = null; $("#upload").textContent = "Upload molecule file…"; });
+$("#upload").onclick = () => $("#molfile").click();
+$("#molfile").onchange = e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  state.pendingFile = file;
+  $("#upload").textContent = file.name;
+  $("#smiles").value = "";
+  loadMolecule();
+};
+$("#ffsel").onchange = e => {
+  if (e.target.value === "upload") $("#fffile").click();
+  else { state.forcefield = {}; state.pendingForcefield = null; }
+};
+$("#fffile").onchange = e => {
+  const file = e.target.files[0];
+  if (!file) { $("#ffsel").value = "default"; return; }
+  state.pendingForcefield = file;
+  const option = $('#ffsel option[value="upload"]');
+  option.textContent = file.name;
+};
+$("#run-min").onclick = minimize;
+$("#run-nma").onclick = normalModes;
+$("#run-sim").onclick = simulate;
+
+const TABS = { charges: "tab-charges", minimize: "tab-minimize", modes: "tab-modes", simulate: "tab-simulate" };
+tabs($("#tasks"), name => { state.ui.tab = name; showOnly(Object.values(TABS), TABS[name]); scene(); });
+const VIEWS = { molecule: "view-molecule", "force-field": "view-force-field", molprop: "view-molprop" };
+tabs($("#nav"), name => { showOnly(Object.values(VIEWS), VIEWS[name]); if (name === "molecule") scene(); else if (V) V.stopAnimate(); });
+window.addEventListener("resize", () => { redrawPlots(); $$(".tabs").forEach(moveInk); if (V) { V.resize(); V.render(); } });
+if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { redrawPlots(); scene(); });
+
+/** Ask the server who we are and what it offers. */
+async function start() {
+  $$(".tabs").forEach(moveInk);
+  try {
+    const session = await (await fetch("/api/session", { credentials: "same-origin" })).json();
+    if (!session.token) throw new Error(session.detail || "The server does not know this browser.");
+    state.token = session.token;
+    state.defaultForcefield = session.default_forcefield;
+    $('#ffsel option[value="default"]').textContent = session.default_forcefield;
+    $("#smiles").maxLength = session.max_smiles_length;
+    $("#status-text").textContent = (session.mode === "desktop" ? "Desktop mode" : "Server") + " · version " + session.version;
+    // Open a molecule that is named in the address, as in #smiles=CCO
+    const wanted = new URLSearchParams(location.hash.slice(1)).get("smiles");
+    if (wanted) { $("#smiles").value = wanted; }
+    if (wanted || new URLSearchParams(location.hash.slice(1)).has("load")) await loadMolecule();
+  } catch (e) {
+    $("#status-text").textContent = "Not connected";
+    alertBox(e.message);
+  }
+}
+start();

@@ -16,9 +16,20 @@ In development. What is there:
 
 - the server: uploads of molecule and force field files, the job engine and
   the interface for the page (`act_gui/`), with tests;
-- the tasks charges, minimize, nma and simulate, for a molecule from a file
-  or from a SMILES string, with the default force field or one that is
-  uploaded.
+- the molecule workspace of the page (`act_gui/static/`): a molecule from a
+  SMILES string or a file, with the default force field or one that is
+  uploaded, shown in three dimensions and coloured by charge; the table of
+  charges; energy minimization with the original structure superimposed,
+  the RMSD and the energy terms; normal modes with the infrared spectrum,
+  the animated vibrations and the thermochemistry; short simulations with
+  the energies plotted while the simulation runs and the trajectory
+  animated afterwards.
+
+Not there yet: saving plots as PDF, the OpenMM package, the force field and
+molprop workspaces, and the server for several users.
+
+The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
+`act_gui/static/vendor/`) to show molecules.
 
 ## Requirements
 
@@ -42,7 +53,9 @@ removed at the end; `--data DIR` keeps them in a directory.
 
 The tests of the server use a function in the place of the program. The
 tests in `tests/test_alexandria.py` run the real program when
-`ACT_ALEXANDRIA` is set.
+`ACT_ALEXANDRIA` is set. The tests in `tests/e2e` drive the page in Firefox
+without a window, through selenium, with the real program; with
+`ACT_GUI_SHOTS` set to a directory they save pictures of the page there.
 
 ## The default force field
 

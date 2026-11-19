@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACT</title>
+<link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><div class="mark" aria-hidden="true">AC</div><div><b>ACT</b> <span>Alexandria Chemistry Toolkit</span></div></div>
+    <nav class="tabs" id="nav" role="tablist" aria-label="Workspaces">
+      <button role="tab" data-view="molecule" aria-selected="true">Molecule</button>
+      <button role="tab" data-view="force-field" aria-selected="false">Force field</button>
+      <button role="tab" data-view="molprop" aria-selected="false">Molprop data</button>
+      <span class="ink"></span>
+    </nav>
+    <div class="status"><span class="dot"></span><span id="status-text">Starting</span></div>
+  </header>
+  <div class="alert" id="alert" role="alert" hidden></div>
+
+  <!-- ================= Molecule ================= -->
+  <section class="view" id="view-molecule">
+    <div class="card">
+      <div class="bar">
+        <div class="field grow"><label for="smiles">SMILES string</label>
+          <input class="mono" type="text" id="smiles" value="CC(=O)C" spellcheck="false" autocomplete="off"></div>
+        <button class="btn" id="upload" type="button">Upload molecule file…</button>
+        <input class="visually-hidden" type="file" id="molfile" accept=".sdf,.pdb,.xyz" tabindex="-1" aria-hidden="true">
+        <div class="field"><label for="ffsel">Force field</label>
+          <select id="ffsel"><option value="default">Default</option><option value="upload">Upload force field…</option></select></div>
+        <input class="visually-hidden" type="file" id="fffile" accept=".xml" tabindex="-1" aria-hidden="true">
+        <button class="btn primary" id="load" type="button">Load molecule</button>
+      </div>
+      <div class="bar pt0"><div class="chips" id="molchips"><span class="chip">Give a SMILES string or a file with a molecule (sdf, pdb or xyz) and load it.</span></div></div>
+    </div>
+
+    <div class="split">
+      <div class="card">
+        <div class="head">
+          <h2 id="scene-title">Structure</h2><span class="spacer"></span>
+          <div class="seg" id="style" role="group" aria-label="Drawing style">
+            <button aria-pressed="true" data-v="ball">Ball and stick</button><button aria-pressed="false" data-v="stick">Sticks</button><button aria-pressed="false" data-v="sphere">Spheres</button></div>
+          <div class="seg" id="colour" role="group" aria-label="Colour">
+            <button aria-pressed="false" data-v="element">Element</button><button aria-pressed="true" data-v="charge">Charge</button></div>
+          <label class="check"><input type="checkbox" id="labels" checked> Labels</label>
+        </div>
+        <div class="stage"><div class="gl" id="gl"></div>
+          <button class="btn small corner" id="reset" type="button">Reset view</button>
+          <div class="hint">Drag to rotate · scroll to zoom · shift-drag to move</div>
+          <div class="legend" id="qlegend"><span id="qlo">−0.4 e</span><i></i><span id="qhi">+0.4 e</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <nav class="tabs sub sub-pad" id="tasks" role="tablist" aria-label="Calculations">
+          <button role="tab" data-tab="charges" aria-selected="true">Charges</button>
+          <button role="tab" data-tab="minimize" aria-selected="false">Minimize</button>
+          <button role="tab" data-tab="modes" aria-selected="false">Normal modes</button>
+          <button role="tab" data-tab="simulate" aria-selected="false">Simulate</button>
+          <span class="ink"></span>
+        </nav>
+
+        <div class="body panel" id="tab-charges">
+          <p class="muted">Net charge of each atom, core plus shell. Click a row to find the atom in the viewer.</p>
+          <div class="scroll maxh380"><table class="data" id="qtable"></table></div>
+          <p class="empty" id="q-empty">Load a molecule to see its charges.</p>
+        </div>
+
+        <div class="body panel" id="tab-minimize" hidden>
+          <div class="row"><button class="btn primary" id="run-min" type="button" disabled>Minimize energy</button>
+            <label class="check"><input type="checkbox" id="ghost" checked> Show original structure</label>
+            <span class="spacer"></span><span class="pill" id="min-pill" hidden></span></div>
+          <div class="stats">
+            <div class="stat"><span class="lab">RMSD after superposition</span><span class="v" id="rmsd">–</span></div>
+            <div class="stat"><span class="lab">Change in potential energy</span><span class="v" id="dE">–</span></div>
+          </div>
+          <div class="xscroll"><table class="data" id="etable"></table></div>
+        </div>
+
+        <div class="body panel" id="tab-modes" hidden>
+          <div class="row"><button class="btn primary" id="run-nma" type="button" disabled>Run normal mode analysis</button>
+            <span class="spacer"></span><span class="pill" id="nma-pill" hidden></span></div>
+          <div><h3>Infrared spectrum</h3><div class="plot mt8" id="irplot"></div>
+            <p class="muted fine">Click a line under the spectrum or a row in the table to see the vibration.</p></div>
+          <div class="cols modes">
+            <div><h3 class="mb8">Modes</h3><div class="scroll maxh250"><table class="data" id="modetable"></table></div></div>
+            <div><h3 class="mb8" id="thermo-title">Thermochemistry</h3><div class="xscroll"><table class="data" id="thermo"></table></div></div>
+          </div>
+        </div>
+
+        <div class="body panel" id="tab-simulate" hidden>
+          <div class="row">
+            <div class="field"><label for="nsteps">Steps</label><input type="number" id="nsteps" value="2000" min="1" step="100"></div>
+            <div class="field"><label for="dt">Time step (fs)</label><input type="number" id="dt" value="0.5" min="0.01" step="0.1"></div>
+            <div class="field"><label for="temp">Temperature (K)</label><input type="number" id="temp" value="300" min="0" step="10"></div>
+            <button class="btn primary end" id="run-sim" type="button" disabled>Run simulation</button>
+            <button class="btn end" id="stop-sim" type="button" hidden>Stop</button>
+          </div>
+          <div class="progress" aria-hidden="true"><i id="simbar"></i></div>
+          <div class="row"><div class="seg" id="eseries" role="group" aria-label="Energy to plot">
+              <button aria-pressed="true" data-v="EPOT">Potential</button><button aria-pressed="false" data-v="EKIN">Kinetic</button><button aria-pressed="false" data-v="ETOT">Total</button><button aria-pressed="false" data-v="T">Temperature</button></div>
+            <span class="spacer"></span><span class="num muted" id="simtime"></span></div>
+          <div class="plot" id="eplot"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="view-force-field" hidden>
+    <div class="card"><div class="body"><h2>Force field tools</h2>
+      <p class="muted">Generating, editing and validating force fields and making virtual site files is not available yet in this version.</p></div></div>
+  </section>
+
+  <section class="view" id="view-molprop" hidden>
+    <div class="card"><div class="body"><h2>Molprop data</h2>
+      <p class="muted">Validating molprop files and evaluating a force field against them is not available yet in this version.</p></div></div>
+  </section>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/static/vendor/3Dmol-min.js"></script>
+<script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
