@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "act-gui"
+description = "Graphical user interface of the Alexandria Chemistry Toolkit"
+readme = "README.md"
+license = { text = "GPL-2.0-or-later" }
+requires-python = ">=3.9"
+dependencies = ["fastapi", "uvicorn"]
+dynamic = ["version"]
+
+[project.scripts]
+act-gui = "act_gui.__main__:main"
+
+[tool.setuptools]
+packages = ["act_gui"]
+
+[tool.setuptools.dynamic]
+version = { attr = "act_gui.__version__" }
+
+[tool.setuptools.package-data]
+act_gui = ["static/**/*", "data/**/*"]

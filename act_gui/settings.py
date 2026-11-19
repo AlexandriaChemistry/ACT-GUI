@@ -1,0 +1,102 @@
+#
+# This source file is part of the Alexandria Chemistry Toolkit.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+"""!
+@file
+@brief The settings of the server.
+"""
+from __future__ import annotations
+
+import os
+import secrets
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, Tuple
+
+## The directory with the files that come with the package
+PACKAGE_DIR = Path(__file__).resolve().parent
+
+
+def _default_forcefield() -> Path:
+    """!
+    @brief The force field that is used when the user gives none.
+    @return The file named by the environment variable ACT_GUI_FORCEFIELD if
+    it is set, otherwise the force field in the data of the package. This
+    is a test force field of ACT until the new default force field exists;
+    changing the default means changing this one place.
+    """
+    env = os.environ.get("ACT_GUI_FORCEFIELD")
+    if env:
+        return Path(env)
+    return PACKAGE_DIR / "data" / "forcefields" / "ACS-pg1.xml"
+
+
+@dataclass
+class Settings:
+    """!
+    @brief Everything that can be configured.
+
+    The limits protect the machine: an interface that anybody can reach
+    must not accept files or calculations of any size.
+    """
+    ## Where uploads and the directories of the jobs are kept
+    data_dir: Path
+    ## desktop: one user on the local machine. server: several users.
+    mode: str = "desktop"
+    ## The secret that the browser must present, made at start-up
+    token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    ## The force field that is used when the user gives none
+    default_forcefield: Path = field(default_factory=_default_forcefield)
+    ## What the interface calls the default force field
+    default_forcefield_label: str = "ACS-pg1 (test force field, polarizable)"
+    ## The largest file that can be uploaded, in bytes
+    max_upload_bytes: int = 5 * 1024 * 1024
+    ## The longest SMILES string, the same as alexandria accepts
+    max_smiles_length: int = 2000
+    ## Seconds after which a calculation is stopped
+    job_timeout: float = 600.0
+    ## The number of calculations that run at the same time
+    max_workers: int = 2
+    ## The number of calculations that can wait or run before new ones are refused
+    max_active_jobs: int = 8
+    ## The number of progress reports of a job that are kept for plotting
+    max_progress_points: int = 5000
+    ## The smallest and largest value of options with a number, by task and option
+    limits: Dict[str, Dict[str, Tuple[float, float]]] = field(default_factory=lambda: {
+        "simulate": {"nsteps": (1, 200000), "nstener": (1, 100000),
+                     "nstxout": (1, 100000), "temp": (0, 5000),
+                     "deltat": (1e-6, 0.01)},
+        "minimize": {"maxiter": (1, 100000)},
+        "nma": {"maxiter": (1, 100000), "linewidth": (0.1, 500)},
+    })
+
+    def __post_init__(self) -> None:
+        """!
+        @brief Make the paths absolute and check the mode.
+        @throws ValueError for an unknown mode.
+        """
+        self.data_dir = Path(self.data_dir).expanduser().resolve()
+        self.default_forcefield = Path(self.default_forcefield).expanduser()
+        if self.mode not in ("desktop", "server"):
+            raise ValueError("The mode must be desktop or server, not '%s'" % self.mode)
+
+    @property
+    def uploads_dir(self) -> Path:
+        """!
+        @brief The directory with the uploaded files.
+        @return The path, below the data directory.
+        """
+        return self.data_dir / "uploads"
+
+    @property
+    def jobs_dir(self) -> Path:
+        """!
+        @brief The directory with one directory for each job.
+        @return The path, below the data directory.
+        """
+        return self.data_dir / "jobs"
