@@ -124,10 +124,12 @@ class SettingsTest(unittest.TestCase):
         base = {"server": "csb", "user": "spoel", "workdir": "act"}
         proposed = cluster.parse(base)
         self.assertEqual(("module", "ACT", "CLUSTER,CLUSTER-AMD", "GPU,CLUSTER-AMD", "gpu:1", "",
-                          "srun", 120),
+                          "srun", "alexandria", 120),
                          (proposed.load, proposed.load_name, proposed.partition,
                           proposed.gpu_partition, proposed.gpu_gres, proposed.account,
-                          proposed.launcher, proposed.poll_seconds))
+                          proposed.launcher, proposed.program, proposed.poll_seconds))
+        # The program of a build in double precision has another name
+        self.assertEqual("alexandria_d", cluster.parse(dict(base, program="alexandria_d")).program)
         chosen = cluster.parse(dict(base, load="source", load_name="~/tools/bin/ACTRC",
                                     partition="cpu", gpu_partition="gpu,gpu-long",
                                     gpu_gres="gpu:a100:2", account="naiss2026-1-23",
@@ -155,6 +157,10 @@ class SettingsTest(unittest.TestCase):
             dict(base, gpu_gres=""), dict(base, gpu_gres=":1"),
             dict(base, account="-A"), dict(base, account="a b"), dict(base, account=5),
             dict(base, launcher="bash -c"), dict(base, launcher=""),
+            dict(base, program=""), dict(base, program="alexandria; id"),
+            dict(base, program="alexandria -x"), dict(base, program="-alexandria"),
+            dict(base, program="/usr/bin/alexandria"), dict(base, program="$(id)"),
+            dict(base, program=5), dict(base, program="a" * 65),
             dict(base, poll_seconds=5), dict(base, poll_seconds=100000),
             dict(base, poll_seconds="120"), dict(base, poll_seconds=120.5),
             dict(base, poll_seconds=True),
@@ -551,7 +557,7 @@ class ClusterApiTest(unittest.TestCase):
         self.assertEqual({"load": "module", "load_name": "ACT",
                           "partition": "CLUSTER,CLUSTER-AMD", "gpu_partition": "GPU,CLUSTER-AMD",
                           "gpu_gres": "gpu:1", "account": "", "launcher": "srun",
-                          "poll_seconds": 120}, first["proposed"])
+                          "program": "alexandria", "poll_seconds": 120}, first["proposed"])
         self.assertEqual(["module", "source", "conda", "none"], first["load_kinds"])
         self.assertIs(True, client.get("/api/session", headers=self.headers).json()["cluster"])
         chosen = {"server": "good", "user": "spoel", "workdir": "~/act/jobs"}

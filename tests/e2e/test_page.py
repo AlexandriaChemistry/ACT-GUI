@@ -962,10 +962,10 @@ class PageTest(unittest.TestCase):
             return self.browser.find_element(By.ID, field).get_attribute("value")
         # What is proposed: the module ACT and the partitions of csb
         self.assertEqual(("module", "ACT", "CLUSTER,CLUSTER-AMD", "GPU,CLUSTER-AMD", "gpu:1", "",
-                          "srun", "120"),
+                          "srun", "alexandria", "120"),
                          tuple(value(f) for f in ("cl-load", "cl-loadname", "cl-partition",
                                                   "cl-gpupartition", "cl-gres", "cl-account",
-                                                  "cl-launcher", "cl-poll")))
+                                                  "cl-launcher", "cl-program", "cl-poll")))
         self.assertEqual("Name of the module", self.text("#cl-loadlabel"))
         # Settings that cannot be are refused and not kept
         fill("-oProxyCommand=evil", "spoel", "act")
@@ -988,7 +988,8 @@ class PageTest(unittest.TestCase):
                                       "load": "source", "load_name": "/opt/act/bin/ACTRC",
                                       "partition": "cpu,cpu-long",
                                       "gpu_partition": "GPU,CLUSTER-AMD", "gpu_gres": "gpu:1",
-                                      "account": "", "launcher": "srun", "poll_seconds": 120}},
+                                      "account": "", "launcher": "srun",
+                                      "program": "alexandria", "poll_seconds": 120}},
                          json.loads(self.config.read_text()))
         self.assertEqual("act/jobs", value("cl-workdir"))
         # Nothing to load: the field for it goes away

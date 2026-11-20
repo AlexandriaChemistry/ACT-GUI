@@ -63,6 +63,9 @@ _GRES = re.compile(r"^[A-Za-z0-9_]+(:[A-Za-z0-9_.-]+){0,3}$")
 _ACCOUNT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
 ## The programs that start the processes of a parallel job
 LAUNCHERS = ("srun", "mpirun")
+## The name of the program of ACT on the cluster, such as alexandria or,
+## for a build in double precision, alexandria_d. A name, not a path.
+_PROGRAM = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]{0,63}$")
 ## The shortest and longest time between two questions for the state of a
 ## job, in seconds. A cluster may block an account that logs in often.
 POLL_RANGE = (60, 3600)
@@ -107,6 +110,8 @@ class ClusterSettings:
     account: str = ""
     ## The program that starts the processes of a parallel job
     launcher: str = "srun"
+    ## The name of the program of ACT on the cluster
+    program: str = "alexandria"
     ## Seconds between two questions for the state of a job
     poll_seconds: int = 120
 
@@ -142,8 +147,9 @@ def parse(given: Any) -> ClusterSettings:
     """!
     @brief Check settings that the user gave or that were read from a file.
     @param given An object with server, user and workdir, and optionally
-    load, load_name, partition, gpu_partition, gpu_gres, account, launcher
-    and poll_seconds. What is left out gets the value that is proposed.
+    load, load_name, partition, gpu_partition, gpu_gres, account, launcher,
+    program and poll_seconds. What is left out gets the value that is
+    proposed.
     @return The settings.
     @throws ClusterError if one is missing or not possible.
     """
@@ -202,6 +208,10 @@ def parse(given: Any) -> ClusterSettings:
         raise ClusterError("'%s' cannot be the name of an account" % text["account"])
     if text["launcher"] not in LAUNCHERS:
         raise ClusterError("Parallel jobs are started with one of: %s" % ", ".join(LAUNCHERS))
+    if not _PROGRAM.match(text["program"]):
+        raise ClusterError("'%s' cannot be the name of the program of ACT on the cluster: "
+                           "give a name such as alexandria or alexandria_d, without a "
+                           "directory" % text["program"])
     poll = given.get("poll_seconds", default.poll_seconds)
     if isinstance(poll, bool) or not isinstance(poll, int) \
             or not POLL_RANGE[0] <= poll <= POLL_RANGE[1]:

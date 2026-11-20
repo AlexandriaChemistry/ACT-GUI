@@ -464,10 +464,12 @@
               <input class="mono wide" type="text" id="cl-gres" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
             <div class="field"><label for="cl-launcher">Parallel jobs start with</label>
               <select id="cl-launcher"><option value="srun">srun</option><option value="mpirun">mpirun</option></select></div>
+            <div class="field"><label for="cl-program">Program of ACT there</label>
+              <input class="mono" type="text" id="cl-program" maxlength="64" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
             <div class="field"><label for="cl-poll">Seconds between status checks</label>
               <input type="number" id="cl-poll" min="60" max="3600" step="30"></div>
           </div>
-          <p class="muted fine">Several partitions are given with commas in between. What is filled in at first are the values for the cluster csb.</p></div>
+          <p class="muted fine">Several partitions are given with commas in between. The program is <span class="mono">alexandria</span>, or <span class="mono">alexandria_d</span> for a build in double precision. What is filled in at first are the values for the cluster csb.</p></div>
         <div class="row"><button class="btn primary" id="cl-save" type="button">Save</button>
           <button class="btn" id="cl-check" type="button" disabled>Test the login</button>
           <span class="spacer"></span>

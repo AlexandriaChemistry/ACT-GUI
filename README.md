@@ -142,6 +142,7 @@ interface starts; `--config FILE` names another file. The file looks like
         "gpu_gres": "gpu:1",
         "account": "",
         "launcher": "srun",
+        "program": "alexandria",
         "poll_seconds": 120
       }
     }
@@ -153,7 +154,9 @@ with the name in `load_name`), `source` (the shell reads the file in
 `load_name`, such as the `ACTRC` of an installation), `conda` (the
 environment in `load_name` is activated) or `none`. Jobs without a GPU go
 to the partitions in `partition`; jobs that need one go to those in
-`gpu_partition` and ask for `gpu_gres` with `--gres`.
+`gpu_partition` and ask for `gpu_gres` with `--gres`. `program` is the
+name of the program of ACT on the cluster: `alexandria`, or `alexandria_d`
+for a build in double precision.
 
 The interface logs in with the `ssh` program of your machine, which uses
 your own keys and settings. It never asks for a password or a key and
@@ -177,7 +180,7 @@ Slurm, the command and the files that go along. The files get a name
 after the option they are for (`ff.xml`, `mp.xml`), so no name of a file
 on your machine goes to the cluster. The command is made with the options
 that the `alexandria` of your machine knows; the program on the cluster,
-which is called `alexandria` there, has to know them as well.
+whose name is a setting, has to know them as well.
 
 Sending a job is one login: the files and the script go to the directory
 `workdir/name-of-the-job`, where `sbatch` is started. The tab Cluster

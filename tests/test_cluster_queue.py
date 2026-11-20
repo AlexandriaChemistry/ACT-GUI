@@ -191,6 +191,21 @@ class PlanTest(QueueCase):
         self.assertTrue(described["command"].startswith("alexandria train_ff -ff ff.xml"))
         self.assertEqual(plan.script, described["script"])
 
+    def test_program_with_another_name(self):
+        """!
+        @brief The job starts the program that the settings name, such as
+        that of a build in double precision.
+        """
+        settings = cluster.parse({"server": "good", "user": "spoel", "workdir": "act/jobs",
+                                  "load": "none", "program": "alexandria_d"})
+        staging = self.queue.reserve("job1")
+        options = {"ff": self.forcefield, "mp": [self.molprop], "json": True}
+        plan = make_plan("job1", "evaluate", "train_ff", options, staging, fake_arguments,
+                         settings, tasks=2)
+        self.assertEqual(["alexandria_d", "train_ff", "-ff", "ff.xml"], plan.words[:4])
+        self.assertIn("\nsrun alexandria_d train_ff -ff ff.xml ", plan.script)
+        self.queue.release("job1")
+
     def test_several_files_for_one_option(self):
         """!
         @brief Each file of an option that takes several gets a name.
