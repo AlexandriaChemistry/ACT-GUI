@@ -33,7 +33,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import __version__, ffgen, openmm_package, plots
+from . import __version__, evaluation, ffgen, openmm_package, plots
 from .jobs import FINISHED, JobError, JobManager
 from .settings import PACKAGE_DIR, Settings
 from .tasks import TASKS, RequestError, build_request, describe_task, find_task
@@ -199,6 +199,7 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             "max_molprop_bytes": settings.max_molprop_bytes,
             "limits": settings.limits,
             "pdf": can_plot,
+            "observables": evaluation.describe(),
         }
 
     @app.get("/api/generator")
@@ -265,6 +266,19 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         path = job.files.get(task.forcefield)
         return path if path is not None and path.is_file() else None
 
+    def described_molprop(job_id: str) -> Optional[Any]:
+        """!
+        @brief The compounds of a molprop file as a job described them.
+        @param job_id The identifier of the job.
+        @return The compounds, None if there is no such job, if it is not
+        done or if it did not describe a molprop file.
+        """
+        job = manager.get(job_id)
+        if job is None or job.task != "mp_describe" or job.status != FINISHED:
+            return None
+        result = job.result
+        return result.get("molecules") if isinstance(result, dict) else None
+
     @app.post("/api/jobs")
     async def submit(request: Request) -> Dict[str, Any]:
         """!
@@ -281,10 +295,12 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             if not isinstance(body, dict):
                 raise RequestError("The request must be an object")
             task = find_task(body.get("task"))
-            prepared = build_request(task, body, settings, uploads, written_forcefield)
+            prepared = build_request(task, body, settings, uploads, written_forcefield,
+                                     described_molprop)
             job = manager.submit(task.name, task.command, prepared.options,
                                  progress=task.progress, outputs=dict(task.outputs),
-                                 inputs=prepared.inputs)
+                                 inputs=prepared.inputs, collect=task.collect,
+                                 digest=task.digest)
         except RequestError as exc:
             raise fail(400, str(exc)) from exc
         except JobError as exc:
@@ -396,6 +412,8 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
                 if len(labels) == 1 and None not in labels:
                     title, ylabel = labels.pop()
                     extra = {"title": title, "ylabel": ylabel}
+                if task.scatter:
+                    extra["scatter"] = True
                 plotter(source, target, series=names, reverse_x=reverse, **extra)
             except plots.PlotError as exc:
                 raise fail(500, str(exc)) from exc

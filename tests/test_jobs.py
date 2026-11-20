@@ -170,6 +170,30 @@ class JobTest(unittest.TestCase):
         self.assertEqual(job.workdir / "atomtypes.csv", job.files["f"])
         self.assertEqual(job.workdir / "forcefield.xml", job.files["o"])
 
+    def test_files_without_an_option_and_digest(self):
+        """!
+        @brief Files that the command writes unasked are kept by name if
+        they exist, and a large result is reduced before it is kept.
+        """
+        original = self.run.__class__.__call__
+
+        def writes_more(run, command, *, workdir, **kwargs):
+            result = original(run, command, workdir=workdir, **kwargs)
+            (Path(workdir) / "INTERACTION.xvg").write_text("0 1\n")
+            return result
+        self.run.__class__.__call__ = writes_more
+        try:
+            job = self.manager.submit(
+                "evaluate", "train_ff", {},
+                collect={"INTERACTION": "../INTERACTION.xvg", "COULOMB": "COULOMB.xvg"},
+                digest=lambda data: {"kept": sorted(data)})
+            self.assertTrue(wait_for(job, (jobs.FINISHED,)))
+        finally:
+            self.run.__class__.__call__ = original
+        self.assertEqual(["INTERACTION", "c"], sorted(job.files))
+        self.assertEqual(job.workdir / "INTERACTION.xvg", job.files["INTERACTION"])
+        self.assertEqual({"kept": ["rmsd"]}, job.result)
+
     def test_failure_is_reported(self):
         """!
         @brief A job that fails has the message of the error.

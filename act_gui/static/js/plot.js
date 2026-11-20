@@ -7,8 +7,8 @@
  * of the License, or (at your option) any later version.
  */
 /**
- * @file Small plots drawn as SVG, all to one design: lines, filled lines and
- * the lines under a spectrum that select a mode. The plots follow the width
+ * @file Small plots drawn as SVG, all to one design: lines, filled lines,
+ * points and the lines under a spectrum that select a mode. The plots follow the width
  * of their element and the colours of the style sheet.
  */
 
@@ -106,8 +106,12 @@ function drawPlot(target, cfg) {
     if (p.type === "line" && p.x.length) {
       const d = p.x.map((v, i) => `${i ? "L" : "M"}${X(v).toFixed(1)} ${Y(p.y[i]).toFixed(1)}`).join("");
       if (p.fill) s += `<path d="${d}L${X(p.x[p.x.length - 1]).toFixed(1)} ${Y(y0)}L${X(p.x[0]).toFixed(1)} ${Y(y0)}Z" fill="${col}" fill-opacity="0.12" stroke="none"/>`;
-      s += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${p.width || 1.6}" stroke-linejoin="round"/>`;
+      s += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${p.width || 1.6}" stroke-linejoin="round"${p.dash ? ' stroke-dasharray="5 4"' : ""}/>`;
       if (p.endpoint) { const i = p.x.length - 1; s += `<circle cx="${X(p.x[i])}" cy="${Y(p.y[i])}" r="3.5" fill="${col}"/>`; }
+    } else if (p.type === "points") {
+      // Many points in one path: a short line with round ends is a dot
+      const d = p.x.map((v, i) => `M${X(v).toFixed(1)} ${Y(p.y[i]).toFixed(1)}h0`).join("");
+      s += `<path d="${d}" fill="none" stroke="${col}" stroke-opacity="0.6" stroke-width="${p.size || 5}" stroke-linecap="round"/>`;
     } else if (p.type === "sticks") {
       p.x.forEach((v, i) => {
         if (v < xlo || v > xhi) return;

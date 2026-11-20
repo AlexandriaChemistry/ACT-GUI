@@ -8,24 +8,42 @@
  */
 /**
  * @file The molprop workspace: what is in a file with compounds and their
- * properties, and whether the file is consistent.
+ * properties, whether the file is consistent, and how well a force field
+ * reproduces its data.
  *
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, alertBox, el, pill, runTask, toast, upload } from "./common.js";
+import { $, $$, alertBox, call, el, num, pill, runTask, saveFile, session, toast, upload } from "./common.js";
+import { limits, plot } from "./plot.js";
 
 /** What the workspace knows. */
 const state = {
   data: null,     // the file as edit_mp describes it: summary, molecules and validation
   query: "",      // the text that the name or the formula of a compound must contain
   picked: -1,     // the compound of which the details are shown
+  file: null,     // the molprop file on the server: { file, described, label }
+  observables: [],  // the properties that a force field can be compared on
+  pendingFF: null,  // a force field file that is uploaded when the comparison starts
+  ev: null,       // the comparison: { job, files, sets }, sets by the name of the file
 };
 
 /** The most compounds that are put in the table at once. */
 const MAX_ROWS = 300;
 /** The most messages of the validation that are listed. */
 const MAX_MESSAGES = 40;
+/** The most points of one data set that are drawn. */
+const MAX_POINTS = 5000;
+/** What the page calls the files with a comparison. */
+const PLOT_NAMES = {
+  epotcorr: "Potential energy", forcecorr: "Forces", freqcorr: "Vibrational frequencies", espcorr: "Electrostatic potential",
+  dipolecorr: "Dipole", quadrupolecorr: "Quadrupole", alphacorr: "Polarizability", isopol: "Isotropic polarizability",
+  anisopol: "Anisotropic polarizability", INTERACTION: "Interaction energy", COULOMB: "Electrostatics",
+  ALLELEC: "Electrostatics and induction", INDUCTION: "Induction", EXCHANGE: "Exchange", DISPERSION: "Dispersion",
+  EXCHIND: "Exchange and induction", EXCHDISP: "Exchange and dispersion",
+};
+/** The colours of the data sets in a plot. */
+const SET_COLOURS = ["--accent", "--warn", "--series2"];
 
 /**
  * Fill a table with two columns: a name and a number.
@@ -123,6 +141,150 @@ function validation() {
   }
 }
 
+/* ---------- comparing a force field ---------- */
+
+/** Offer the properties that the data of the file can be compared on. */
+function observableBoxes() {
+  const host = $("#ev-observables"), s = state.data.summary;
+  host.textContent = "";
+  const dimers = s.dimers + s.larger > 0, monomers = s.monomers > 0;
+  let first = true;
+  for (const o of state.observables) {
+    if (o.dimer ? !dimers : !monomers) continue;
+    // The first of them is what most files are for
+    host.append(el("label", { class: "check" }, el("input", { type: "checkbox", data: { name: o.name }, checked: first }), " " + o.label));
+    first = false;
+  }
+}
+
+/**
+ * Read a file in which sets of points are separated by lines with "&".
+ * @param {string} text The content of an xvg file.
+ * @returns {object} xlabel, legends and for each set its x and y values.
+ */
+function parseSets(text) {
+  const out = { xlabel: "", legends: [], sets: [] };
+  let current = { x: [], y: [] };
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line || line[0] === "#") continue;
+    if (line[0] === "@") {
+      const label = /^@\s*xaxis\s+label\s+"([^"]*)"/.exec(line), legend = /^@\s*s\d+\s+legend\s+"([^"]*)"/.exec(line);
+      if (label) out.xlabel = label[1];
+      if (legend) out.legends.push(legend[1]);
+    } else if (line[0] === "&") {
+      out.sets.push(current);
+      current = { x: [], y: [] };
+    } else {
+      const [x, y] = line.split(/\s+/).map(Number);
+      if (isFinite(x) && isFinite(y)) { current.x.push(x); current.y.push(y); }
+    }
+  }
+  if (current.x.length) out.sets.push(current);
+  out.sets = out.sets.filter(set => set.x.length);
+  return out;
+}
+
+/** Draw the comparison that is chosen: the force field against the reference. */
+async function comparisonPlot() {
+  const ev = state.ev, option = $("#ev-plotsel").value;
+  if (!ev || !option) return;
+  if (!ev.sets[option]) {
+    try {
+      ev.sets[option] = parseSets(await (await call(`/jobs/${ev.job}/files/${option}`)).text());
+    } catch (e) { alertBox("The data could not be fetched. " + e.message); return; }
+  }
+  const data = ev.sets[option];
+  if ($("#ev-plotsel").value !== option) return;
+  const all = data.sets.flatMap(set => set.x.concat(set.y));
+  const lim = limits(all.length ? all : [0, 1], 0.05);
+  let thinned = false;
+  const series = [{ type: "line", x: lim, y: lim, color: "--muted", width: 1, dash: true }];
+  data.sets.forEach((set, i) => {
+    // Of very many points every so-maniest is drawn
+    const step = Math.ceil(set.x.length / MAX_POINTS);
+    thinned = thinned || step > 1;
+    const keep = (_, j) => j % step === 0;
+    series.push({ type: "points", x: set.x.filter(keep), y: set.y.filter(keep), color: SET_COLOURS[i % SET_COLOURS.length] });
+  });
+  const name = PLOT_NAMES[option] || option;
+  plot("evplot", { label: `${name}: force field against reference`, xlim: lim, ylim: lim, height: 560, aspect: 1,
+                   xlabel: "Reference: " + (data.xlabel || name), ylabel: "Force field", series });
+  const counts = data.sets.map((set, i) => `${set.x.length} ${data.legends[i] || "points"}`).join(", ");
+  $("#ev-plotnote").textContent = `${counts}. The dashed line is where the force field equals the reference.` +
+    (thinned ? ` Of each set at most ${MAX_POINTS} points are drawn; the PDF file and the data have all.` : "");
+}
+
+/**
+ * Show the result of a comparison.
+ * @param {object} job The calculation.
+ */
+function compared(job) {
+  // In the order of the list of names, the main property first
+  const result = job.result, files = Object.keys(PLOT_NAMES).filter(name => job.files.includes(name));
+  state.ev = { job: job.id, files, sets: {} };
+  const table = $("#ev-stats");
+  table.textContent = "";
+  table.append(el("thead", {}, el("tr", {}, el("th", {}, "Property"), el("th", {}, "Data set"), el("th", { class: "n" }, "N"),
+    el("th", { class: "n" }, "RMSD"), el("th", { class: "n" }, "MSE"), el("th", { class: "n" }, "MAE"), el("th", {}, "Unit"),
+    el("th", { class: "n" }, "Slope"), el("th", { class: "n" }, "R"))));
+  const body = el("tbody");
+  for (const [dataset, values] of Object.entries(result.statistics)) {
+    for (const [property, v] of Object.entries(values)) {
+      body.append(el("tr", {}, el("td", {}, property), el("td", {}, dataset), el("td", { class: "n" }, String(v.N)),
+        el("td", { class: "n" }, num(v.RMSD, 4)), el("td", { class: "n" }, num(v.MSE, 4)), el("td", { class: "n" }, num(v.MAE, 4)),
+        el("td", {}, v.unit || ""), el("td", { class: "n" }, num(v.slope, 3)), el("td", { class: "n" }, num(v.Rfit, 3))));
+    }
+  }
+  table.append(body);
+  $("#ev-ncomp").textContent = `${result.compounds.length} ${result.compounds.length === 1 ? "compound" : "compounds"}`;
+  const select = $("#ev-plotsel");
+  select.textContent = "";
+  for (const name of files) select.append(el("option", { value: name }, PLOT_NAMES[name]));
+  $("#ev-pdf").hidden = !session.pdf || !files.length;
+  $("#ev-data").hidden = !files.length;
+  $("#ev-result").hidden = false;
+  if (files.length) comparisonPlot();
+  else { $("#evplot").textContent = ""; $("#ev-plotnote").textContent = "The file has no data for the properties that were chosen."; }
+}
+
+/** Compare the force field that is chosen with the data of the file. */
+async function compare() {
+  const observables = $$("#ev-observables input").filter(b => b.checked).map(b => b.dataset.name);
+  if (!observables.length) { toast("Choose at least one property to compare."); return; }
+  const button = $("#run-ev"), choice = $("#ev-ff").value;
+  button.disabled = true;
+  alertBox("");
+  // What is on the page belongs to the comparison before this one
+  state.ev = null;
+  $("#ev-result").hidden = true;
+  try {
+    let forcefield = { default: true };
+    if (choice === "workspace" && session.forcefield) forcefield = session.forcefield.ref;
+    else if (choice === "upload") {
+      if (!state.pendingFF) { toast("Choose a force field file first."); return; }
+      if (!state.pendingFF.id) {
+        pill("ev-pill", "Sending the force field…");
+        state.pendingFF.id = (await upload(state.pendingFF.file, "forcefield")).id;
+      }
+      forcefield = { file: state.pendingFF.id };
+    }
+    pill("ev-pill", "Computing…");
+    const job = await runTask({ task: "evaluate", forcefield, observables,
+                                molprop: { file: state.file.file, described: state.file.described } });
+    if (!Object.keys(job.result.statistics).length) {
+      pill("ev-pill", "Nothing to compare", "warn");
+      alertBox("Nothing could be compared: no compound of the file could be used with this force field, or the file has no data for these properties. The log file tells why.");
+    } else pill("ev-pill", "Done", "good");
+    compared(job);
+  } catch (e) {
+    pill("ev-pill", "Failed", "bad");
+    const none = /No molecules to train on/.test(e.message)
+      ? " None of the compounds in the file could be used with this force field, for instance because it does not have their atom types." : "";
+    alertBox("The force field could not be compared with the data. " + e.message + "." + none);
+  } finally { button.disabled = false; }
+}
+
 /**
  * Show a molprop file.
  * @param {string} label The name of the file.
@@ -131,6 +293,11 @@ function validation() {
 function show(label, data) {
   state.data = data;
   state.picked = -1;
+  state.ev = null;
+  $("#ev-result").hidden = true;
+  $("#ev-card").hidden = false;
+  pill("ev-pill", "");
+  observableBoxes();
   const chips = $("#mpw-chips"), s = data.summary;
   chips.textContent = "";
   const add = (label2, value) => chips.append(el("span", { class: "chip" }, label2 ? label2 + " " : "", el("b", {}, value)));
@@ -152,6 +319,28 @@ function show(label, data) {
  * @param {object} told What the server said: the limits.
  */
 export function startMolprops(told) {
+  state.observables = told.observables || [];
+  $('#ev-ff option[value="default"]').textContent = told.default_forcefield;
+  $("#ev-ff").onchange = e => { if (e.target.value === "upload") $("#ev-fffile").click(); };
+  $("#ev-fffile").onchange = e => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) { if (!state.pendingFF) $("#ev-ff").value = "default"; return; }
+    state.pendingFF = { file, id: null };
+    $('#ev-ff option[value="upload"]').textContent = file.name;
+  };
+  // The force field of the force field workspace can be compared as well
+  document.addEventListener("act-forcefield", () => {
+    const option = $('#ev-ff option[value="workspace"]'), current = session.forcefield;
+    option.hidden = option.disabled = !current;
+    if (current) option.textContent = "From the force field tab: " + current.label;
+    else if ($("#ev-ff").value === "workspace") $("#ev-ff").value = "default";
+  });
+  $("#run-ev").onclick = compare;
+  $("#ev-plotsel").onchange = comparisonPlot;
+  $("#ev-pdf").onclick = e => { if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/plots/${$("#ev-plotsel").value}`, {}, "Making PDF…", "comparison.pdf"); };
+  $("#ev-data").onclick = e => { if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/files/${$("#ev-plotsel").value}`, {}, "Saving…", "comparison.xvg"); };
+  $("#ev-log").onclick = e => { if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/files/g`, {}, "Saving…", "train_ff.log"); };
   $("#mpw-open").onclick = () => $("#mpw-file").click();
   $("#mpw-file").onchange = async e => {
     const file = e.target.files[0];
@@ -166,6 +355,7 @@ export function startMolprops(told) {
       const up = await upload(file, "molprop");
       pill("mpw-pill", "Reading and checking…");
       const job = await runTask({ task: "mp_describe", molprop: { file: up.id } });
+      state.file = { file: up.id, described: job.id, label: up.label };
       show(up.label, job.result);
       pill("mpw-pill", "");
       toast("Opened " + up.label);

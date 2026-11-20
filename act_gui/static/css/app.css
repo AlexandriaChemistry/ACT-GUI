@@ -221,3 +221,7 @@ table.data tr.off td:first-child { color: var(--ink); }
 #mpw-search { width: 190px; }
 #view-molprop .head .field { display: block; }
 .ml8 { margin-left: 8px; }
+.row.top { align-items: flex-start; }
+#view-molprop .card > .head .field { display: block; }
+#ev-result .plot { margin-inline: auto; width: 100%; max-width: 600px; }
+

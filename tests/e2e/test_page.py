@@ -644,6 +644,88 @@ class PageTest(unittest.TestCase):
         self.assertIn("molprop", self.errors())
         self.assertIn("monomers 3", self.text("#mpw-chips"))
 
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_9_compare_a_force_field_with_a_molprop_file(self):
+        """!
+        @brief A force field is compared with the interaction energies in
+        a molprop file: the statistics, the plot and the files.
+        """
+        data = Path(TESTDATA)
+        self.open_page()
+        self.click('#nav button[data-view="molprop"]')
+        self.assertFalse(self.browser.find_element(By.ID, "ev-card").is_displayed())
+        self.browser.find_element(By.ID, "mpw-file").send_keys(str(data / "molprop" / "mpdimer.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        # A file with dimers offers the properties of dimers, the first is ticked
+        offered = self.browser.execute_script(
+            "return [...document.querySelectorAll('#ev-observables input')]"
+            ".map(b => b.dataset.name + (b.checked ? '*' : ''))")
+        self.assertEqual("inter*", offered[0])
+        self.assertIn("elec", offered)
+        self.assertNotIn("epot", offered)
+        self.click('#ev-observables input[data-name="elec"]')
+        # The force field of the test data, since the default is for other compounds
+        self.browser.find_element(By.ID, "ev-fffile").send_keys(
+            str(data / "forcefields" / "ACS-pol.xml"))
+        Select(self.browser.find_element(By.ID, "ev-ff")).select_by_value("upload")
+        self.assertEqual("ACS-pol.xml", self.browser.find_element(
+            By.CSS_SELECTOR, '#ev-ff option[value="upload"]').text)
+        self.assertFalse(self.browser.find_element(By.ID, "ev-result").is_displayed())
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text == "Done")
+        self.assertEqual("", self.errors())
+        self.assertTrue(self.browser.find_element(By.ID, "ev-result").is_displayed())
+        self.assertEqual("3 compounds", self.text("#ev-ncomp"))
+        rows = self.browser.execute_script(
+            "return [...document.querySelectorAll('#ev-stats tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        interaction = [row for row in rows if row[0] == "INTERACTION"][0]
+        self.assertEqual(["Train", "243"], interaction[1:3])
+        self.assertEqual("kJ/mol", interaction[6])
+        self.assertGreater(float(interaction[3]), 0)
+        # Four digits are enough for a deviation
+        self.assertLessEqual(len(interaction[3].replace(".", "")), 4)
+        # The plot: the line where both are equal, and the points
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#evplot svg path")) >= 2)
+        self.assertIn("243 Train", self.text("#ev-plotnote"))
+        self.assertIn("Interaction energy", self.browser.find_element(
+            By.CSS_SELECTOR, "#evplot svg").get_attribute("aria-label"))
+        self.browser.execute_script("document.getElementById('ev-result').scrollIntoView()")
+        self.shot("21-molprop-comparison")
+        # Another property
+        Select(self.browser.find_element(By.ID, "ev-plotsel")).select_by_value("COULOMB")
+        self.wait(lambda b: "Electrostatics" in b.find_element(
+            By.CSS_SELECTOR, "#evplot svg").get_attribute("aria-label"))
+        # The files
+        saved = self.saved_file("#ev-data", "evaluate-COULOMB.xvg", "#")
+        self.assertIn('legend "Train"', saved)
+        log = self.saved_file("#ev-log", "evaluate-g.log", "")
+        self.assertIn("train_ff", log)
+        from act_gui import plots  # pylint: disable=import-outside-toplevel
+        if plots.available():
+            target = self.downloads / "evaluate-COULOMB.pdf"
+            self.click("#ev-pdf")
+            self.wait(lambda b: target.is_file() and target.stat().st_size > 2000
+                      and not list(self.downloads.glob("*.part")))
+            self.assertTrue(target.read_bytes().startswith(b"%PDF"))
+        else:
+            self.assertFalse(self.browser.find_element(By.ID, "ev-pdf").is_displayed())
+        self.assertEqual("", self.errors())
+        # Nothing chosen, nothing computed
+        for name in ("inter", "elec"):
+            self.click('#ev-observables input[data-name="%s"]' % name)
+        self.click("#run-ev")
+        self.wait(lambda b: "at least one property" in b.find_element(By.ID, "toast").text)
+        # The default force field has other atom types than these compounds
+        self.click('#ev-observables input[data-name="inter"]')
+        Select(self.browser.find_element(By.ID, "ev-ff")).select_by_value("default")
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text == "Failed")
+        self.assertIn("None of the compounds", self.errors())
+        # The result of the comparison before this one is gone
+        self.assertFalse(self.browser.find_element(By.ID, "ev-result").is_displayed())
+        self.shot("22-molprop-default")
+
 
 if __name__ == "__main__":
     unittest.main()

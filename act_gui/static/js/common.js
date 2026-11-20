@@ -38,6 +38,21 @@ export function el(tag, props = {}, ...children) {
   return node;
 }
 
+/**
+ * A number as it is shown in a table: a real minus sign, and no more
+ * digits than asked for. Very small and very large numbers get an exponent.
+ * @param {number} x      The number.
+ * @param {number} digits The number of significant digits.
+ * @returns {string} The text, empty for what is no number.
+ */
+export function num(x, digits = 6) {
+  if (typeof x !== "number" || !isFinite(x)) return "";
+  const size = Math.abs(x);
+  const text = size !== 0 && (size < 1e-4 || size >= 1e9) ? size.toExponential(Math.max(0, digits - 1)).replace(/\.?0+e/, "e")
+    : String(parseFloat(size.toPrecision(digits)));
+  return (x < 0 ? "−" : "") + text;
+}
+
 /** What the server told the page when it started. */
 export const session = {
   token: "",            // for requests that change something

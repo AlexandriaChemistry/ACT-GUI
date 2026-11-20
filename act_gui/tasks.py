@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import ffgen
+from . import evaluation, ffgen
 from .jobs import InputFile
 from .settings import Settings
 from .uploads import UploadStore
@@ -33,6 +33,9 @@ from .uploads import UploadStore
 ## What the task needs: a molecule, a force field, a molprop file, or the
 ## choices from which a force field is made
 MOLECULE, FORCEFIELD, MOLPROP, GENERATOR = "molecule", "forcefield", "molprop", "generator"
+## A selection of the compounds of the molprop file, and the properties
+## to compare a force field on
+SELECTION, OBSERVABLES = "selection", "observables"
 
 ## What the name of a parameter looks like, such as chi or bondlength
 _PARAMETER_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}$")
@@ -82,6 +85,13 @@ class Task:
     forcefield: Optional[str] = None
     ## The workspace of the interface that the task belongs to
     workspace: str = "molecule"
+    ## Files that the command writes without an option for them, by the
+    ## name under which they can be fetched
+    collect: Mapping[str, str] = field(default_factory=dict)
+    ## Whether the plots compare two sets of values point by point
+    scatter: bool = False
+    ## The function that makes what is kept of the result, None for all of it
+    digest: Optional[Callable[[Any], Any]] = None
 
 
 @dataclass(frozen=True)
@@ -172,6 +182,13 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          fixed={"json": True, "validate": True},
          downloads=("g",),
          needs=(MOLPROP,), workspace="molprop"),
+    Task(name="evaluate", command="train_ff",
+         title="Compare a force field with the data of a molprop file",
+         fixed={"json": True, "optimize": False},
+         downloads=("g",) + evaluation.PLOTS,
+         plots=evaluation.PLOTS,
+         needs=(FORCEFIELD, MOLPROP, SELECTION, OBSERVABLES), workspace="molprop",
+         collect=evaluation.DIMER_FILES, scatter=True, digest=evaluation.digest),
 )}
 
 ## The values that the option mut of edit_ff takes
@@ -267,18 +284,23 @@ def _forcefield(reference: Any, settings: Settings, uploads: UploadStore,
 
 def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
                   uploads: UploadStore,
-                  written: Optional[Callable[[str], Optional[Path]]] = None) -> Prepared:
+                  written: Optional[Callable[[str], Optional[Path]]] = None,
+                  described: Optional[Callable[[str], Optional[Any]]] = None) -> Prepared:
     """!
     @brief Turn a request from the browser into the options of a command.
     @param task     The task.
     @param request  The request. What it must have depends on the task:
     "molecule" with either "smiles" or "file", "forcefield" with "file" or
-    "job", "molprop" with "file", "generator" with the choices for a new
-    force field, and "options".
+    "job", "molprop" with "file" and, for a selection of its compounds,
+    "described" with the job that described the file, "generator" with the
+    choices for a new force field, "observables" with the properties to
+    compare, and "options".
     @param settings The settings, for the limits and the default force field.
     @param uploads  The uploaded files.
     @param written  The function that gives the force field that a job
     wrote, by the identifier of the job, or None if there is none.
+    @param described The function that gives the compounds of a molprop
+    file as a job described them, by the identifier of the job.
     @return The keyword arguments for act.run(), without the arguments of
     the run itself, and the input files that the server makes. The types of
     the values are checked later by act.
@@ -325,6 +347,24 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
         if upload is None or upload.kind != "molprop":
             raise RequestError("The molprop file is not known, upload it again")
         options["mp"] = [uploads.path(upload)]
+        if SELECTION in task.needs:
+            # All compounds of the file, by the names that edit_mp read
+            job_id = molprop.get("described")
+            molecules = described(job_id) if described is not None and isinstance(job_id, str) \
+                else None
+            if molecules is None:
+                raise RequestError("The molprop file has to be read before it is used, "
+                                   "open it again")
+            try:
+                inputs["sel"] = [InputFile("selection.dat", evaluation.selection(molecules))]
+            except evaluation.EvaluationError as exc:
+                raise RequestError(str(exc)) from exc
+
+    if OBSERVABLES in task.needs:
+        try:
+            options.update(evaluation.options(request.get("observables")))
+        except evaluation.EvaluationError as exc:
+            raise RequestError(str(exc)) from exc
 
     if GENERATOR in task.needs:
         # The choices become the files and the options of gen_ff

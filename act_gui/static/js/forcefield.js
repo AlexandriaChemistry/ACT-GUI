@@ -19,7 +19,7 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, $$, alertBox, call, el, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
+import { $, $$, alertBox, call, el, num, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
 
 /** What the workspace knows. */
 const state = {
@@ -44,16 +44,6 @@ const MAX_ISSUES = 40;
 const MODEL_NAMES = { POINT: "Point", GAUSSIAN: "Gaussian", SLATER: "Slater", "P+G": "Point + Gaussian" };
 /** The elements of which an atom makes one bond. */
 const MONOVALENT = ["H", "F", "Cl", "Br", "I"];
-
-/**
- * A number as it is shown in a table: six digits, a real minus sign.
- * @param {number} x The number.
- * @returns {string} The text.
- */
-function num(x) {
-  if (typeof x !== "number" || !isFinite(x)) return "";
-  return (x < 0 ? "−" : "") + String(parseFloat(Math.abs(x).toPrecision(6)));
-}
 
 /**
  * Fill a list of choices.

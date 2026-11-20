@@ -282,7 +282,32 @@
           <div class="scroll flat maxh380"><table class="data" id="mpw-props"></table></div></div>
       </div>
     </div>
-    <p class="note">Evaluating a force field against a molprop file is not available yet in this version.</p>
+    <div class="card" id="ev-card" hidden>
+      <div class="head"><h2>Compare a force field with these data</h2></div>
+      <div class="body">
+        <p class="muted">Computes the properties of every compound in the file with a force field, without changing the force field, and compares them with the values in the file.</p>
+        <div class="row top">
+          <div class="field"><label for="ev-ff">Force field</label>
+            <select id="ev-ff"><option value="default">Default</option><option value="workspace" hidden disabled>From the force field tab</option><option value="upload">Upload force field…</option></select></div>
+          <input class="visually-hidden" type="file" id="ev-fffile" accept=".xml" tabindex="-1" aria-hidden="true">
+          <div class="field grow"><span class="lab">Properties to compare</span><div class="row" id="ev-observables"></div></div>
+        </div>
+        <div class="row"><button class="btn primary" id="run-ev" type="button">Compare</button>
+          <span class="pill" id="ev-pill" hidden></span></div>
+      </div>
+    </div>
+    <div class="cols plot-left" id="ev-result" hidden>
+      <div class="card"><div class="head"><h2>Force field against reference</h2><span class="spacer"></span>
+          <div class="field"><select id="ev-plotsel" aria-label="Property to plot"></select></div>
+          <button class="btn small" id="ev-pdf" type="button" hidden>Save as PDF</button>
+          <button class="btn small" id="ev-data" type="button">Save data</button></div>
+        <div class="body"><div class="plot" id="evplot"></div>
+          <p class="muted fine" id="ev-plotnote"></p></div></div>
+      <div class="card"><div class="head"><h2>Statistics</h2><span class="muted" id="ev-ncomp"></span><span class="spacer"></span>
+          <button class="btn small" id="ev-log" type="button">Save log file</button></div>
+        <div class="xscroll"><table class="data" id="ev-stats"></table></div>
+        <div class="body"><p class="muted fine">RMSD is the root mean square deviation, MSE the mean signed error (force field minus reference), MAE the mean absolute error; the slope and R are those of a straight line through the points.</p></div></div>
+    </div>
   </section>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>

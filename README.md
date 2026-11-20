@@ -60,9 +60,16 @@ compounds with their formula, the compounds they consist of, the number of
 calculations and the methods, the number of values of each property, and
 the result of the validation of `alexandria edit_mp -validate`.
 
+With a file open, a force field (the default, the one of the force field
+workspace or an uploaded one) can be compared with its data: `alexandria
+train_ff -nooptimize` computes the properties that are chosen for every
+compound, and the page shows the statistics and, for each property, the
+values of the force field against the reference values. The plot can be
+saved as a PDF file and the data as an xvg file.
+
 Not there yet: virtual sites by point and click, the comparison of two
-force fields, the evaluation of a force field against a molprop file, and
-the server for several users.
+force fields, a choice of the compounds to compare on, histograms of the
+energies of a compound, and the server for several users.
 
 The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 `act_gui/static/vendor/`) to show molecules.
