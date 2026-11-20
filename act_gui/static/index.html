@@ -145,6 +145,7 @@
     </div>
     <nav class="tabs sub" id="fftabs" role="tablist" aria-label="Force field tools">
       <button role="tab" data-tab="gen" aria-selected="true">Generate</button>
+      <button role="tab" data-tab="vsite" aria-selected="false">Virtual sites</button>
       <button role="tab" data-tab="geom" aria-selected="false">Geometry</button>
       <button role="tab" data-tab="edit" aria-selected="false">Edit and validate</button>
       <span class="ink"></span>
@@ -185,7 +186,8 @@
             <details class="more mt8"><summary>Combination rules</summary><div class="grid2 mt8" id="g-icrules"></div></details></div></div>
         <div class="group"><h3>Virtual sites</h3>
           <div class="checks" id="g-vsites"></div>
-          <label class="check"><input type="checkbox" id="g-exchange"> Exchange correction on σ-holes</label></div>
+          <label class="check"><input type="checkbox" id="g-exchange"> Exchange correction on σ-holes</label>
+          <p class="muted fine" id="g-ownsites"></p></div>
         <div class="row"><button class="btn primary" id="run-gen" type="button" disabled>Generate force field</button>
           <span class="pill" id="gen-pill" hidden></span></div>
       </div></div>
@@ -199,6 +201,39 @@
           <div class="body"><div class="chips" id="g-facts"></div>
             <div class="xscroll"><table class="data" id="g-inter"></table></div>
             <p class="muted fine">It is now the force field of this workspace. The bonds, angles and dihedrals have no parameters yet: take them from a molprop file under Geometry.</p></div></div>
+      </div>
+    </div>
+
+    <div class="panel split" id="fftab-vsite" hidden>
+      <div class="card">
+        <div class="head"><h2>Pick the atoms that carry the site</h2><span class="spacer"></span>
+          <button class="btn small" id="vs-clear" type="button">Clear selection</button></div>
+        <div class="bar">
+          <div class="field grow"><label for="vs-smiles">Molecule to try it on (SMILES)</label>
+            <input class="mono" type="text" id="vs-smiles" value="O" spellcheck="false" autocomplete="off"></div>
+          <button class="btn primary" id="vs-load" type="button">Load</button>
+        </div>
+        <div class="stage square"><div class="gl" id="gl2"></div>
+          <div class="hint">Click the atoms in the order of the definition, or use the table</div></div>
+        <div class="body"><p class="muted fine" id="vs-ffnote">A site is defined on the types of the atoms, so it is made in every molecule that has these atoms bonded in this way.</p></div>
+      </div>
+      <div class="stack">
+        <div class="card"><div class="body">
+          <div class="group"><h3>Atoms</h3>
+            <div class="scroll maxh200"><table class="data" id="vs-atoms"></table></div>
+            <p class="empty" id="vs-empty">Load a molecule to pick atoms.</p></div>
+          <div class="grid2">
+            <div class="field"><label for="vs-kind">Kind of site</label><select id="vs-kind" disabled></select></div>
+            <div class="field"><label for="vs-type">Name of the site type</label><input class="mono" type="text" id="vs-type" value="vx1" maxlength="15" spellcheck="false" autocomplete="off"></div>
+          </div>
+          <p class="muted fine" id="vs-help">Pick two atoms for a site on their line, three for a site in or out of their plane, four for a site inside a group such as an amine.</p>
+          <div class="group" id="vs-params"></div>
+          <div class="row"><button class="btn primary" id="vs-add" type="button" disabled>Add to the new force field</button></div>
+        </div></div>
+        <div class="card"><div class="head"><h2>Sites for the new force field</h2><span class="muted" id="vs-count"></span><span class="spacer"></span>
+            <button class="btn small" id="vs-save" type="button" hidden>Save as file</button></div>
+          <div class="body"><ul class="sites" id="vs-list"></ul>
+            <p class="muted fine">They are used, next to the predefined ones, when a force field is made under Generate. The file that is saved can be given to <code>alexandria gen_ff -vs</code>.</p></div></div>
       </div>
     </div>
 
@@ -282,7 +317,32 @@
           <div class="scroll flat maxh380"><table class="data" id="mpw-props"></table></div></div>
       </div>
     </div>
-    <p class="note">Evaluating a force field against a molprop file is not available yet in this version.</p>
+    <div class="card" id="ev-card" hidden>
+      <div class="head"><h2>Compare a force field with these data</h2></div>
+      <div class="body">
+        <p class="muted">Computes the properties of every compound in the file with a force field, without changing the force field, and compares them with the values in the file.</p>
+        <div class="row top">
+          <div class="field"><label for="ev-ff">Force field</label>
+            <select id="ev-ff"><option value="default">Default</option><option value="workspace" hidden disabled>From the force field tab</option><option value="upload">Upload force field…</option></select></div>
+          <input class="visually-hidden" type="file" id="ev-fffile" accept=".xml" tabindex="-1" aria-hidden="true">
+          <div class="field grow"><span class="lab">Properties to compare</span><div class="row" id="ev-observables"></div></div>
+        </div>
+        <div class="row"><button class="btn primary" id="run-ev" type="button">Compare</button>
+          <span class="pill" id="ev-pill" hidden></span></div>
+      </div>
+    </div>
+    <div class="cols plot-left" id="ev-result" hidden>
+      <div class="card"><div class="head"><h2>Force field against reference</h2><span class="spacer"></span>
+          <div class="field"><select id="ev-plotsel" aria-label="Property to plot"></select></div>
+          <button class="btn small" id="ev-pdf" type="button" hidden>Save as PDF</button>
+          <button class="btn small" id="ev-data" type="button">Save data</button></div>
+        <div class="body"><div class="plot" id="evplot"></div>
+          <p class="muted fine" id="ev-plotnote"></p></div></div>
+      <div class="card"><div class="head"><h2>Statistics</h2><span class="muted" id="ev-ncomp"></span><span class="spacer"></span>
+          <button class="btn small" id="ev-log" type="button">Save log file</button></div>
+        <div class="xscroll"><table class="data" id="ev-stats"></table></div>
+        <div class="body"><p class="muted fine">RMSD is the root mean square deviation, MSE the mean signed error (force field minus reference), MAE the mean absolute error; the slope and R are those of a straight line through the points.</p></div></div>
+    </div>
   </section>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>

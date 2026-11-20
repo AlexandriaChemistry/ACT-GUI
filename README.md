@@ -45,6 +45,12 @@ there or opened from a file:
   predefined virtual sites. It does what the program `actgui` of
   ACT-utilities did. The table of atom types and the virtual sites that
   `gen_ff` got can be saved as well.
+- *Virtual sites* defines sites by point and click: two, three or four
+  atoms of a molecule are picked in the viewer or in a table, the kind of
+  site and the bounds of its parameters are chosen, and the site is shown
+  where it would be. The definitions are on the types of the atoms, in the
+  form of `alexandria gen_ff -vs`; they are used when a force field is
+  generated and can be saved as a file.
 - *Geometry* takes the bond lengths, angles and dihedral angles from the
   compounds of a molprop file with `alexandria geometry_ff`.
 - *Edit and validate* lists the parameters with their value, bounds and
@@ -60,9 +66,16 @@ compounds with their formula, the compounds they consist of, the number of
 calculations and the methods, the number of values of each property, and
 the result of the validation of `alexandria edit_mp -validate`.
 
-Not there yet: virtual sites by point and click, the comparison of two
-force fields, the evaluation of a force field against a molprop file, and
-the server for several users.
+With a file open, a force field (the default, the one of the force field
+workspace or an uploaded one) can be compared with its data: `alexandria
+train_ff -nooptimize` computes the properties that are chosen for every
+compound, and the page shows the statistics and, for each property, the
+values of the force field against the reference values. The plot can be
+saved as a PDF file and the data as an xvg file.
+
+Not there yet: the comparison of two force fields, a choice of the
+compounds to compare on, histograms of the energies of a compound, and the
+server for several users.
 
 The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 `act_gui/static/vendor/`) to show molecules.

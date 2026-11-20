@@ -371,6 +371,59 @@ class RealProgramTest(unittest.TestCase):
             self.assertTrue(validation["checked"])
             self.assertTrue(validation["ok"])
 
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_evaluate_a_force_field(self):
+        """!
+        @brief A force field is compared with the interaction energies of
+        dimers, and another with the energies and forces of compounds: the
+        statistics, the files with the comparison and a plot of them.
+        """
+        from act_gui import plots  # pylint: disable=import-outside-toplevel
+
+        def send(directory, name, kind):
+            """Upload a file of the test data of ACT"""
+            answer = self.client.post("/api/uploads", params={"kind": kind, "name": name},
+                                      content=(Path(TESTDATA) / directory / name).read_bytes(),
+                                      headers=self.headers)
+            self.assertEqual(200, answer.status_code, answer.text)
+            return answer.json()["id"]
+        cases = (("mpdimer.xml", "ACS-pol.xml", ["inter", "elec"], "INTERACTION", 243,
+                  ("INTERACTION", "COULOMB")),
+                 ("booze-mono.xml", "halgren-PG.xml", ["epot", "force", "mu"],
+                  "Potential energy", 16, ("epotcorr", "forcecorr")))
+        for molprop, forcefield, observables, statistic, npoint, files in cases:
+            mp_id = send("molprop", molprop, "molprop")
+            described = self.run_task({"task": "mp_describe", "molprop": {"file": mp_id}})
+            self.assertEqual("finished", described["status"], described["error"])
+            job = self.run_task({"task": "evaluate",
+                                 "forcefield": {"file": send("forcefields", forcefield,
+                                                             "forcefield")},
+                                 "molprop": {"file": mp_id, "described": described["id"]},
+                                 "observables": observables})
+            self.assertEqual("finished", job["status"], job["error"])
+            result = job["result"]
+            # All compounds were used, for training
+            self.assertEqual(len(described["result"]["molecules"]), len(result["compounds"]))
+            self.assertEqual({"Train"}, {c["dataset"] for c in result["compounds"]})
+            self.assertEqual(["Train"], list(result["statistics"]))
+            numbers = result["statistics"]["Train"][statistic]
+            self.assertEqual(npoint, numbers["N"])
+            self.assertGreater(numbers["RMSD"], 0)
+            self.assertEqual("kJ/mol", numbers["unit"])
+            for option in files:
+                self.assertIn(option, job["files"])
+                data = self.client.get("/api/jobs/%s/files/%s" % (job["id"], option),
+                                       headers=self.headers)
+                self.assertEqual(200, data.status_code, option)
+                self.assertIn('legend "Train"', data.text)
+            # The dipoles are not in this file, so there is nothing to plot for them
+            self.assertNotIn("dipolecorr", job["files"])
+            if plots.available():
+                pdf = self.client.get("/api/jobs/%s/plots/%s" % (job["id"], files[0]),
+                                      headers=self.headers)
+                self.assertEqual(200, pdf.status_code, pdf.text[:200])
+                self.assertTrue(pdf.content.startswith(b"%PDF"))
+
 
 if __name__ == "__main__":
     unittest.main()

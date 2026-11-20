@@ -193,9 +193,11 @@ class ApiTest(unittest.TestCase):
         names = [task["name"] for task in tasks]
         self.assertEqual(["charges", "minimize", "nma", "simulate", "openmm", "gen_ff",
                           "geometry_ff", "ff_describe", "ff_edit", "ff_repair",
-                          "mp_describe"], names)
-        self.assertEqual(["molecule"] * 5 + ["forcefield"] * 5 + ["molprop"],
+                          "mp_describe", "evaluate"], names)
+        self.assertEqual(["molecule"] * 5 + ["forcefield"] * 5 + ["molprop"] * 2,
                          [task["workspace"] for task in tasks])
+        self.assertIn({"name": "inter", "label": "Interaction energy", "dimer": True},
+                      session["observables"])
         self.assertEqual(["generator"], tasks[5]["needs"])
         self.assertEqual(["forcefield", "molprop"], tasks[6]["needs"])
         minimize = tasks[1]
@@ -625,6 +627,128 @@ class ApiTest(unittest.TestCase):
             answer = self.client.post("/api/jobs", headers=self.headers, json=body)
             self.assertEqual(400, answer.status_code, body)
         self.assertEqual(1, len(self.run.calls))
+
+    def evaluation_app(self):
+        """!
+        @brief An application of which the jobs give what edit_mp and
+        train_ff give: the compounds of a file, and statistics with a file
+        that compares the values.
+        @return The client and the list of calls of the stand-in for plotXVG.
+        """
+        plotted = []
+
+        def run(command, *, workdir, **kwargs):
+            result = self.run(command, workdir=workdir, **kwargs)
+            if command == "edit_mp":
+                result.data = {"summary": {"molecules": 2},
+                               "molecules": [{"name": "w2", "iupac": "water#water"},
+                                             {"name": "methanol#water", "iupac": ""}],
+                               "validation": {"checked": True, "ok": True}}
+            elif command == "train_ff":
+                (Path(workdir) / "INTERACTION.xvg").write_text(
+                    '@ s0 legend "Train"\n-20 -19\n-5 -6\n&\n')
+                corr = Path(workdir) / "epot_corr.xvg"
+                corr.write_text('@ s0 legend "Train"\n1 2\n&\n')
+                result.files["epotcorr"] = [corr]
+                result.data = {"molecules": {"0": {"name": "water#water", "dataset": "Train",
+                                                   "atoms": {"0": {"fx": 1}},
+                                                   "interaction_energies": {"c": {}}}},
+                               "statistics": {"Train": {"INTERACTION": {"N": 2, "RMSD": 1.0}}},
+                               "outliers": {}}
+            return result
+
+        def plotter(xvg, pdf, series=(), reverse_x=False, **more):
+            plotted.append((Path(xvg).name, more))
+            Path(pdf).write_bytes(b"%PDF-1.4 fake")
+            return Path(pdf)
+        app = create_app(self.settings, run=run, program_info=fake_program_info,
+                         plotter=plotter)
+        self.addCleanup(app.state.jobs.shutdown)
+        return TestClient(app), plotted
+
+    def test_evaluate_force_field(self):
+        """!
+        @brief train_ff gets the force field, the molprop file, a selection
+        of all its compounds and the weights of the properties, and does
+        not optimize. The page gets the statistics and the files, not the
+        atoms.
+        """
+        client, plotted = self.evaluation_app()
+
+        def post(body):
+            return client.post("/api/jobs", headers=self.headers, json=body)
+
+        def done(answer):
+            self.assertEqual(200, answer.status_code, answer.text)
+            for _ in range(500):
+                job = client.get("/api/jobs/" + answer.json()["id"], headers=self.headers).json()
+                if job["status"] in ("finished", "failed", "cancelled"):
+                    return job
+                time.sleep(0.01)
+            self.fail("The job did not finish")
+            return None
+        molprop = client.post("/api/uploads", params={"kind": "molprop", "name": "mols.xml"},
+                              content=MP, headers=self.headers).json()["id"]
+        described = done(post({"task": "mp_describe", "molprop": {"file": molprop}}))
+        body = {"task": "evaluate", "forcefield": {"default": True},
+                "molprop": {"file": molprop, "described": described["id"]},
+                "observables": ["inter", "epot"]}
+        job = done(post(body))
+        self.assertEqual("finished", job["status"], job["error"])
+        call = self.run.calls[-1]
+        self.assertEqual("train_ff", call["command"])
+        options = call["options"]
+        self.assertEqual({"ff": self.settings.default_forcefield,
+                          "mp": [self.settings.uploads_dir / (molprop + ".xml")],
+                          "sel": call["workdir"] / "selection.dat",
+                          "fc_inter": 1, "fc_epot": 1, "epotcorr": True,
+                          "json": True, "optimize": False}, options)
+        self.assertEqual("water#water|Train\nmethanol#water|Train\n", options["sel"].read_text())
+        # What the page gets
+        self.assertEqual({"Train": {"INTERACTION": {"N": 2, "RMSD": 1.0}}},
+                         job["result"]["statistics"])
+        self.assertEqual([{"name": "water#water", "dataset": "Train", "points": 1}],
+                         job["result"]["compounds"])
+        self.assertNotIn("molecules", job["result"])
+        self.assertIn("INTERACTION", job["files"])
+        self.assertIn("epotcorr", job["files"])
+        data = client.get("/api/jobs/%s/files/INTERACTION" % job["id"], headers=self.headers)
+        self.assertEqual(200, data.status_code)
+        self.assertIn("-20 -19", data.text)
+        self.assertEqual(404, client.get("/api/jobs/%s/files/COULOMB" % job["id"],
+                                         headers=self.headers).status_code)
+        # The plot on paper compares the values point by point
+        pdf = client.get("/api/jobs/%s/plots/INTERACTION" % job["id"], headers=self.headers)
+        self.assertEqual(200, pdf.status_code)
+        self.assertEqual([("INTERACTION.xvg", {"scatter": True})], plotted)
+        self.assertEqual(404, client.get("/api/jobs/%s/plots/sel" % job["id"],
+                                         headers=self.headers).status_code)
+
+        ncalls = len(self.run.calls)
+        minimized = done(post({"task": "minimize", "molecule": {"smiles": "CC"}}))
+        ncalls += 1
+        good = {"file": molprop, "described": described["id"]}
+        wrong = [
+            dict(body, observables=[]),
+            dict(body, observables=["inter", "inter"]),
+            dict(body, observables=["optimize"]),
+            dict(body, observables="inter"),
+            {k: v for k, v in body.items() if k != "observables"},
+            {k: v for k, v in body.items() if k != "forcefield"},
+            dict(body, molprop={"file": molprop}),
+            dict(body, molprop={"file": molprop, "described": "nosuchjob"}),
+            dict(body, molprop={"file": molprop, "described": minimized["id"]}),
+            dict(body, molprop={"file": molprop, "described": 3}),
+            dict(body, molprop={"described": described["id"]}),
+            dict(body, molprop=good, options={"optimize": True}),
+            dict(body, molprop=good, options={"max_iter": 100}),
+            dict(body, molprop=good, options={"o": "/tmp/ff.xml"}),
+            dict(body, molprop=good, options={"sel": "/etc/passwd"}),
+            dict(body, molprop=good, options={"fit": "sigma"}),
+        ]
+        for request in wrong:
+            self.assertEqual(400, post(request).status_code, request)
+        self.assertEqual(ncalls, len(self.run.calls))
 
     def test_molprop_files_may_be_larger(self):
         """!

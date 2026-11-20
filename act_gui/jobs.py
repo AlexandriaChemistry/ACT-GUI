@@ -139,7 +139,9 @@ class JobManager:
     def submit(self, task: str, command: str, options: Dict[str, Any],
                progress: bool = False,
                outputs: Optional[Dict[str, str]] = None,
-               inputs: Optional[Mapping[str, Sequence[InputFile]]] = None) -> Job:
+               inputs: Optional[Mapping[str, Sequence[InputFile]]] = None,
+               collect: Optional[Mapping[str, str]] = None,
+               digest: Optional[Callable[[Any], Any]] = None) -> Job:
         """!
         @brief Start a job, or put it in the queue.
         @param task     The name of the task, for the browser.
@@ -151,6 +153,11 @@ class JobManager:
         @param inputs   Input files that are made here, by option name: one
         file for an option that takes one, a list of files otherwise. They
         are written in the directory of the job before it starts.
+        @param collect  Files that the command writes without an option for
+        them, by the name under which they are kept with the output files:
+        file names in the directory of the job. Those that exist are kept.
+        @param digest   A function that makes what is kept of the result of
+        the command, for results that are too large to send to the browser.
         @return The job.
         @throws JobError if too many jobs are waiting or running.
         """
@@ -177,15 +184,19 @@ class JobManager:
                 # One file for an option that takes one file
                 options[name] = paths[0] if len(paths) == 1 and name not in MULTIPLE else paths
                 job.inputs[name] = paths[0]
-        self._pool.submit(self._execute, job, options, progress)
+        self._pool.submit(self._execute, job, options, progress, dict(collect or {}), digest)
         return job
 
-    def _execute(self, job: Job, options: Dict[str, Any], progress: bool) -> None:
+    def _execute(self, job: Job, options: Dict[str, Any], progress: bool,
+                 collect: Optional[Mapping[str, str]] = None,
+                 digest: Optional[Callable[[Any], Any]] = None) -> None:
         """!
         @brief Run a job. Called in a thread of the pool.
         @param job      The job.
         @param options  The options of the command.
         @param progress Whether to follow the progress.
+        @param collect  Files to keep that the command writes unasked, see submit().
+        @param digest   The function that makes what is kept of the result.
         """
         if job.stop.is_set():
             self._finish(job, CANCELLED)
@@ -209,11 +220,16 @@ class JobManager:
             if progress:
                 extra["on_progress"] = on_progress
             result = self._run(job.command, **extra, **options)
+            data = digest(result.data) if digest is not None else result.data
+            # The files that were made for the job, then those it wrote
+            files = dict(job.inputs)
+            files.update({name: paths[0] for name, paths in result.files.items() if paths})
+            for name, filename in (collect or {}).items():
+                path = job.workdir / Path(filename).name
+                if path.is_file():
+                    files[name] = path
             with self._lock:
-                job.result = result.data
-                # The files that were made for the job, then those it wrote
-                files = dict(job.inputs)
-                files.update({name: paths[0] for name, paths in result.files.items() if paths})
+                job.result = data
                 job.files = files
             self._finish(job, FINISHED)
         except Exception as exc:  # pylint: disable=broad-except

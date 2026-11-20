@@ -122,6 +122,19 @@ class PlotTest(unittest.TestCase):
         # Nothing else is left behind
         self.assertEqual(["energy.pdf"], [p.name for p in pdf.parent.iterdir()])
 
+    def test_comparison(self):
+        """!
+        @brief A file that compares two sets of values is drawn with
+        symbols in a square plot with the same scale on both axes.
+        """
+        pdf = self.dir / "corr.pdf"
+        plots.make_pdf(self.xvg, pdf, scatter=True, program=self.program(FAKE_PLOTTER))
+        options = self.request(pdf)["options"]
+        self.assertNotIn("linestyle", options)
+        self.assertIs(True, options["equalaxes"])
+        self.assertIs(True, options["squarefig"])
+        self.assertIs(True, options["noshow"])
+
     def test_series(self):
         """!
         @brief Only the series that are asked for are plotted.
@@ -247,6 +260,14 @@ class PlotTest(unittest.TestCase):
             plots.make_pdf(self.xvg, pdf, series=series, reverse_x=reverse, ylabel=ylabel)
             self.assertTrue(pdf.read_bytes().startswith(b"%PDF"))
             self.assertGreater(pdf.stat().st_size, 2000)
+        # Two sets of points, as train_ff writes them
+        compared = self.dir / "corr.xvg"
+        compared.write_text('@    xaxis  label "Energy (kJ/mol)"\n@    yaxis  label "Alexandria"\n'
+                            '@ s0 legend "Train"\n@ s1 legend "Test"\n'
+                            '-5 -4.5\n-10 -11\n-1 -1.5\n&\n-3 -2\n-7 -7.5\n&\n')
+        pdf = plots.make_pdf(compared, self.dir / "compared.pdf", scatter=True)
+        self.assertTrue(pdf.read_bytes().startswith(b"%PDF"))
+        self.assertGreater(pdf.stat().st_size, 2000)
 
 
 if __name__ == "__main__":

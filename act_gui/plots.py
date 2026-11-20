@@ -166,7 +166,8 @@ def _relabelled(xvg: Path, copy: Path, title: Optional[str], ylabel: Optional[st
 
 def make_pdf(xvg: Path, pdf: Path, series: Sequence[str] = (), reverse_x: bool = False,
              timeout: float = 60.0, program: Optional[Sequence[str]] = None,
-             title: Optional[str] = None, ylabel: Optional[str] = None) -> Path:
+             title: Optional[str] = None, ylabel: Optional[str] = None,
+             scatter: bool = False) -> Path:
     """!
     @brief Make a PDF file of an xvg file.
     @param xvg     The xvg file.
@@ -179,6 +180,9 @@ def make_pdf(xvg: Path, pdf: Path, series: Sequence[str] = (), reverse_x: bool =
     @param ylabel  A label for the y-axis instead of that of the file, for
     a series with another unit than the file says, such as the temperature
     in a file with energies.
+    @param scatter Whether the file compares two sets of values point by
+    point: the points are drawn as symbols in a square plot with the same
+    scale on both axes, instead of as lines.
     @param program The words that start the plotter, which gets one more
     argument: an object in JSON format with the files and the options of
     plotxvg.plot(). plotXVG with the Python that runs this server if None.
@@ -200,8 +204,12 @@ def make_pdf(xvg: Path, pdf: Path, series: Sequence[str] = (), reverse_x: bool =
     # Written under another name first, so that a file with the final name
     # is always a complete plot. The extension tells plotXVG the format.
     partial = pdf.with_name("%s.part%s.pdf" % (pdf.stem, uuid.uuid4().hex[:8]))
-    # Lines instead of symbols, and no window
-    options = {"save": str(partial), "noshow": True, "linestyle": ["solid"]}
+    # No window. Lines instead of symbols, except for a comparison
+    options: dict = {"save": str(partial), "noshow": True}
+    if scatter:
+        options.update({"equalaxes": True, "squarefig": True})
+    else:
+        options["linestyle"] = ["solid"]
     if chosen:
         options["coly"] = chosen
     if reverse_x:
