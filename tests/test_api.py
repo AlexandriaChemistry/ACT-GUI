@@ -370,12 +370,13 @@ class ApiTest(unittest.TestCase):
             result.files.update({"ir": [xvg], "e": [xvg], "openmm": [xml]})
             return result
 
-        def fake(xvg, pdf, series=(), reverse_x=False):
-            calls.append((Path(xvg).name, Path(pdf).name, list(series)) + ((True,) if reverse_x else ()))
+        def fake(xvg, pdf, series=(), reverse_x=False, **labels):
+            calls.append((Path(xvg).name, Path(pdf).name, list(series)) + ((True,) if reverse_x else ())
+                         + ((labels,) if labels else ()))
             Path(pdf).write_bytes(b"%PDF-1.4 fake")
             return Path(pdf)
 
-        def broken(xvg, pdf, series=(), reverse_x=False):
+        def broken(xvg, pdf, series=(), reverse_x=False, **labels):
             raise PlotError("matplotlib is unhappy")
 
         chosen = {"fake": fake, "broken": broken}.get(plotter)
@@ -426,7 +427,11 @@ class ApiTest(unittest.TestCase):
         answer = client.get(url, headers=self.headers, params={"series": "TEMPERATURE"})
         self.assertEqual(200, answer.status_code)
         self.assertIn("simulate-e-TEMPERATURE.pdf", answer.headers["content-disposition"])
-        self.assertEqual(("data.xvg", "plot-e-TEMPERATURE.pdf", ["TEMPERATURE"]), calls[-1])
+        # The temperature is not an energy, as the file says
+        self.assertEqual(("data.xvg", "plot-e-TEMPERATURE.pdf", ["TEMPERATURE"],
+                          {"title": "Temperature", "ylabel": "Temperature (K)"}), calls[-1])
+        answer = client.get(url, headers=self.headers, params={"series": "EPOT"})
+        self.assertEqual(("data.xvg", "plot-e-EPOT.pdf", ["EPOT"]), calls[-1])
         # With the x-axis reversed, which is another file
         answer = client.get(url, headers=self.headers, params={"reverse": "true"})
         self.assertEqual(200, answer.status_code)

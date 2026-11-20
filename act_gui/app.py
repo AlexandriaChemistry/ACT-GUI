@@ -54,6 +54,11 @@ _MEDIA_TYPES = {".pdb": "chemical/x-pdb", ".xvg": "text/plain", ".log": "text/pl
                 ".json": "application/json", ".gro": "text/plain", ".xml": "application/xml"}
 
 
+## The title and the label of the y-axis of series that are not what the
+## header of their file says: the temperature is in the file with energies
+_SERIES_LABELS = {"TEMPERATURE": ("Temperature", "Temperature (K)")}
+
+
 def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
                program_info: Optional[Callable[[], Any]] = None,
                plotter: Optional[Callable[..., Any]] = None,
@@ -351,7 +356,13 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
                 raise fail(503, "plotXVG is not installed on the server, so plots cannot "
                            "be saved as PDF")
             try:
-                plotter(source, target, series=names, reverse_x=reverse)
+                # A series with another unit than the file says
+                labels = {_SERIES_LABELS.get(name) for name in names}
+                extra = {}
+                if len(labels) == 1 and None not in labels:
+                    title, ylabel = labels.pop()
+                    extra = {"title": title, "ylabel": ylabel}
+                plotter(source, target, series=names, reverse_x=reverse, **extra)
             except plots.PlotError as exc:
                 raise fail(500, str(exc)) from exc
         return FileResponse(target, media_type="application/pdf",

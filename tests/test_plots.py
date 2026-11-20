@@ -14,6 +14,8 @@ Most tests use a small program in the place of plotXVG, so that they run
 without matplotlib. The last one makes a real PDF file when plotXVG is
 installed.
 """
+import json
+import os
 import sys
 import tempfile
 import unittest
@@ -37,19 +39,21 @@ XVG = """# This file was created by a test
 0.003 -10.4 1.4 299.0
 """
 
-## A stand-in for plotXVG: writes its arguments in a file that looks like a PDF
-FAKE_PLOTTER = """import sys
-args = sys.argv[1:]
-with open(args[args.index("-save") + 1], "w") as out:
-    out.write("%PDF-1.4\\n" + " ".join(args) + "\\n")
+## A stand-in for plotXVG: writes its argument in a file that looks like a PDF
+## and after it the header of the file it was given
+FAKE_PLOTTER = """import json, sys
+request = json.loads(sys.argv[1])
+header = [line for line in open(request["files"][0]) if line.startswith("@")]
+with open(request["options"]["save"], "w") as out:
+    out.write("%PDF-1.4\\n" + sys.argv[1] + "\\n" + "".join(header))
 """
 
 ## A stand-in that fails, one that writes nothing and one that writes rubbish
 FAILING_PLOTTER = "import sys\nsys.stderr.write('no display\\n')\nsys.exit(3)\n"
 SILENT_PLOTTER = "print('No datasets could be read, sorry!')\n"
-RUBBISH_PLOTTER = """import sys
-args = sys.argv[1:]
-open(args[args.index("-save") + 1], "w").write("<html>not a plot</html>")
+RUBBISH_PLOTTER = """import json, sys
+request = json.loads(sys.argv[1])
+open(request["options"]["save"], "w").write("<html>not a plot</html>")
 """
 
 
@@ -83,6 +87,14 @@ class PlotTest(unittest.TestCase):
         path.write_text(source)
         return [sys.executable, str(path)]
 
+    def request(self, pdf: Path) -> dict:
+        """!
+        @brief What the stand-in for plotXVG was asked to plot.
+        @param pdf The file that the stand-in wrote.
+        @return The object with the files and the options.
+        """
+        return json.loads(pdf.read_text().splitlines()[1])
+
     def test_legends(self):
         """!
         @brief The names of the series are read from the file.
@@ -94,18 +106,19 @@ class PlotTest(unittest.TestCase):
 
     def test_pdf_is_made(self):
         """!
-        @brief The plotter gets the file, the name of the PDF and lines
-        instead of symbols, and the PDF lands where it was asked for.
+        @brief The plotter gets the file, the name of the PDF, lines
+        instead of symbols and no window, and the PDF lands where it was
+        asked for.
         """
         pdf = self.dir / "out" / "energy.pdf"
         made = plots.make_pdf(self.xvg, pdf, program=self.program(FAKE_PLOTTER))
         self.assertEqual(pdf, made)
-        words = pdf.read_text().splitlines()[1].split()
-        self.assertEqual(str(self.xvg), words[words.index("-f") + 1])
-        self.assertIn("-noshow", words)
-        self.assertIn("-quiet", words)
-        self.assertEqual("solid", words[words.index("-ls") + 1])
-        self.assertNotIn("-coly", words)
+        asked = self.request(pdf)
+        self.assertEqual([str(self.xvg)], asked["files"])
+        self.assertIs(True, asked["options"]["noshow"])
+        self.assertEqual(["solid"], asked["options"]["linestyle"])
+        self.assertNotIn("coly", asked["options"])
+        self.assertNotIn("xmin", asked["options"])
         # Nothing else is left behind
         self.assertEqual(["energy.pdf"], [p.name for p in pdf.parent.iterdir()])
 
@@ -115,8 +128,7 @@ class PlotTest(unittest.TestCase):
         """
         pdf = self.dir / "t.pdf"
         plots.make_pdf(self.xvg, pdf, series=["TEMPERATURE"], program=self.program(FAKE_PLOTTER))
-        words = pdf.read_text().splitlines()[1].split()
-        self.assertEqual("TEMPERATURE", words[words.index("-coly") + 1])
+        self.assertEqual(["TEMPERATURE"], self.request(pdf)["options"]["coly"])
 
     def test_x_range(self):
         """!
@@ -135,8 +147,8 @@ class PlotTest(unittest.TestCase):
         """
         pdf = self.dir / "rev.pdf"
         plots.make_pdf(self.xvg, pdf, reverse_x=True, program=self.program(FAKE_PLOTTER))
-        words = pdf.read_text().splitlines()[1].split()
-        low, high = float(words[words.index("-xmin") + 1]), float(words[words.index("-xmax") + 1])
+        options = self.request(pdf)["options"]
+        low, high = options["xmin"], options["xmax"]
         self.assertEqual(0.003, low)
         self.assertLess(high, low)
         # plotXVG takes zero for "not given"
@@ -145,11 +157,34 @@ class PlotTest(unittest.TestCase):
         spectrum = self.dir / "ir.xvg"
         spectrum.write_text("@ title \"IR\"\n-62 0.1\n100 0.5\n3300 0.2\n&\n")
         plots.make_pdf(spectrum, pdf, reverse_x=True, program=self.program(FAKE_PLOTTER))
-        words = pdf.read_text().splitlines()[1].split()
-        self.assertEqual(["3300", "-62"], [words[words.index("-xmin") + 1],
-                                           words[words.index("-xmax") + 1]])
+        options = self.request(pdf)["options"]
+        self.assertEqual([3300, -62], [options["xmin"], options["xmax"]])
         plots.make_pdf(self.xvg, pdf, program=self.program(FAKE_PLOTTER))
-        self.assertNotIn("-xmin", pdf.read_text())
+        self.assertNotIn("xmin", self.request(pdf)["options"])
+
+    def test_labels(self):
+        """!
+        @brief A plot of the temperature does not say "Energy": the title
+        and the label of the y-axis can be replaced, in a copy of the file
+        that is gone afterwards.
+        """
+        pdf = self.dir / "labels.pdf"
+        plots.make_pdf(self.xvg, pdf, series=["TEMPERATURE"], title="Temperature",
+                       ylabel="Temperature (K)", program=self.program(FAKE_PLOTTER))
+        text = pdf.read_text()
+        self.assertIn('title "Temperature"', text)
+        self.assertIn('yaxis  label "Temperature (K)"', text)
+        self.assertNotIn("Energy", text)
+        # The other lines of the header are kept
+        self.assertIn('xaxis  label "Time (ps)"', text)
+        self.assertIn('legend "TEMPERATURE"', text)
+        # The file of the program is as it was, and the copy is gone
+        self.assertEqual(XVG, self.xvg.read_text())
+        self.assertNotEqual(str(self.xvg), self.request(pdf)["files"][0])
+        self.assertEqual(["energy.xvg"], [p.name for p in self.dir.glob("*.xvg")])
+        # Text that could end the quotes of the label is refused
+        with self.assertRaises(plots.PlotError):
+            plots.make_pdf(self.xvg, pdf, ylabel='K" \n@ title "x', program=self.program(FAKE_PLOTTER))
 
     def test_series_that_are_refused(self):
         """!
@@ -198,11 +233,18 @@ class PlotTest(unittest.TestCase):
     @unittest.skipUnless(plots.available(), "plotXVG is not installed")
     def test_real_plotter(self):
         """!
-        @brief plotXVG makes a PDF file of the energies and of one series.
+        @brief plotXVG makes a PDF file of the energies and of one series,
+        also on a machine without a display and whatever the environment
+        says about the backend of matplotlib.
         """
-        for series, reverse in (([], False), (["TEMPERATURE"], False), (["EPOT"], True)):
+        saved = os.environ.get("MPLBACKEND")
+        os.environ["MPLBACKEND"] = "TkAgg"
+        self.addCleanup(lambda: os.environ.pop("MPLBACKEND", None) if saved is None
+                        else os.environ.__setitem__("MPLBACKEND", saved))
+        for series, reverse, ylabel in (([], False, None), (["TEMPERATURE"], False, "Temperature (K)"),
+                                        (["EPOT"], True, None)):
             pdf = self.dir / ("real%d%d.pdf" % (len(series), reverse))
-            plots.make_pdf(self.xvg, pdf, series=series, reverse_x=reverse)
+            plots.make_pdf(self.xvg, pdf, series=series, reverse_x=reverse, ylabel=ylabel)
             self.assertTrue(pdf.read_bytes().startswith(b"%PDF"))
             self.assertGreater(pdf.stat().st_size, 2000)
 
