@@ -82,7 +82,9 @@
         <div class="body panel" id="tab-modes" hidden>
           <div class="row"><button class="btn primary" id="run-nma" type="button" disabled>Run normal mode analysis</button>
             <span class="spacer"></span><span class="pill" id="nma-pill" hidden></span></div>
-          <div><h3>Infrared spectrum</h3><div class="plot mt8" id="irplot"></div>
+          <div><div class="row"><h3>Infrared spectrum</h3><span class="spacer"></span>
+              <button class="btn small" id="ir-pdf" type="button" hidden>Save as PDF</button></div>
+            <div class="plot mt8" id="irplot"></div>
             <p class="muted fine">Click a line under the spectrum or a row in the table to see the vibration.</p></div>
           <div class="cols modes">
             <div><h3 class="mb8">Modes</h3><div class="scroll maxh250"><table class="data" id="modetable"></table></div></div>
@@ -101,7 +103,8 @@
           <div class="progress" aria-hidden="true"><i id="simbar"></i></div>
           <div class="row"><div class="seg" id="eseries" role="group" aria-label="Energy to plot">
               <button aria-pressed="true" data-v="EPOT">Potential</button><button aria-pressed="false" data-v="EKIN">Kinetic</button><button aria-pressed="false" data-v="ETOT">Total</button><button aria-pressed="false" data-v="T">Temperature</button></div>
-            <span class="spacer"></span><span class="num muted" id="simtime"></span></div>
+            <span class="spacer"></span><span class="num muted" id="simtime"></span>
+            <button class="btn small" id="e-pdf" type="button" hidden>Save as PDF</button></div>
           <div class="plot" id="eplot"></div>
         </div>
       </div>

@@ -33,7 +33,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import __version__
+from . import __version__, plots
 from .jobs import JobError, JobManager
 from .settings import PACKAGE_DIR, Settings
 from .tasks import TASKS, RequestError, build_request, describe_task, find_task
@@ -56,6 +56,7 @@ _MEDIA_TYPES = {".pdb": "chemical/x-pdb", ".xvg": "text/plain", ".log": "text/pl
 
 def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
                program_info: Optional[Callable[[], Any]] = None,
+               plotter: Optional[Callable[..., Any]] = None,
                allowed_hosts: Optional[list] = None) -> FastAPI:
     """!
     @brief Make the web application.
@@ -63,6 +64,8 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
     @param run           The function that runs a command, act.run() if None.
     @param program_info  The function that describes the commands,
     act.program_info() if None.
+    @param plotter       The function that makes a PDF file of an xvg file,
+    plots.make_pdf() if None.
     @param allowed_hosts The host names under which the server may be
     reached, the local machine if None.
     @return The application, to be served by uvicorn.
@@ -72,6 +75,9 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         run = run or act.run
         program_info = program_info or act.program_info
 
+    # Without plotXVG the page does not offer to save plots
+    can_plot = plotter is not None or plots.available()
+    plotter = plotter or plots.make_pdf
     uploads = UploadStore(settings.uploads_dir, settings.max_upload_bytes)
     manager = JobManager(settings.jobs_dir, run, max_workers=settings.max_workers,
                          max_active=settings.max_active_jobs, timeout=settings.job_timeout,
@@ -173,7 +179,8 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         """!
         @brief What the page needs to start: the token for requests that
         change something, and what the server offers.
-        @return Token, version, mode, limits and the default force field.
+        @return Token, version, mode, limits, the default force field and
+        whether plots can be saved as PDF files.
         """
         return {
             "token": settings.token,
@@ -183,6 +190,7 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             "max_upload_bytes": settings.max_upload_bytes,
             "max_smiles_length": settings.max_smiles_length,
             "limits": settings.limits,
+            "pdf": can_plot,
         }
 
     @app.get("/api/tasks")
@@ -310,6 +318,42 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         media = _MEDIA_TYPES.get(path.suffix.lower(), "text/plain")
         return FileResponse(path, media_type=media,
                             filename="%s-%s%s" % (job.task, option, path.suffix))
+
+    @app.get("/api/jobs/{job_id}/plots/{option}")
+    def job_plot(job_id: str, option: str, series: str = "") -> Response:
+        """!
+        @brief A plot of an output file of a calculation, as a PDF file
+        made by plotXVG. Not an async function, so that the server does
+        other things while the plot is made.
+        @param job_id The identifier.
+        @param option The option of the command that wrote the data. Only
+        the plots that the task lists can be made.
+        @param series The names of the series to plot, with commas between
+        them; all series if empty.
+        @return The PDF file.
+        """
+        job = find_job(job_id)
+        task = TASKS.get(job.task)
+        source: Optional[Path] = job.files.get(option)
+        if task is None or option not in task.plots or source is None or not source.is_file():
+            raise fail(404, "There is no such plot")
+        try:
+            # Checked before the names become part of a file name
+            names = plots.check_series(source, [name for name in series.split(",") if name])
+        except plots.PlotError as exc:
+            raise fail(400, str(exc)) from exc
+        label = "-".join([option] + names)
+        target = source.parent / ("plot-%s.pdf" % label)
+        if not target.is_file():
+            if not can_plot:
+                raise fail(503, "plotXVG is not installed on the server, so plots cannot "
+                           "be saved as PDF")
+            try:
+                plotter(source, target, series=names)
+            except plots.PlotError as exc:
+                raise fail(500, str(exc)) from exc
+        return FileResponse(target, media_type="application/pdf",
+                            filename="%s-%s.pdf" % (job.task, label))
 
     static_dir = PACKAGE_DIR / "static"
     if static_dir.is_dir():

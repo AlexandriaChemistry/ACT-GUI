@@ -28,6 +28,8 @@ const NM = 10;
 /** What the page knows. */
 const state = {
   token: "",            // for requests that change something
+  pdf: false,           // whether the server can make PDF files of plots
+  jobs: { nma: null, sim: null },  // the finished jobs whose plots can be saved
   input: null,          // { smiles } or { file, label }
   forcefield: {},       // {} for the default or { file, label }
   mol: null,            // the molecule that was loaded, see moleculeFrom()
@@ -108,6 +110,32 @@ async function runJob(task, options = {}, onUpdate = null) {
     await new Promise(r => setTimeout(r, 250));
     job = await (await call("/jobs/" + job.id, { params: { progress_from: seen } })).json();
   }
+}
+
+/**
+ * Fetch a plot as a PDF file, made by plotXVG on the server, and hand it to
+ * the browser to save.
+ * @param {Element} button The button that was pressed.
+ * @param {string} jobId   The job that has the data.
+ * @param {string} option  The option of the command that wrote the data.
+ * @param {string} series  The series to plot, all if empty.
+ */
+async function savePdf(button, jobId, option, series = "") {
+  if (!jobId) return;
+  const label = button.textContent;
+  button.disabled = true; button.textContent = "Making PDF…";
+  try {
+    const answer = await call(`/jobs/${jobId}/plots/${option}`, { params: series ? { series } : {} });
+    const named = /filename="?([^";]+)"?/.exec(answer.headers.get("content-disposition") || "");
+    const name = named ? named[1] : option + ".pdf";
+    const url = URL.createObjectURL(await answer.blob()), link = document.createElement("a");
+    link.href = url; link.download = name;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    toast("Saved " + name);
+  } catch (e) {
+    alertBox("The plot could not be saved. " + e.message);
+  } finally { button.disabled = false; button.textContent = label; }
 }
 
 /* ---------- tabs and buttons ---------- */
@@ -407,7 +435,8 @@ function chargeTable() {
 
 /** Forget the results of the previous molecule. */
 function resetResults() {
-  state.min = null; state.nma = null;
+  state.min = null; state.nma = null; state.jobs = { nma: null, sim: null };
+  $("#ir-pdf").hidden = true; $("#e-pdf").hidden = true;
   state.sim = { points: [], series: state.sim.series, job: null, pdb: null, nsteps: 0 };
   state.ui.focus = -1; state.ui.mode = 0;
   $("#rmsd").textContent = "–"; $("#dE").textContent = "–";
@@ -555,6 +584,7 @@ async function normalModes() {
     const job = await runJob("nma");
     state.nma = job.result;
     state.spectrum = parseXvg(await (await call(`/jobs/${job.id}/files/ir`)).text());
+    state.jobs.nma = job.id; $("#ir-pdf").hidden = !state.pdf;
     const inten = state.nma.modes.map(m => m.intensity.value);
     state.ui.mode = inten.indexOf(Math.max(...inten));
     pill("nma-pill", `${state.nma.modes.length} modes`, "good");
@@ -590,6 +620,7 @@ async function simulate() {
   const button = $("#run-sim"), stop = $("#stop-sim");
   button.disabled = true; stop.hidden = false; alertBox("");
   state.sim.points = []; state.sim.pdb = null; state.sim.nsteps = nsteps;
+  state.jobs.sim = null; $("#e-pdf").hidden = true;
   $("#simbar").style.width = "0";
   scene();
   try {
@@ -607,6 +638,7 @@ async function simulate() {
     });
     $("#simbar").style.width = "100%";
     state.sim.pdb = await (await call(`/jobs/${job.id}/files/o`)).text();
+    state.jobs.sim = job.id; $("#e-pdf").hidden = !state.pdf;
     scene();
   } catch (e) {
     if (e.message !== "The calculation was stopped") alertBox("The simulation failed. " + e.message);
@@ -655,6 +687,10 @@ $("#fffile").onchange = e => {
 $("#run-min").onclick = minimize;
 $("#run-nma").onclick = normalModes;
 $("#run-sim").onclick = simulate;
+// The plot on paper has the series that is on the screen
+$("#ir-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.nma, "ir");
+$("#e-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.sim, "e",
+  state.sim.series === "T" ? "TEMPERATURE" : state.sim.series);
 
 const TABS = { charges: "tab-charges", minimize: "tab-minimize", modes: "tab-modes", simulate: "tab-simulate" };
 tabs($("#tasks"), name => { state.ui.tab = name; showOnly(Object.values(TABS), TABS[name]); scene(); });
@@ -671,6 +707,7 @@ async function start() {
     if (!session.token) throw new Error(session.detail || "The server does not know this browser.");
     state.token = session.token;
     state.defaultForcefield = session.default_forcefield;
+    state.pdf = !!session.pdf;
     $('#ffsel option[value="default"]').textContent = session.default_forcefield;
     $("#smiles").maxLength = session.max_smiles_length;
     $("#status-text").textContent = (session.mode === "desktop" ? "Desktop mode" : "Server") + " · version " + session.version;

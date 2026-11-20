@@ -25,8 +25,12 @@ In development. What is there:
   the energies plotted while the simulation runs and the trajectory
   animated afterwards.
 
-Not there yet: saving plots as PDF, the OpenMM package, the force field and
-molprop workspaces, and the server for several users.
+The spectrum and the energies can be saved as PDF files, which
+[plotXVG](https://github.com/AlexandriaChemistry/plotXVG) makes on the
+server from the xvg files of the program.
+
+Not there yet: the OpenMM package, the force field and molprop workspaces,
+and the server for several users.
 
 The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 `act_gui/static/vendor/`) to show molecules.
@@ -36,7 +40,9 @@ The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 - ACT with the Python package `act` (branch `python-api` of ACT for now) and
   the `alexandria` program in the `PATH`, or its path in the environment
   variable `ACT_ALEXANDRIA`;
-- Python 3.9 or newer with `fastapi` and `uvicorn`.
+- Python 3.9 or newer with `fastapi` and `uvicorn`;
+- optionally `plotxvg`, to save plots as PDF files. Without it the page
+  does not show the buttons for that.
 
 ## Running on the desktop
 

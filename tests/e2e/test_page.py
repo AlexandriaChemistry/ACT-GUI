@@ -70,6 +70,16 @@ class PageTest(unittest.TestCase):
                 break
             time.sleep(0.05)
         options = Options()
+        # Files that the page saves go to a directory of the test, without
+        # a question and without the viewer for PDF files of the browser
+        cls.downloads = Path(cls._tmp.name) / "downloads"
+        cls.downloads.mkdir()
+        options.set_preference("browser.download.folderList", 2)
+        options.set_preference("browser.download.dir", str(cls.downloads.resolve()))
+        options.set_preference("browser.download.useDownloadDir", True)
+        options.set_preference("browser.download.alwaysOpenPanel", False)
+        options.set_preference("browser.helperApps.neverAsk.saveToDisk", "application/pdf")
+        options.set_preference("pdfjs.disabled", True)
         options.add_argument("-headless")
         options.add_argument("--width=1440")
         options.add_argument("--height=1000")
@@ -96,6 +106,30 @@ class PageTest(unittest.TestCase):
         @return What the function returned.
         """
         return WebDriverWait(self.browser, seconds).until(condition)
+
+    def saved_pdf(self, button, name):
+        """!
+        @brief Press a button that saves a plot and check the file. Without
+        plotXVG the button is not shown, and that is checked instead.
+        @param button The identifier of the button.
+        @param name   The name the file should get.
+        """
+        from act_gui import plots  # pylint: disable=import-outside-toplevel
+        element = self.browser.find_element(By.ID, button)
+        if not plots.available():
+            self.assertFalse(element.is_displayed())
+            return
+        self.assertTrue(element.is_displayed())
+        element.click()
+        target = self.downloads / name
+
+        def complete(_browser):
+            return (target.is_file() and target.stat().st_size > 2000
+                    and not list(self.downloads.glob("*.part")))
+        self.wait(complete, 60)
+        self.assertTrue(target.read_bytes().startswith(b"%PDF"))
+        self.assertEqual("", self.errors())
+        self.assertEqual("Save as PDF", element.text)
 
     def text(self, selector):
         """!
@@ -205,12 +239,16 @@ class PageTest(unittest.TestCase):
         self.assertIn("sel", self.browser.find_element(
             By.CSS_SELECTOR, "#modetable tr.pick").get_attribute("class"))
         self.shot("04-modes")
+        # The spectrum on paper
+        self.saved_pdf("ir-pdf", "nma-ir.pdf")
 
         # Simulate
         self.click('#tasks button[data-tab="simulate"]')
         steps = self.browser.find_element(By.ID, "nsteps")
         steps.clear()
         steps.send_keys("400")
+        # Nothing to save before there is a simulation
+        self.assertFalse(self.browser.find_element(By.ID, "e-pdf").is_displayed())
         self.click("#run-sim")
         self.wait(lambda b: b.find_element(By.ID, "scene-title").text == "Trajectory")
         self.assertEqual("", self.errors())
@@ -220,6 +258,8 @@ class PageTest(unittest.TestCase):
         self.assertIn("Temperature (K)", self.browser.find_element(
             By.CSS_SELECTOR, "#eplot svg").get_attribute("aria-label"))
         self.shot("05-simulate")
+        # The plot on paper has the series that is on the screen
+        self.saved_pdf("e-pdf", "simulate-e-TEMPERATURE.pdf")
 
     def test_3_wrong_smiles_gives_a_message(self):
         """!

@@ -11,6 +11,10 @@ requires-python = ">=3.9"
 dependencies = ["fastapi", "uvicorn"]
 dynamic = ["version"]
 
+[project.optional-dependencies]
+# To save plots as PDF files
+plots = ["plotxvg"]
+
 [project.scripts]
 act-gui = "act_gui.__main__:main"
 

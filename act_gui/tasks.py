@@ -55,6 +55,8 @@ class Task:
     progress: bool = False
     ## The output files that can be downloaded, by option name
     downloads: Tuple[str, ...] = ()
+    ## The output files with data that can be saved as a plot, by option name
+    plots: Tuple[str, ...] = ()
 
 
 ## The options to choose how the charges are made, the same for all tasks
@@ -79,7 +81,8 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          options=_CHARGE_OPTIONS + ("minalg", "maxiter", "toler", "linewidth"),
          fixed={"ir": True, "json": True},
          outputs={"c": "minimized.pdb"},
-         downloads=("c", "ir", "g")),
+         downloads=("c", "ir", "g"),
+         plots=("ir",)),
     Task(name="simulate", command="simulate",
          title="Molecular dynamics simulation",
          options=_CHARGE_OPTIONS + ("nsteps", "deltat", "temp", "nstener", "nstxout",
@@ -87,7 +90,8 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          fixed={"json": True},
          outputs={"c": "final.pdb"},
          progress=True,
-         downloads=("o", "e", "c", "g")),
+         downloads=("o", "e", "c", "g"),
+         plots=("e",)),
 )}
 
 
@@ -195,4 +199,5 @@ def describe_task(task: Task, command_info: Optional[Any]) -> Dict[str, Any]:
         described.append(entry)
     return {"name": task.name, "title": task.title, "command": task.command,
             "progress": task.progress, "downloads": list(task.downloads),
+            "plots": list(task.plots),
             "options": described}

@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from act_gui.app import TOKEN_COOKIE, TOKEN_HEADER, create_app
+from act_gui.plots import PlotError
 from act_gui.settings import Settings
 from tests.test_jobs import FakeRun
 from tests.test_uploads import FF, SDF
@@ -349,6 +350,116 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(404, self.client.get("/api/jobs/nosuchjob/files/c",
                                               headers=self.headers).status_code)
         self.assertEqual(401, self.client.get("/api/jobs/%s/files/c" % job_id).status_code)
+
+    def plot_app(self, plotter="fake"):
+        """!
+        @brief An application whose jobs write an xvg file, with a
+        stand-in for plotXVG.
+        @param plotter "fake" for a stand-in that records its calls, None
+        for no plotter at all.
+        @return The client and the list of calls of the stand-in.
+        """
+        calls = []
+
+        def run(command, *, workdir, **kwargs):
+            result = self.run(command, workdir=workdir, **kwargs)
+            xvg = Path(workdir) / "data.xvg"
+            xvg.write_text('@ s0 legend "EPOT"\n@ s1 legend "TEMPERATURE"\n0 1 2\n1 2 3\n')
+            result.files.update({"ir": [xvg], "e": [xvg]})
+            return result
+
+        def fake(xvg, pdf, series=()):
+            calls.append((Path(xvg).name, Path(pdf).name, list(series)))
+            Path(pdf).write_bytes(b"%PDF-1.4 fake")
+            return Path(pdf)
+
+        def broken(xvg, pdf, series=()):
+            raise PlotError("matplotlib is unhappy")
+
+        chosen = {"fake": fake, "broken": broken}.get(plotter)
+        app = create_app(self.settings, run=run, program_info=fake_program_info, plotter=chosen)
+        self.addCleanup(app.state.jobs.shutdown)
+        return TestClient(app), calls
+
+    def finished_job(self, client, task):
+        """!
+        @brief Run a job to its end.
+        @param client The client of the application.
+        @param task   The name of the task.
+        @return The identifier of the job.
+        """
+        answer = client.post("/api/jobs", headers=self.headers, json={
+            "task": task, "molecule": {"smiles": "CCO"}})
+        job_id = answer.json()["id"]
+        for _ in range(500):
+            if client.get("/api/jobs/" + job_id, headers=self.headers).json()["status"] == "finished":
+                return job_id
+            time.sleep(0.01)
+        self.fail("The job did not finish")
+        return job_id
+
+    def test_plot_as_pdf(self):
+        """!
+        @brief A plot of a task that has one comes as a PDF file, is made
+        once, and can be limited to series of the file.
+        """
+        client, calls = self.plot_app()
+        self.assertTrue(client.get("/api/session", headers=self.headers).json()["pdf"])
+        tasks = {t["name"]: t for t in client.get("/api/tasks", headers=self.headers).json()["tasks"]}
+        self.assertEqual(["ir"], tasks["nma"]["plots"])
+        self.assertEqual(["e"], tasks["simulate"]["plots"])
+        self.assertEqual([], tasks["minimize"]["plots"])
+
+        job_id = self.finished_job(client, "simulate")
+        url = "/api/jobs/%s/plots/e" % job_id
+        answer = client.get(url, headers=self.headers)
+        self.assertEqual(200, answer.status_code)
+        self.assertEqual("application/pdf", answer.headers["content-type"])
+        self.assertTrue(answer.content.startswith(b"%PDF"))
+        self.assertIn("simulate-e.pdf", answer.headers["content-disposition"])
+        # The second time the same file is sent
+        self.assertEqual(200, client.get(url, headers=self.headers).status_code)
+        self.assertEqual([("data.xvg", "plot-e.pdf", [])], calls)
+        # One series
+        answer = client.get(url, headers=self.headers, params={"series": "TEMPERATURE"})
+        self.assertEqual(200, answer.status_code)
+        self.assertIn("simulate-e-TEMPERATURE.pdf", answer.headers["content-disposition"])
+        self.assertEqual(("data.xvg", "plot-e-TEMPERATURE.pdf", ["TEMPERATURE"]), calls[-1])
+        # The cookie is enough to fetch a plot, nothing at all is not
+        self.assertEqual(401, client.get(url).status_code)
+
+    def test_plots_that_are_refused(self):
+        """!
+        @brief Only the plots of the task, only series of the file, and
+        nothing that could become part of a path or a command line.
+        """
+        client, calls = self.plot_app()
+        job_id = self.finished_job(client, "simulate")
+        base = "/api/jobs/%s/plots/" % job_id
+        for option in ("c", "o", "ir", "nothere", "..%2F..%2Fetc%2Fpasswd"):
+            self.assertEqual(404, client.get(base + option, headers=self.headers).status_code,
+                             option)
+        for series in ("ETOT", "-save", "../../x", "EPOT,..", "EPOT/TEMPERATURE"):
+            answer = client.get(base + "e", headers=self.headers, params={"series": series})
+            self.assertEqual(400, answer.status_code, series)
+            self.assertIn("no series", answer.json()["detail"])
+        self.assertEqual(404, client.get("/api/jobs/nosuchjob/plots/e",
+                                         headers=self.headers).status_code)
+        # A task without plots
+        job_id = self.finished_job(client, "minimize")
+        self.assertEqual(404, client.get("/api/jobs/%s/plots/e" % job_id,
+                                         headers=self.headers).status_code)
+        self.assertEqual([], calls)
+
+    def test_plotter_that_fails_tells_why(self):
+        """!
+        @brief A plot that cannot be made gives a message for the user.
+        """
+        client, _ = self.plot_app("broken")
+        job_id = self.finished_job(client, "nma")
+        answer = client.get("/api/jobs/%s/plots/ir" % job_id, headers=self.headers)
+        self.assertEqual(500, answer.status_code)
+        self.assertIn("matplotlib is unhappy", answer.json()["detail"])
 
     def test_cancel(self):
         """!
