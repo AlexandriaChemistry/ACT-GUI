@@ -332,9 +332,29 @@ class FakeServer:
         (self.dir / "home" / "act" / "jobs").mkdir(parents=True)
         (self.dir / "bin").mkdir()
         (self.dir / "nobin").mkdir()
-        sbatch = self.dir / "bin" / "sbatch"
-        sbatch.write_text("#!/bin/sh\necho slurm 23.02.7\n")
-        sbatch.chmod(0o755)
+        # Stand-ins for the commands of Slurm and for alexandria. sbatch
+        # runs the script at once and gives the job the number 4242, unless
+        # the file "queue" next to the programs says that jobs wait; squeue
+        # prints what that file says; scancel notes what it was asked.
+        programs = {
+            "sbatch": '#!/bin/sh\n'
+                      'if [ "$1" = "--version" ]; then echo slurm 23.02.7; exit 0; fi\n'
+                      'here=$(dirname "$0")\n'
+                      'echo "$PWD $*" >> "$here/../sbatch.log"\n'
+                      'if [ ! -f "$here/../queue" ]; then bash "$2" > slurm.out 2>&1; fi\n'
+                      'echo 4242\n',
+            "squeue": '#!/bin/sh\nhere=$(dirname "$0")\n'
+                      'if [ -f "$here/../queue" ]; then cat "$here/../queue"; fi\n',
+            "scancel": '#!/bin/sh\necho "$*" >> "$(dirname "$0")/../scancel.log"\n',
+            # Writes what it was asked in result.json, and fails for -fail
+            "alexandria": '#!/bin/sh\necho "{\\"asked\\": \\"$*\\"}" > result.json\n'
+                          'echo running "$@"\n'
+                          'case "$*" in *-fail*) exit 3;; esac\n',
+        }
+        for name, text in programs.items():
+            path = self.dir / "bin" / name
+            path.write_text(text)
+            path.chmod(0o755)
         script = self.dir / "fake_ssh.py"
         script.write_text(FAKE_SSH)
         # One word that starts the stand-in, as the name of a program
