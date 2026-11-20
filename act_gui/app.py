@@ -35,6 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__, cluster, cluster_api, evaluation, ffgen, openmm_package, plots
+from . import training
 from .cluster_queue import ClusterQueue
 from .jobs import FINISHED, JobError, JobManager
 from .settings import PACKAGE_DIR, Settings
@@ -228,6 +229,8 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             "limits": settings.limits,
             "pdf": can_plot,
             "observables": evaluation.describe(),
+            "training": training.describe(),
+            "max_processes": settings.max_processes,
             "cluster": settings.mode == "desktop",
         }
 
@@ -425,7 +428,7 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             job = manager.submit(task.name, task.command, prepared.options,
                                  progress=task.progress, outputs=dict(task.outputs),
                                  inputs=prepared.inputs, collect=task.collect,
-                                 digest=task.digest)
+                                 digest=task.digest, processes=prepared.processes)
         except JobError as exc:
             raise fail(429, str(exc)) from exc
         return manager.summary(job)

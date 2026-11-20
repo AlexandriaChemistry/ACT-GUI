@@ -64,7 +64,7 @@ class ApiTest(unittest.TestCase):
         ff.write_bytes(FF)
         self.settings = Settings(data_dir=self.dir / "data", token="secret-token",
                                  default_forcefield=ff, max_upload_bytes=4096,
-                                 max_active_jobs=3)
+                                 max_active_jobs=3, max_processes=4)
         self.run = FakeRun()
         self.app = create_app(self.settings, run=self.run, program_info=fake_program_info)
         self.client = TestClient(self.app)
@@ -193,9 +193,15 @@ class ApiTest(unittest.TestCase):
         names = [task["name"] for task in tasks]
         self.assertEqual(["charges", "minimize", "nma", "simulate", "openmm", "gen_ff",
                           "geometry_ff", "ff_describe", "ff_edit", "ff_repair",
-                          "mp_describe", "evaluate"], names)
-        self.assertEqual(["molecule"] * 5 + ["forcefield"] * 5 + ["molprop"] * 2,
+                          "mp_describe", "evaluate", "train"], names)
+        self.assertEqual(["molecule"] * 5 + ["forcefield"] * 5 + ["molprop"] * 3,
                          [task["workspace"] for task in tasks])
+        # Only the training runs on several processes, and tells how far it is
+        self.assertEqual(["train"], [task["name"] for task in tasks if task["parallel"]])
+        self.assertEqual(["simulate", "train"],
+                         [task["name"] for task in tasks if task["progress"]])
+        self.assertEqual(self.settings.max_processes, session["max_processes"])
+        self.assertEqual("MCMC", session["training"]["default_optimizer"])
         self.assertIn({"name": "inter", "label": "Interaction energy", "dimer": True},
                       session["observables"])
         self.assertEqual(["generator"], tasks[5]["needs"])
@@ -655,6 +661,11 @@ class ApiTest(unittest.TestCase):
                                                    "interaction_energies": {"c": {}}}},
                                "statistics": {"Train": {"INTERACTION": {"N": 2, "RMSD": 1.0}}},
                                "outliers": {}}
+                if kwargs.get("optimize") is not False:
+                    # A training
+                    result.data["parameters"] = {"0": {"class": "sigma", "name": "ow",
+                                                       "best": 0.3, "stdev": 0.01}}
+                    result.data["sensitivity"] = {"mode": "1D", "minimum": "yes"}
             return result
 
         def plotter(xvg, pdf, series=(), reverse_x=False, **more):
@@ -745,6 +756,105 @@ class ApiTest(unittest.TestCase):
             dict(body, molprop=good, options={"o": "/tmp/ff.xml"}),
             dict(body, molprop=good, options={"sel": "/etc/passwd"}),
             dict(body, molprop=good, options={"fit": "sigma"}),
+        ]
+        for request in wrong:
+            self.assertEqual(400, post(request).status_code, request)
+        self.assertEqual(ncalls, len(self.run.calls))
+
+    def test_train_force_field(self):
+        """!
+        @brief train_ff gets what an evaluation gets, with the kinds of
+        parameters to train, an individual for each process and a name for
+        the trained force field, which a later calculation can use. The
+        page follows the training and gets the parameters.
+        """
+        client, _ = self.evaluation_app()
+
+        def post(body):
+            return client.post("/api/jobs", headers=self.headers, json=body)
+
+        def done(answer):
+            self.assertEqual(200, answer.status_code, answer.text)
+            for _ in range(500):
+                job = client.get("/api/jobs/" + answer.json()["id"], headers=self.headers).json()
+                if job["status"] in ("finished", "failed", "cancelled"):
+                    return job
+                time.sleep(0.01)
+            self.fail("The job did not finish")
+            return None
+        molprop = client.post("/api/uploads", params={"kind": "molprop", "name": "mols.xml"},
+                              content=MP, headers=self.headers).json()["id"]
+        described = done(post({"task": "mp_describe", "molprop": {"file": molprop}}))
+        body = {"task": "train", "forcefield": {"default": True},
+                "molprop": {"file": molprop, "described": described["id"]},
+                "observables": ["inter"], "training": {"fit": ["sigma", "epsilon"]}}
+        job = done(post(body))
+        self.assertEqual("finished", job["status"], job["error"])
+        call = self.run.calls[-1]
+        self.assertEqual("train_ff", call["command"])
+        self.assertTrue(call["progress"])
+        self.assertEqual({"ff": self.settings.default_forcefield,
+                          "mp": [self.settings.uploads_dir / (molprop + ".xml")],
+                          "sel": call["workdir"] / "selection.dat",
+                          "fc_inter": 1, "fit": "sigma epsilon", "optimizer": "MCMC",
+                          "pop_size": 1, "o": call["workdir"] / "trained.xml",
+                          "json": True}, call["options"])
+        self.assertEqual("water#water|Train\nmethanol#water|Train\n",
+                         call["options"]["sel"].read_text())
+        # What the page gets
+        self.assertEqual(3, job["progress_total"])
+        self.assertEqual([{"class": "sigma", "name": "ow", "best": 0.3, "min": None,
+                           "max": None, "mean": None, "stdev": 0.01, "median": None}],
+                         job["result"]["parameters"])
+        self.assertEqual({"mode": "1D", "minimum": "yes"}, job["result"]["sensitivity"])
+        self.assertIn("Train", job["result"]["statistics"])
+        self.assertNotIn("molecules", job["result"])
+        self.assertIn("o", job["files"])
+        self.assertIn("INTERACTION", job["files"])
+        # The trained force field is one to calculate with
+        minimized = done(post({"task": "minimize", "molecule": {"smiles": "CC"},
+                               "forcefield": {"job": job["id"]}}))
+        self.assertEqual("finished", minimized["status"], minimized["error"])
+        self.assertEqual(call["workdir"] / "trained.xml", self.run.calls[-1]["options"]["ff"])
+
+        # Several processes, an optimizer that needs them, its numbers and
+        # compounds for testing
+        more = dict(body, processes=2, training={"fit": ["sigma"], "test": 0.5},
+                    options={"optimizer": "HYBRID", "max_generations": 5, "max_iter": 20,
+                             "seed": 7, "random_init": False, "temp": 0.5})
+        job = done(post(more))
+        self.assertEqual("finished", job["status"], job["error"])
+        options = self.run.calls[-1]["options"]
+        self.assertEqual((2, 2, "HYBRID", 5, 20, 7, False, 0.5, "sigma"),
+                         tuple(options[key] for key in
+                               ("processes", "pop_size", "optimizer", "max_generations",
+                                "max_iter", "seed", "random_init", "temp", "fit")))
+        self.assertEqual(["Test", "Train"],
+                         sorted(line.split("|")[1]
+                                for line in options["sel"].read_text().splitlines()))
+
+        ncalls = len(self.run.calls)
+        wrong = [
+            {k: v for k, v in body.items() if k != "training"},
+            dict(body, training={}),
+            dict(body, training={"fit": ["sigma", "-o"]}),
+            dict(body, training={"fit": ["sigma"], "test": 0.9}),
+            dict(body, observables=[]),
+            dict(body, processes=0),
+            dict(body, processes=self.settings.max_processes + 1),
+            dict(body, processes="2"),
+            dict(body, options={"optimizer": "GA"}),
+            dict(body, options={"optimizer": "HYBRID"}, processes=1),
+            dict(body, options={"optimizer": "Simplex"}),
+            dict(body, options={"max_iter": 0}),
+            dict(body, options={"max_iter": 10 ** 7}),
+            dict(body, options={"max_generations": 0}),
+            dict(body, options={"pop_size": 4}),
+            dict(body, options={"optimize": False}),
+            dict(body, options={"o": "/tmp/ff.xml"}),
+            dict(body, options={"fit": "sigma"}),
+            # The other calculations run on one process
+            {"task": "minimize", "molecule": {"smiles": "CC"}, "processes": 2},
         ]
         for request in wrong:
             self.assertEqual(400, post(request).status_code, request)

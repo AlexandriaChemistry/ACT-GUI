@@ -20,6 +20,7 @@ described it, and are checked before they are written in the selection.
 """
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
@@ -80,6 +81,10 @@ PLOTS: Tuple[str, ...] = tuple(option for o in OBSERVABLES.values() for option i
 MAX_COMPOUNDS = 200000
 MAX_NAME_LENGTH = 300
 
+## The seed with which the compounds for testing are drawn, such that the
+## same file and the same part give the same compounds
+SPLIT_SEED = 20261120
+
 
 def options(chosen: Any) -> Dict[str, Any]:
     """!
@@ -103,11 +108,15 @@ def options(chosen: Any) -> Dict[str, Any]:
     return made
 
 
-def selection(molecules: Any) -> str:
+def selection(molecules: Any, test: float = 0.0) -> str:
     """!
     @brief The selection of compounds for train_ff: all of them.
     @param molecules The compounds of a molprop file, as edit_mp describes
     them: objects with "iupac" and "name".
+    @param test      The part of the compounds that is kept for testing,
+    drawn at random with a fixed seed; the others are for training. With a
+    part above zero and two compounds or more, one compound at least is
+    kept for testing and one for training.
     @return The text of the selection file, one line for each compound.
     @throws EvaluationError if there are no compounds, or if a name cannot
     be written in the file.
@@ -117,7 +126,7 @@ def selection(molecules: Any) -> str:
         raise EvaluationError("The molprop file has no compounds")
     if len(molecules) > MAX_COMPOUNDS:
         raise EvaluationError("The molprop file has more than %d compounds" % MAX_COMPOUNDS)
-    lines: List[str] = []
+    names: List[str] = []
     seen = set()
     for molecule in molecules:
         name = None
@@ -132,8 +141,13 @@ def selection(molecules: Any) -> str:
                                   "%r" % name[:60])
         if name not in seen:
             seen.add(name)
-            lines.append("%s|Train\n" % name)
-    return "".join(lines)
+            names.append(name)
+    testing = set()
+    if test > 0 and len(names) > 1:
+        number = min(len(names) - 1, max(1, round(test * len(names))))
+        testing = set(random.Random(SPLIT_SEED).sample(range(len(names)), number))
+    return "".join("%s|%s\n" % (name, "Test" if index in testing else "Train")
+                   for index, name in enumerate(names))
 
 
 def digest(data: Any) -> Any:

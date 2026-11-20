@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import evaluation, ffgen
+from . import evaluation, ffgen, training
 from .jobs import InputFile
 from .settings import Settings
 from .uploads import UploadStore
@@ -36,6 +36,8 @@ MOLECULE, FORCEFIELD, MOLPROP, GENERATOR = "molecule", "forcefield", "molprop", 
 ## A selection of the compounds of the molprop file, and the properties
 ## to compare a force field on
 SELECTION, OBSERVABLES = "selection", "observables"
+## What is trained of a force field
+TRAINING = "training"
 
 ## What the name of a parameter looks like, such as chi or bondlength
 _PARAMETER_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}$")
@@ -94,6 +96,9 @@ class Task:
     digest: Optional[Callable[[Any], Any]] = None
     ## Whether the task can run as a job on the cluster of the user
     cluster: bool = False
+    ## Whether the command runs on several processes, with an individual
+    ## of the population of train_ff for each
+    parallel: bool = False
 
 
 @dataclass(frozen=True)
@@ -106,6 +111,8 @@ class Prepared:
     options: Dict[str, Any]
     ## Input files to write in the directory of the job, by option name
     inputs: Dict[str, Sequence[InputFile]] = field(default_factory=dict)
+    ## The number of processes that the command runs on
+    processes: int = 1
 
 
 ## The options to choose how the charges are made, the same for all tasks
@@ -192,6 +199,17 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          needs=(FORCEFIELD, MOLPROP, SELECTION, OBSERVABLES), workspace="molprop",
          collect=evaluation.DIMER_FILES, scatter=True, digest=evaluation.digest,
          cluster=True),
+    Task(name="train", command="train_ff",
+         title="Train a force field on the data of a molprop file",
+         options=("optimizer", "max_iter", "max_generations", "seed", "random_init", "temp"),
+         fixed={"json": True},
+         outputs={"o": "trained.xml"},
+         progress=True,
+         downloads=("o", "g") + evaluation.PLOTS,
+         plots=evaluation.PLOTS,
+         needs=(FORCEFIELD, MOLPROP, SELECTION, OBSERVABLES, TRAINING), forcefield="o",
+         workspace="molprop", collect=evaluation.DIMER_FILES, scatter=True,
+         digest=training.digest, parallel=True),
 )}
 
 ## The values that the option mut of edit_ff takes
@@ -288,7 +306,8 @@ def _forcefield(reference: Any, settings: Settings, uploads: UploadStore,
 def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
                   uploads: UploadStore,
                   written: Optional[Callable[[str], Optional[Path]]] = None,
-                  described: Optional[Callable[[str], Optional[Any]]] = None) -> Prepared:
+                  described: Optional[Callable[[str], Optional[Any]]] = None,
+                  processes: Optional[int] = None) -> Prepared:
     """!
     @brief Turn a request from the browser into the options of a command.
     @param task     The task.
@@ -297,13 +316,18 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
     "job", "molprop" with "file" and, for a selection of its compounds,
     "described" with the job that described the file, "generator" with the
     choices for a new force field, "observables" with the properties to
-    compare, and "options".
+    compare, "training" with the kinds of parameters to train ("fit") and
+    the part of the compounds for testing ("test"), "processes" for a task
+    that runs on several, and "options".
     @param settings The settings, for the limits and the default force field.
     @param uploads  The uploaded files.
     @param written  The function that gives the force field that a job
     wrote, by the identifier of the job, or None if there is none.
     @param described The function that gives the compounds of a molprop
     file as a job described them, by the identifier of the job.
+    @param processes The number of processes that the command will run on,
+    when the caller decides that, as for a job on a cluster. None to take
+    it from the request, within the limit of the settings.
     @return The keyword arguments for act.run(), without the arguments of
     the run itself, and the input files that the server makes. The types of
     the values are checked later by act.
@@ -359,14 +383,23 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
                 raise RequestError("The molprop file has to be read before it is used, "
                                    "open it again")
             try:
-                inputs["sel"] = [InputFile("selection.dat", evaluation.selection(molecules))]
-            except evaluation.EvaluationError as exc:
+                test = training.test_fraction(request.get("training")) \
+                    if TRAINING in task.needs else 0.0
+                inputs["sel"] = [InputFile("selection.dat",
+                                           evaluation.selection(molecules, test))]
+            except (evaluation.EvaluationError, training.TrainingError) as exc:
                 raise RequestError(str(exc)) from exc
 
     if OBSERVABLES in task.needs:
         try:
             options.update(evaluation.options(request.get("observables")))
         except evaluation.EvaluationError as exc:
+            raise RequestError(str(exc)) from exc
+
+    if TRAINING in task.needs:
+        try:
+            options.update(training.options(request.get("training")))
+        except training.TrainingError as exc:
             raise RequestError(str(exc)) from exc
 
     if GENERATOR in task.needs:
@@ -402,9 +435,24 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
         chosen[name] = value
     if task.name == "ff_edit":
         chosen = _edit_options(chosen)
+    number = 1
+    if task.parallel:
+        # One individual for each process, and an optimizer that can do with them
+        chosen.setdefault("optimizer", training.DEFAULT_OPTIMIZER)
+        try:
+            if processes is None:
+                number = training.processes(request.get("processes"), chosen["optimizer"],
+                                            settings.max_processes)
+            else:
+                number = training.processes(processes, chosen["optimizer"], processes)
+        except training.TrainingError as exc:
+            raise RequestError(str(exc)) from exc
+        chosen["pop_size"] = number
+    elif request.get("processes") not in (None, 1):
+        raise RequestError("%s runs on one process" % task.title)
     options.update(chosen)
     options.update(task.fixed)
-    return Prepared(options=options, inputs=inputs)
+    return Prepared(options=options, inputs=inputs, processes=number)
 
 
 def find_task(name: Any) -> Task:
@@ -441,4 +489,4 @@ def describe_task(task: Task, command_info: Optional[Any]) -> Dict[str, Any]:
             "progress": task.progress, "downloads": list(task.downloads),
             "plots": list(task.plots), "package": task.package,
             "needs": list(task.needs), "workspace": task.workspace,
-            "cluster": task.cluster, "options": described}
+            "cluster": task.cluster, "parallel": task.parallel, "options": described}
