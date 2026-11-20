@@ -14,6 +14,9 @@ dynamic = ["version"]
 [project.optional-dependencies]
 # To save plots as PDF files
 plots = ["plotxvg"]
+# To run the tests; selenium only for those that drive a browser
+test = ["httpx"]
+browser = ["selenium"]
 
 [project.scripts]
 act-gui = "act_gui.__main__:main"

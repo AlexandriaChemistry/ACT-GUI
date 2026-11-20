@@ -1,0 +1,38 @@
+name: ACT-GUI tests
+run-name: ${{ github.actor }} tests ACT-GUI
+on:
+  push:
+  pull_request:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest Python that plotXVG supports and a recent one
+        python-version: ["3.10", "3.13"]
+    steps:
+      - name: Check out ACT-GUI
+        uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install the dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[plots,test]"
+          python -m pip list
+      - name: Run the tests
+        run: |
+          # The tests of the server, the uploads, the jobs, the plots and
+          # the archive for OpenMM. Those that need the alexandria program
+          # of ACT or a browser are skipped here: they run where ACT is
+          # built, with ACT_ALEXANDRIA set, see README.md.
+          set -o pipefail
+          python -m unittest discover -s tests -t . -v 2>&1 | tee tests.log
+          # plotXVG is installed, so the test that makes a real PDF must run
+          # (the line after the name of the test says how it ended)
+          if grep -A1 "test_real_plotter" tests.log | grep -q "skipped"; then
+            echo "::error::The test with plotXVG was skipped"
+            exit 1
+          fi
