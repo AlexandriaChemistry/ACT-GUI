@@ -319,14 +319,40 @@
       </div>
     </div>
     <div class="card" id="ev-card" hidden>
-      <div class="head"><h2>Compare a force field with these data</h2></div>
+      <div class="head"><h2>Compare or train a force field</h2><span class="spacer"></span>
+        <div class="seg" id="ev-what" role="group" aria-label="What to do with the force field"><button type="button" aria-pressed="true" data-v="compare">Compare</button><button type="button" aria-pressed="false" data-v="train">Train</button></div></div>
       <div class="body">
-        <p class="muted">Computes the properties of every compound in the file with a force field, without changing the force field, and compares them with the values in the file.</p>
+        <p class="muted" id="ev-about-compare">Computes the properties of every compound in the file with a force field, without changing the force field, and compares them with the values in the file.</p>
+        <p class="muted" id="ev-about-train" hidden>Changes parameters of a force field until it reproduces the values in the file as well as it can, and then compares the trained force field with them. The force field that is chosen stays as it is; the trained one is new.</p>
         <div class="row top">
           <div class="field"><label for="ev-ff">Force field</label>
             <select id="ev-ff"><option value="default">Default</option><option value="workspace" hidden disabled>From the force field tab</option><option value="upload">Upload force field…</option></select></div>
           <input class="visually-hidden" type="file" id="ev-fffile" accept=".xml" tabindex="-1" aria-hidden="true">
-          <div class="field grow"><span class="lab">Properties to compare</span><div class="row" id="ev-observables"></div></div>
+          <div class="field grow"><span class="lab" id="ev-obslab">Properties to compare</span><div class="row" id="ev-observables"></div></div>
+        </div>
+        <div id="tr-opts" hidden>
+          <div class="row top">
+            <div class="field grow"><label for="tr-fit">Kinds of parameters to train</label>
+              <input class="mono" type="text" id="tr-fit" placeholder="for instance: sigma epsilon" spellcheck="false" autocomplete="off" autocapitalize="off">
+              <span class="muted fine">Names as in the force field, with spaces between them. Only parameters that are not fixed are changed, within their bounds; the tab Force field lists them.</span></div>
+            <div class="field"><label for="tr-optimizer">Optimizer</label>
+              <select id="tr-optimizer"></select></div>
+          </div>
+          <div class="row top">
+            <div class="field"><label for="tr-iter">Monte Carlo iterations</label>
+              <input type="number" id="tr-iter" min="1" step="1" value="100"></div>
+            <div class="field" id="tr-genfield" hidden><label for="tr-gen">Generations</label>
+              <input type="number" id="tr-gen" min="1" step="1" value="10"></div>
+            <div class="field" id="tr-procfield"><label for="tr-procs">Processes</label>
+              <input type="number" id="tr-procs" min="1" step="1" value="1"></div>
+            <div class="field"><label for="tr-test">Compounds for testing (%)</label>
+              <input type="number" id="tr-test" min="0" max="50" step="5" value="0"></div>
+            <div class="field"><label for="tr-seed">Random seed</label>
+              <input type="number" id="tr-seed" min="1" step="1" placeholder="any"></div>
+            <div class="field"><span class="lab">Start</span>
+              <label class="check"><input type="checkbox" id="tr-random" checked> From random values</label></div>
+          </div>
+          <p class="muted fine" id="tr-note"></p>
         </div>
         <div class="row top" id="ev-where" hidden>
           <div class="field"><span class="lab">Run</span>
@@ -360,6 +386,23 @@
           <span class="pill" id="ev-jobpill" hidden></span></div>
         <p class="muted fine">Sending logs in on the cluster once. After that the job is followed in the tab Cluster, also when this page was closed in between.</p>
       </div>
+    </div>
+    <div class="card" id="tr-run" hidden>
+      <div class="head"><h2>Training</h2><span class="muted num" id="tr-status"></span><span class="spacer"></span>
+        <button class="btn small" id="tr-stop" type="button" hidden>Stop</button></div>
+      <div class="body">
+        <div class="progress" aria-hidden="true"><i id="tr-bar"></i></div>
+        <div class="plot" id="trplot"></div>
+        <p class="muted fine" id="tr-plotnote"></p>
+      </div>
+    </div>
+    <div class="card" id="tr-result" hidden>
+      <div class="head"><h2>Trained parameters</h2><span class="muted" id="tr-count"></span><span class="spacer"></span>
+        <button class="btn small" id="tr-use" type="button">Open in the tab Force field</button>
+        <button class="btn small" id="tr-save" type="button">Save force field</button></div>
+      <div class="scroll flat maxh380"><table class="data" id="tr-params"></table></div>
+      <div class="body"><p class="muted fine" id="tr-sens"></p>
+        <p class="muted fine">Best is the value in the trained force field. With more than one process the mean and the standard deviation are those of the individuals at the end. Below, the trained force field is compared with the data.</p></div>
     </div>
     <div class="cols plot-left" id="ev-result" hidden>
       <div class="card"><div class="head"><h2>Force field against reference</h2><span class="spacer"></span>

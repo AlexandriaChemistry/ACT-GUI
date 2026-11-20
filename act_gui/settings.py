@@ -76,6 +76,8 @@ class Settings:
     cluster_jobs_dir: Optional[Path] = None
     ## The number of progress reports of a job that are kept for plotting
     max_progress_points: int = 5000
+    ## The largest number of processes of a calculation on this machine
+    max_processes: int = field(default_factory=lambda: max(1, min(8, os.cpu_count() or 1)))
     ## The smallest and largest value of options with a number, by task and option
     limits: Dict[str, Dict[str, Tuple[float, float]]] = field(default_factory=lambda: {
         "simulate": {"nsteps": (1, 200000), "nstener": (1, 100000),
@@ -84,6 +86,8 @@ class Settings:
         "minimize": {"maxiter": (1, 100000)},
         "nma": {"maxiter": (1, 100000), "linewidth": (0.1, 500)},
         "geometry_ff": {"bfactor": (0.01, 1), "afactor": (0.01, 1), "factor": (0.01, 1)},
+        "train": {"max_iter": (1, 100000), "max_generations": (1, 10000),
+                  "temp": (1e-6, 1e6), "seed": (0, 2147483647)},
     })
 
     def __post_init__(self) -> None:

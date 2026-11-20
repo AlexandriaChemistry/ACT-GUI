@@ -20,7 +20,7 @@
  *
  * All text that comes from the server is put on the page as text.
  */
-import { $, alertBox, call, el, pill, session, toast } from "./common.js";
+import { $, alertBox, call, el, num, pill, session, toast } from "./common.js";
 
 /** The fields of the form, by the name of the setting. */
 const FIELDS = {
@@ -103,6 +103,23 @@ function asked(job) {
 }
 
 /**
+ * How far a job was when the cluster was last asked, in words.
+ * @param {object} job The job.
+ * @returns {string} The generation or the iteration and the lowest χ², empty for a job that does not tell.
+ */
+function progressOf(job) {
+  const p = job.progress;
+  if (!p) return "";
+  const parts = [];
+  if (p.event === "generation" && p.ngenerations > 1) parts.push(`generation ${p.generation} of ${p.ngenerations}`);
+  else if (p.event === "generation") parts.push("training done");
+  else if (p.event === "step" && p.iteration !== undefined) parts.push(`iteration ${Math.floor(p.iteration)}`);
+  else if (p.event === "start") parts.push("started");
+  if (p.chi2 !== undefined) parts.push(`χ² ${num(p.chi2, 5)}`);
+  return parts.join(" · ");
+}
+
+/**
  * A small button in the row of a job.
  * @param {string} label The text.
  * @param {string} act   What it does: stop, fetch, open or forget.
@@ -133,7 +150,8 @@ function showJobs(listing) {
       if (done && job.state !== "cancelled" && !job.fetched) buttons.append(action("Fetch results", "fetch", job.name));
       if (done) buttons.append(action("Forget", "forget", job.name));
       body.append(el("tr", { data: { job: job.name } }, el("td", { class: "mono" }, job.name), el("td", {}, job.title),
-        el("td", {}, el("span", { class: "pill" + (kind ? " " + kind : "") }, label)),
+        el("td", {}, el("span", { class: "pill" + (kind ? " " + kind : "") }, label),
+          progressOf(job) ? el("div", { class: "muted fine jobprogress" }, progressOf(job)) : ""),
         el("td", { class: "mono" }, job.slurm + (job.slurm_state && !done ? ` ${job.slurm_state.toLowerCase()}` : "")),
         el("td", {}, when(job.created)), el("td", {}, asked(job)), el("td", { class: "mono" }, `${job.server}:${job.directory}`),
         el("td", {}, buttons)));

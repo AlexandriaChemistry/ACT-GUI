@@ -849,6 +849,93 @@ class PageTest(unittest.TestCase):
         self.assertFalse(self.browser.find_element(By.ID, "ev-result").is_displayed())
         self.shot("22-molprop-default")
 
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_9b_train_a_force_field(self):
+        """!
+        @brief A force field is trained on the energies of the compounds in
+        a molprop file: the page asks what to train, follows the training,
+        lists the trained parameters, compares the trained force field with
+        the data and hands it to the force field workspace.
+        """
+        data = Path(TESTDATA)
+        self.open_page()
+        self.click('#nav button[data-view="molprop"]')
+        self.browser.find_element(By.ID, "mpw-file").send_keys(str(data / "molprop" / "booze-mono.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        self.assertFalse(self.browser.find_element(By.ID, "tr-opts").is_displayed())
+        self.assertEqual("Compare", self.text("#run-ev"))
+        self.click('#ev-what button[data-v="train"]')
+        self.assertTrue(self.browser.find_element(By.ID, "tr-opts").is_displayed())
+        self.assertEqual("Train", self.text("#run-ev"))
+        self.assertEqual("Properties to train on", self.text("#ev-obslab"))
+        # Monte Carlo is one generation on one process, the genetic
+        # algorithm has generations and needs two processes
+        optimizer = Select(self.browser.find_element(By.ID, "tr-optimizer"))
+        self.assertEqual("MCMC", optimizer.first_selected_option.get_attribute("value"))
+        self.assertFalse(self.browser.find_element(By.ID, "tr-genfield").is_displayed())
+        optimizer.select_by_value("HYBRID")
+        self.assertTrue(self.browser.find_element(By.ID, "tr-genfield").is_displayed())
+        self.assertGreaterEqual(int(self.browser.find_element(By.ID, "tr-procs").get_attribute("value")), 2)
+        self.assertIn("two at least", self.text("#tr-note"))
+        optimizer.select_by_value("MCMC")
+        procs = self.browser.find_element(By.ID, "tr-procs")
+        procs.clear()
+        procs.send_keys("1")
+        self.browser.find_element(By.ID, "ev-fffile").send_keys(
+            str(data / "forcefields" / "halgren-PG.xml"))
+        Select(self.browser.find_element(By.ID, "ev-ff")).select_by_value("upload")
+        # Nothing to train, nothing started
+        self.click("#run-ev")
+        self.wait(lambda b: "kinds of parameters" in b.find_element(By.ID, "toast").text)
+        self.assertFalse(self.browser.find_element(By.ID, "tr-run").is_displayed())
+        self.browser.find_element(By.ID, "tr-fit").send_keys("De b c bondlength angle kt")
+        for field, value in (("tr-iter", "5"), ("tr-seed", "1993")):
+            element = self.browser.find_element(By.ID, field)
+            element.clear()
+            element.send_keys(value)
+        self.shot("23-train-form")
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text == "Done")
+        self.assertEqual("", self.errors())
+        # How it went
+        self.assertTrue(self.browser.find_element(By.ID, "tr-run").is_displayed())
+        status = self.text("#tr-status")
+        self.assertIn("MCMC", status)
+        self.assertIn("5 iterations", status)
+        self.assertIn("χ²", status)
+        self.assertEqual("100%", self.browser.execute_script(
+            "return document.getElementById('tr-bar').style.width"))
+        self.assertGreaterEqual(len(self.browser.find_elements(By.CSS_SELECTOR, "#trplot svg path, #trplot svg polyline")), 1)
+        self.assertFalse(self.browser.find_element(By.ID, "tr-stop").is_displayed())
+        # The parameters and the comparison of the trained force field
+        self.assertTrue(self.browser.find_element(By.ID, "tr-result").is_displayed())
+        rows = self.browser.execute_script(
+            "return [...document.querySelectorAll('#tr-params tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertGreater(len(rows), 0)
+        self.assertEqual("%d parameters" % len(rows), self.text("#tr-count"))
+        self.assertLessEqual({row[0] for row in rows},
+                             {"De", "b", "c", "bondlength", "angle", "kt"})
+        self.assertTrue(all(row[2] for row in rows))
+        self.assertIn("Sensitivity analysis", self.text("#tr-sens"))
+        self.assertTrue(self.browser.find_element(By.ID, "ev-result").is_displayed())
+        self.assertIn("trained force field", self.text("#ev-source"))
+        self.assertIn("Potential energy", self.text("#ev-stats"))
+        self.browser.execute_script("document.getElementById('tr-run').scrollIntoView()")
+        self.shot("24-train-done")
+        # The trained force field in the force field workspace
+        self.click("#tr-use")
+        self.wait(lambda b: b.find_element(By.ID, "view-force-field").is_displayed()
+                  or self.errors())
+        self.assertEqual("", self.errors())
+        self.assertIn("Trained force field", self.text("#ffchips"))
+        self.assertEqual("", self.errors())
+        # Back to comparing, the form for training is gone
+        self.click('#nav button[data-view="molprop"]')
+        self.click('#ev-what button[data-v="compare"]')
+        self.assertFalse(self.browser.find_element(By.ID, "tr-opts").is_displayed())
+        self.assertEqual("Compare", self.text("#run-ev"))
+
     # --- the cluster for long jobs ---
 
     def test_a_cluster_settings(self):
@@ -1068,6 +1155,117 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").text)
         self.click('#nav button[data-view="molprop"]')
         self.assertFalse(self.browser.find_element(By.ID, "ev-where").is_displayed())
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_c_training_on_the_cluster(self):
+        """!
+        @brief A training goes to the cluster with an individual for each
+        process of the job. The tab Cluster tells how far it is, and its
+        results are the trained parameters, how the training went and the
+        comparison of the trained force field. A directory stands in for
+        the cluster, and a script for the program there.
+        """
+        data = Path(TESTDATA)
+        self.open_page()
+        self.click('#nav button[data-view="cluster"]')
+        for field, value in (("cl-server", "good"), ("cl-user", "spoel"),
+                             ("cl-workdir", "act/jobs")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        Select(self.browser.find_element(By.ID, "cl-load")).select_by_value("none")
+        self.click("#cl-save")
+        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").text)
+        logins = len(self.cluster.calls())
+
+        self.click('#nav button[data-view="molprop"]')
+        self.browser.find_element(By.ID, "mpw-file").send_keys(
+            str(data / "molprop" / "booze-mono.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        self.browser.find_element(By.ID, "ev-fffile").send_keys(
+            str(data / "forcefields" / "halgren-PG.xml"))
+        Select(self.browser.find_element(By.ID, "ev-ff")).select_by_value("upload")
+        self.click('#ev-what button[data-v="train"]')
+        self.assertTrue(self.browser.find_element(By.ID, "ev-where").is_displayed())
+        self.assertTrue(self.browser.find_element(By.ID, "tr-procfield").is_displayed())
+        self.browser.execute_script("document.getElementById('ev-where').scrollIntoView()")
+        self.click('#ev-place button[data-v="cluster"]')
+        # The processes are those of the job, two at least for this optimizer
+        self.assertFalse(self.browser.find_element(By.ID, "tr-procfield").is_displayed())
+        self.assertEqual("1", self.browser.find_element(By.ID, "ev-tasks").get_attribute("value"))
+        Select(self.browser.find_element(By.ID, "tr-optimizer")).select_by_value("HYBRID")
+        self.assertEqual("4", self.browser.find_element(By.ID, "ev-tasks").get_attribute("value"))
+        self.assertEqual("Show the job…", self.text("#run-ev"))
+        for field, value in (("tr-fit", "De b"), ("tr-iter", "20"), ("tr-gen", "3"),
+                             ("ev-jobname", "train-1")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        self.browser.execute_script("document.getElementById('run-ev').scrollIntoView()")
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-job").is_displayed() or self.errors())
+        self.assertEqual("", self.errors())
+        script = self.text("#ev-jobscript")
+        for part in ("#SBATCH --ntasks=4", "srun alexandria train_ff ", " -optimizer HYBRID ",
+                     " -fit 'De b' ", " -max_generations 3 ", " -max_iter 20 ", " -pop_size 4 ",
+                     " -o trained.xml", " -progress progress.jsonl"):
+            self.assertIn(part, script)
+        self.assertNotIn(self._tmp.name, script)
+        self.assertEqual(logins, len(self.cluster.calls()))
+        self.click("#ev-send")
+        self.wait(lambda b: b.find_element(By.ID, "view-cluster").is_displayed())
+        self.assertEqual("", self.errors())
+
+        def row():
+            return self.browser.execute_script(
+                "const r = document.querySelector('#cj-table tbody tr[data-job=\"train-1\"]');"
+                "return r ? [...r.cells].map(c => c.textContent) : null")
+        self.wait(lambda b: row() is not None)
+        self.assertEqual(["train-1", "Train a force field on the data of a molprop file",
+                          "Waiting"], row()[:3])
+
+        def asked(browser):
+            """Ask until the cluster is asked: not within half a minute of the test before"""
+            if row()[2].startswith("Finished"):
+                return True
+            button = browser.find_element(By.ID, "cj-ask")
+            if button.is_enabled():
+                button.click()
+            return False
+        self.wait(asked, 90)
+        # How far it was when the cluster was asked
+        self.assertEqual("generation 2 of 3 · χ² 46.5", self.text("#cj-table .jobprogress"))
+        self.assertEqual(logins + 3, len(self.cluster.calls()))
+        self.shot("34-cluster-training")
+
+        self.click('#cj-table button[data-act="open"]')
+        self.wait(lambda b: b.find_element(By.ID, "tr-result").is_displayed())
+        self.assertTrue(self.browser.find_element(By.ID, "view-molprop").is_displayed())
+        self.assertEqual("", self.errors())
+        rows = self.browser.execute_script(
+            "return [...document.querySelectorAll('#tr-params tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertEqual([["sigma", "ow", "0.3"]], rows)
+        self.assertTrue(self.browser.find_element(By.ID, "tr-run").is_displayed())
+        self.wait(lambda b: "generation 2 of 3" in b.find_element(By.ID, "tr-status").text)
+        self.assertIn("HYBRID", self.text("#tr-status"))
+        self.assertIn("χ² 46.5", self.text("#tr-status"))
+        self.assertFalse(self.browser.find_element(By.ID, "tr-stop").is_displayed())
+        self.assertGreaterEqual(len(self.browser.find_elements(
+            By.CSS_SELECTOR, "#trplot svg path, #trplot svg polyline")), 1)
+        self.assertIn("job train-1 on the cluster, the trained force field", self.text("#ev-source"))
+        saved = self.saved_file("#tr-save", "trained.xml", "<alexandria_chemistry")
+        self.assertIn("alexandria_chemistry", saved)
+        self.shot("35-cluster-training-results")
+        self.assertEqual(logins + 3, len(self.cluster.calls()))
+
+        # Take the job and the cluster away again
+        self.click('#nav button[data-view="cluster"]')
+        self.click('#cj-table button[data-act="forget"]')
+        self.click('#cj-table button[data-act="forget"]')
+        self.wait(lambda b: b.find_element(By.ID, "cj-empty").is_displayed())
+        self.click("#cl-forget")
+        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").text)
 
 
 if __name__ == "__main__":

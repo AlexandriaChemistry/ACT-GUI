@@ -175,7 +175,8 @@ class JobManager:
                outputs: Optional[Dict[str, str]] = None,
                inputs: Optional[Mapping[str, Sequence[InputFile]]] = None,
                collect: Optional[Mapping[str, str]] = None,
-               digest: Optional[Callable[[Any], Any]] = None) -> Job:
+               digest: Optional[Callable[[Any], Any]] = None,
+               processes: int = 1) -> Job:
         """!
         @brief Start a job, or put it in the queue.
         @param task     The name of the task, for the browser.
@@ -192,6 +193,7 @@ class JobManager:
         file names in the directory of the job. Those that exist are kept.
         @param digest   A function that makes what is kept of the result of
         the command, for results that are too large to send to the browser.
+        @param processes The number of processes that the command runs on.
         @return The job.
         @throws JobError if too many jobs are waiting or running.
         """
@@ -204,12 +206,14 @@ class JobManager:
             job = Job(id=job_id, task=task, command=command, workdir=self._dir / job_id)
             self._jobs[job_id] = job
         options, job.inputs = place_files(job.workdir, options, outputs, inputs)
-        self._pool.submit(self._execute, job, options, progress, dict(collect or {}), digest)
+        self._pool.submit(self._execute, job, options, progress, dict(collect or {}), digest,
+                          processes)
         return job
 
     def _execute(self, job: Job, options: Dict[str, Any], progress: bool,
                  collect: Optional[Mapping[str, str]] = None,
-                 digest: Optional[Callable[[Any], Any]] = None) -> None:
+                 digest: Optional[Callable[[Any], Any]] = None,
+                 processes: int = 1) -> None:
         """!
         @brief Run a job. Called in a thread of the pool.
         @param job      The job.
@@ -217,6 +221,7 @@ class JobManager:
         @param progress Whether to follow the progress.
         @param collect  Files to keep that the command writes unasked, see submit().
         @param digest   The function that makes what is kept of the result.
+        @param processes The number of processes that the command runs on.
         """
         if job.stop.is_set():
             self._finish(job, CANCELLED)
@@ -239,6 +244,8 @@ class JobManager:
                                      "stop": job.stop}
             if progress:
                 extra["on_progress"] = on_progress
+            if processes > 1:
+                extra["processes"] = processes
             result = self._run(job.command, **extra, **options)
             data = digest(result.data) if digest is not None else result.data
             # The files that were made for the job, then those it wrote
@@ -261,7 +268,8 @@ class JobManager:
 
     def adopt(self, task: str, command: str, workdir: Path, result: Any,
               files: Mapping[str, Path], *, inputs: Optional[Mapping[str, Path]] = None,
-              created: Optional[float] = None, ended: Optional[float] = None) -> Job:
+              created: Optional[float] = None, ended: Optional[float] = None,
+              progress: Optional[Sequence[Any]] = None) -> Job:
         """!
         @brief Take in a job that ran elsewhere, such as on a cluster, and
         of which the results are on this machine. From here on it is a
@@ -274,13 +282,15 @@ class JobManager:
         @param inputs  Those of the files that were made for the job.
         @param created When the job was made, now if None.
         @param ended   When it ended, now if None.
+        @param progress The reports of its progress, if it made them.
         @return The job.
         """
         now = time.time()
         job = Job(id=uuid.uuid4().hex, task=task, command=command, workdir=Path(workdir),
                   status=FINISHED, created=now if created is None else created,
                   ended=now if ended is None else ended, result=result,
-                  files=dict(files), inputs=dict(inputs or {}))
+                  files=dict(files), inputs=dict(inputs or {}),
+                  progress=list(progress or [])[:self._max_progress])
         with self._lock:
             self._jobs[job.id] = job
         return job

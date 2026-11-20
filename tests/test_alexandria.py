@@ -424,6 +424,64 @@ class RealProgramTest(unittest.TestCase):
                 self.assertEqual(200, pdf.status_code, pdf.text[:200])
                 self.assertTrue(pdf.content.startswith(b"%PDF"))
 
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_train_a_force_field(self):
+        """!
+        @brief A force field is trained on the energies of compounds with a
+        few Monte Carlo steps: the page can follow it, gets the parameters
+        and the comparison of the trained force field, and the force field
+        can be compared again as any other.
+        """
+        def send(directory, name, kind):
+            """Upload a file of the test data of ACT"""
+            answer = self.client.post("/api/uploads", params={"kind": kind, "name": name},
+                                      content=(Path(TESTDATA) / directory / name).read_bytes(),
+                                      headers=self.headers)
+            self.assertEqual(200, answer.status_code, answer.text)
+            return answer.json()["id"]
+        mp_id = send("molprop", "booze-mono.xml", "molprop")
+        described = self.run_task({"task": "mp_describe", "molprop": {"file": mp_id}})
+        self.assertEqual("finished", described["status"], described["error"])
+        molprop = {"file": mp_id, "described": described["id"]}
+        fit = ["De", "b", "c", "bondlength", "angle", "kt"]
+        job = self.run_task({"task": "train",
+                             "forcefield": {"file": send("forcefields", "halgren-PG.xml",
+                                                         "forcefield")},
+                             "molprop": molprop, "observables": ["epot"],
+                             "training": {"fit": fit, "test": 0.25},
+                             "options": {"max_iter": 5, "seed": 1993}})
+        self.assertEqual("finished", job["status"], job["error"])
+        # How far it was: the start, steps of the chain and the end
+        progress = self.client.get("/api/jobs/" + job["id"], headers=self.headers).json()["progress"]
+        self.assertGreaterEqual(len(progress), 3)
+        self.assertEqual("start", progress[0]["event"])
+        self.assertEqual(("MCMC", 5, 1), (progress[0]["optimizer"], progress[0]["niterations"],
+                                         progress[0]["population"]))
+        self.assertEqual("generation", progress[-1]["event"])
+        self.assertLessEqual(progress[-1]["best"]["train"], progress[0]["chi2"]["train"])
+        result = job["result"]
+        # The parameters that were trained are of the kinds that were asked for
+        self.assertGreater(len(result["parameters"]), 0)
+        self.assertLessEqual({p["class"] for p in result["parameters"]}, set(fit))
+        self.assertTrue(all(isinstance(p["best"], (int, float)) for p in result["parameters"]))
+        # Of the two compounds one was kept for testing: there is always
+        # one for testing when a part is asked for
+        datasets = [c["dataset"] for c in result["compounds"]]
+        self.assertEqual(len(described["result"]["molecules"]), len(datasets))
+        self.assertEqual(["Test", "Train"], sorted(datasets))
+        self.assertEqual({"Train", "Test"}, set(result["statistics"]))
+        self.assertGreater(result["statistics"]["Train"]["Potential energy"]["N"], 0)
+        self.assertIn("epotcorr", job["files"])
+        self.assertIn("o", job["files"])
+        trained = self.client.get("/api/jobs/%s/files/o" % job["id"], headers=self.headers)
+        self.assertEqual(200, trained.status_code)
+        self.assertIn("</alexandria_chemistry>", trained.text)
+        # The trained force field in a comparison
+        again = self.run_task({"task": "evaluate", "forcefield": {"job": job["id"]},
+                               "molprop": molprop, "observables": ["epot"]})
+        self.assertEqual("finished", again["status"], again["error"])
+        self.assertGreater(again["result"]["statistics"]["Train"]["Potential energy"]["N"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

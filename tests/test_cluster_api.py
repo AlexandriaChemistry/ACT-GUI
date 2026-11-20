@@ -224,6 +224,68 @@ class ClusterJobsApiTest(unittest.TestCase):
                                                  headers=self.headers).json()["jobs"][0]["job"])
         self.assertEqual(3, self.logins())
 
+    def test_training_on_the_cluster(self):
+        """!
+        @brief A training has an individual for each process of the job
+        and reports its progress in a file: the list of jobs tells how far
+        it is, and the results come with the parameters and the progress.
+        """
+        body = dict(self.body, task="train", observables=["inter"],
+                    training={"fit": ["sigma", "epsilon"]},
+                    options={"optimizer": "HYBRID", "max_generations": 3, "max_iter": 20})
+
+        def post(send=False, request=body, **chosen):
+            return self.client.post("/api/cluster/jobs", headers=self.headers,
+                                    json=dict(request, cluster=chosen, send=send))
+        answer = post(name="train-1", tasks=4, minutes=120)
+        self.assertEqual(200, answer.status_code, answer.text)
+        shown = answer.json()
+        self.assertIn("#SBATCH --ntasks=4\n", shown["script"])
+        self.assertIn("srun alexandria train_ff -ff ff.xml -mp mp.xml -fc_inter 1 "
+                      "-fit 'sigma epsilon' -optimizer HYBRID -max_generations 3 -max_iter 20 "
+                      "-pop_size 4 -json train_ff.json -progress progress.jsonl "
+                      "-o trained.xml -sel selection.dat\n", shown["script"])
+        self.assertEqual(0, self.logins())
+        # The processes are those of the job, whatever the request says
+        # about this computer; the genetic algorithm needs two
+        shown = post(name="train-1", tasks=2, request=dict(body, processes=1)).json()
+        self.assertIn("-pop_size 2 ", shown["script"])
+        refused = post(name="train-1", tasks=1)
+        self.assertEqual(400, refused.status_code)
+        self.assertIn("two processes", refused.json()["detail"])
+        for tasks in (0, "4", 5000, True):
+            self.assertEqual(400, post(name="train-1", tasks=tasks).status_code, tasks)
+        self.assertEqual(0, self.logins())
+
+        sent = post(send=True, name="train-1", tasks=4)
+        self.assertEqual(200, sent.status_code, sent.text)
+        self.assertEqual("train", sent.json()["jobs"][0]["task"])
+        self.assertIsNone(sent.json()["jobs"][0]["progress"])
+        checked = self.client.post("/api/cluster/jobs/check", headers=self.headers).json()
+        job = checked["jobs"][0]
+        self.assertEqual(("finished", True), (job["state"], job["fetched"]))
+        self.assertEqual({"event": "generation", "generation": 2, "ngenerations": 3,
+                          "chi2": 46.5, "seconds": 3.0}, job["progress"])
+        self.assertEqual(3, self.logins())
+        opened = self.client.post("/api/cluster/jobs/train-1/open", headers=self.headers)
+        self.assertEqual(200, opened.status_code, opened.text)
+        self.assertEqual("train", opened.json()["task"])
+        result = self.client.get("/api/jobs/" + opened.json()["job"],
+                                 headers=self.headers).json()
+        self.assertEqual("finished", result["status"])
+        self.assertEqual("sigma", result["result"]["parameters"][0]["class"])
+        self.assertEqual({"mode": "1D", "minimum": "yes"}, result["result"]["sensitivity"])
+        self.assertIn("Train", result["result"]["statistics"])
+        self.assertEqual(["start", "generation", "generation", "step"],
+                         [report["event"] for report in result["progress"]])
+        self.assertLessEqual({"o", "progress", "INTERACTION", "json"}, set(result["files"]))
+        # The trained force field is one to calculate with
+        trained = self.client.get("/api/jobs/%s/files/o" % opened.json()["job"],
+                                  headers=self.headers)
+        self.assertEqual(200, trained.status_code)
+        self.assertIn("alexandria_chemistry", trained.text)
+        self.assertEqual(3, self.logins())
+
     def test_jobs_are_there_when_the_interface_starts_again(self):
         """!
         @brief A later run of the interface lists the job, follows it and
