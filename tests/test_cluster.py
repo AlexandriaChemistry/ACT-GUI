@@ -173,7 +173,7 @@ class SettingsTest(unittest.TestCase):
         chosen = cluster.parse({"server": "csb", "user": "spoel", "workdir": "act"})
         words = ["alexandria", "train_ff", "-ff", "ff.xml", "-mp", "my data.xml", "-fc_inter", "1"]
         script = cluster.batch_script(chosen, "act-1a2b", words)
-        self.assertEqual("""#!/bin/bash
+        self.assertEqual("""#!/bin/bash -l
 #SBATCH --job-name=act-1a2b
 #SBATCH --partition=CLUSTER,CLUSTER-AMD
 #SBATCH --ntasks=1

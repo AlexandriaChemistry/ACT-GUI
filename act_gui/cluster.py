@@ -261,7 +261,9 @@ def batch_script(settings: ClusterSettings, name: str, words: Sequence[str], *,
     if not words or not all(isinstance(word, str) and word and "\n" not in word
                             and "\0" not in word for word in words):
         raise ClusterError("The job has no command")
-    lines = ["#!/bin/bash",
+    # A login shell: the job is sent from a login without a terminal, in
+    # which the commands module and conda need not be known
+    lines = ["#!/bin/bash -l",
              "#SBATCH --job-name=%s" % name,
              "#SBATCH --partition=%s" % (settings.gpu_partition if gpu else settings.partition),
              "#SBATCH --ntasks=%d" % tasks,
