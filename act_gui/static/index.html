@@ -149,6 +149,7 @@
       <button role="tab" data-tab="vsite" aria-selected="false">Virtual sites</button>
       <button role="tab" data-tab="geom" aria-selected="false">Geometry</button>
       <button role="tab" data-tab="edit" aria-selected="false">Edit and validate</button>
+      <button role="tab" data-tab="diff" aria-selected="false">Compare</button>
       <span class="ink"></span>
     </nav>
 
@@ -288,6 +289,25 @@
             <div class="row"><button class="btn" id="v-repair" type="button" hidden>Write corrected force field</button></div></div></div>
       </div>
     </div>
+
+    <div class="panel" id="fftab-diff" hidden>
+      <div class="card">
+        <div class="bar">
+          <div class="field"><label for="fd-other">Compare the force field of this workspace with</label>
+            <select id="fd-other"><option value="default">Default</option><option value="given" hidden disabled></option><option value="upload">Upload force field…</option></select></div>
+          <input class="visually-hidden" type="file" id="fd-file" accept=".xml" tabindex="-1" aria-hidden="true">
+          <button class="btn primary" id="run-diff" type="button">Compare</button>
+          <span class="pill" id="fd-pill" hidden></span>
+        </div>
+      </div>
+      <div class="card" id="fd-result" hidden>
+        <div class="head"><h2>What is different</h2><span class="spacer"></span>
+          <label class="check"><input type="checkbox" id="fd-all"> Also what only one of them has</label></div>
+        <div class="body"><div class="chips" id="fd-chips"></div></div>
+        <div class="scroll flat maxh560"><table class="data" id="fd-table"></table></div>
+        <div class="body"><p class="muted fine" id="fd-note"></p></div>
+      </div>
+    </div>
   </section>
 
   <!-- ================= Molprop data ================= -->
@@ -405,6 +425,7 @@
     </div>
     <div class="card" id="tr-result" hidden>
       <div class="head"><h2>Trained parameters</h2><span class="muted" id="tr-count"></span><span class="spacer"></span>
+        <button class="btn small" id="tr-diff" type="button" hidden>What changed</button>
         <button class="btn small" id="tr-use" type="button">Open in the tab Force field</button>
         <button class="btn small" id="tr-save" type="button">Save force field</button></div>
       <div class="scroll flat maxh380"><table class="data" id="tr-params"></table></div>

@@ -58,6 +58,12 @@ there or opened from a file:
   problems that `edit_ff -validate` finds, with a button to write the force
   field without those that writing removes.
 
+- *Compare* lists what differs between the force field of the workspace
+  and another one, the default or a file: the parameters with another
+  value, with other bounds or another way of training, and those that
+  only one of the two has. After a training, "What changed" does this
+  for the trained force field and the one it started from.
+
 Every step writes a new file on the server, which can be saved and which
 the molecule workspace can use for its calculations.
 
@@ -101,7 +107,7 @@ the server, your user name there and a working directory. The comparison
 can then run as a job on the cluster, and the tab lists the jobs, see
 below.
 
-Not there yet: the comparison of two force fields, histograms of the energies of a compound, and
+Not there yet: histograms of the energies of a compound, and
 the server for several users.
 
 The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in

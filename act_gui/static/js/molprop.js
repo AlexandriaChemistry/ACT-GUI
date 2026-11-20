@@ -538,6 +538,7 @@ function trained(job) {
   $("#tr-sens").textContent = s.n_parameters === undefined ? ""
     : `Sensitivity analysis (${s.mode}): ${s.n_parameters_converged} of ${s.n_parameters} parameters are at a minimum of χ²` +
       (s.minimum === "yes" ? ", the force field is in a local minimum." : ", the force field is not in a local minimum: more iterations may improve it.");
+  $("#tr-diff").hidden = !state.tr.base;
   $("#tr-result").hidden = false;
 }
 
@@ -547,7 +548,9 @@ function trained(job) {
  * @returns {Promise<object>} The calculation when it is done.
  */
 async function runTraining(body) {
-  state.tr = { points: [], job: null, running: null };
+  // The force field it starts from, to tell afterwards what changed
+  const label = $("#ev-ff").selectedOptions[0].textContent.replace(/^From the force field tab: /, "");
+  state.tr = { points: [], job: null, running: null, base: { ref: body.forcefield, label } };
   $("#tr-result").hidden = true;
   $("#tr-run").hidden = false;
   $("#tr-bar").style.width = "0";
@@ -778,6 +781,10 @@ export function startMolprops(told) {
   what();
   $("#tr-stop").onclick = () => { if (state.tr.running) call("/jobs/" + state.tr.running, { method: "DELETE" }).catch(() => {}); };
   $("#tr-save").onclick = e => { if (state.tr.job) saveFile(e.currentTarget, `/jobs/${state.tr.job}/files/o`, {}, "Saving…", "trained.xml"); };
+  $("#tr-diff").onclick = () => {
+    if (!state.tr.job || !state.tr.base) return;
+    document.dispatchEvent(new CustomEvent("act-open-forcefield", { detail: { ref: { job: state.tr.job }, label: "Trained force field", other: state.tr.base } }));
+  };
   $("#tr-use").onclick = () => {
     if (state.tr.job) document.dispatchEvent(new CustomEvent("act-open-forcefield", { detail: { ref: { job: state.tr.job }, label: "Trained force field" } }));
   };

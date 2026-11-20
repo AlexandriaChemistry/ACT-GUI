@@ -20,6 +20,7 @@
  * text, never as markup.
  */
 import { $, $$, alertBox, call, el, num, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
+import { compareWith, startDiff } from "./ffdiff.js";
 import { chosenSites, redrawVsites, startVsites } from "./vsites.js";
 
 /** What the workspace knows. */
@@ -577,7 +578,7 @@ async function repair() {
 
 /* ---------- start ---------- */
 
-const TABS = { gen: "fftab-gen", vsite: "fftab-vsite", geom: "fftab-geom", edit: "fftab-edit" };
+const TABS = { gen: "fftab-gen", vsite: "fftab-vsite", geom: "fftab-geom", edit: "fftab-edit", diff: "fftab-diff" };
 
 /**
  * Make the workspace work. Called when the server has told who we are.
@@ -602,10 +603,17 @@ export async function startForceFields(told) {
   };
   $("#ff-default").onclick = e => openForceField({ default: true }, told.default_forcefield, e.currentTarget);
   // A force field that another workspace made, such as a trained one
+  // With "other" it is compared with that one, such as the force field that was trained
   document.addEventListener("act-open-forcefield", async e => {
     await openForceField(e.detail.ref, e.detail.label, $("#ff-open"));
-    if (state.current && state.current.ref === e.detail.ref) $('#nav button[data-view="force-field"]').click();
+    if (!state.current || state.current.ref !== e.detail.ref) return;
+    $('#nav button[data-view="force-field"]').click();
+    if (e.detail.other) {
+      $('#fftabs button[data-tab="diff"]').click();
+      compareWith(e.detail.other.ref, e.detail.other.label);
+    }
   });
+  startDiff(() => state.current, told);
   $("#ff-save").onclick = e => {
     const ref = state.current && state.current.ref;
     if (ref && ref.job) saveFile(e.currentTarget, `/jobs/${ref.job}/files/o`, {}, "Saving…", "forcefield.xml");

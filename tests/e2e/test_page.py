@@ -645,6 +645,47 @@ class PageTest(unittest.TestCase):
         self.assertEqual("Fixed", self.parameter_rows()[index][7])
         self.assertTrue(self.browser.find_element(By.ID, "ff-save").is_displayed())
         self.shot("14-ff-default-changed")
+        # Compared with the default: the one parameter that is fixed now
+        self.click('#fftabs button[data-tab="diff"]')
+        self.assertFalse(self.browser.find_element(By.ID, "fd-result").is_displayed())
+        self.click("#run-diff")
+        self.wait(lambda b: b.find_element(By.ID, "fd-pill").text == "Done")
+        self.assertEqual("", self.errors())
+
+        def chips():
+            return self.browser.execute_script(
+                "return [...document.querySelectorAll('#fd-chips .chip')].map(c => c.textContent)")
+
+        def differences():
+            return self.browser.execute_script(
+                "return [...document.querySelectorAll('#fd-table tbody tr')]"
+                ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertEqual(["another value 0", "only other bounds or training 1"], chips()[:2])
+        self.assertEqual("0", chips()[2].split()[-1])
+        self.assertEqual("0", chips()[3].split()[-1])
+        self.assertGreater(int(chips()[4].split()[-1]), 100)
+        found = differences()
+        self.assertEqual(1, len(found))
+        self.assertEqual(("VANDERWAALS", target[0] or found[0][1], target[1]), tuple(found[0][:3]))
+        self.assertEqual(found[0][3], found[0][4])
+        self.assertEqual("", found[0][5])
+        self.assertEqual("training: Bounded and Fixed", found[0][7])
+        self.shot("14b-ff-compared")
+        if os.path.isdir(TESTDATA):
+            # With another force field, of which the file is chosen
+            self.browser.find_element(By.ID, "fd-file").send_keys(
+                str(Path(TESTDATA) / "forcefields" / "ACS-g1.xml"))
+            Select(self.browser.find_element(By.ID, "fd-other")).select_by_value("upload")
+            self.click("#run-diff")
+            self.wait(lambda b: b.find_element(By.ID, "fd-pill").text == "Done")
+            self.assertEqual("", self.errors())
+            self.assertIn("only in ACS-g1.xml", chips()[2])
+            listed = len(differences())
+            only = int(chips()[2].split()[-1]) + int(chips()[3].split()[-1])
+            self.assertGreater(only, 0)
+            self.click("#fd-all")
+            self.assertEqual(min(500, listed + only), len(differences()))
+            self.click("#fd-all")
         # In the molecule workspace
         self.click('#nav button[data-view="molecule"]')
         choice = self.browser.find_element(By.CSS_SELECTOR, '#ffsel option[value="workspace"]')
@@ -950,7 +991,27 @@ class PageTest(unittest.TestCase):
         self.assertIn("Potential energy", self.text("#ev-stats"))
         self.browser.execute_script("document.getElementById('tr-run').scrollIntoView()")
         self.shot("24-train-done")
+        # What the training changed: the trained force field against the one it started from
+        self.browser.execute_script("document.getElementById('tr-result').scrollIntoView()")
+        self.click("#tr-diff")
+        self.wait(lambda b: b.find_element(By.ID, "fd-result").is_displayed() or self.errors())
+        self.assertEqual("", self.errors())
+        self.assertTrue(self.browser.find_element(By.ID, "view-force-field").is_displayed())
+        self.assertIn("Trained force field", self.text("#ffchips"))
+        heads = self.browser.execute_script(
+            "return [...document.querySelectorAll('#fd-table thead th')].map(c => c.textContent)")
+        self.assertEqual(["halgren-PG.xml", "Trained force field", "Difference"], heads[3:6])
+        changed = self.browser.execute_script(
+            "return [...document.querySelectorAll('#fd-table tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertGreater(len(changed), 0)
+        self.assertLessEqual({row[2] for row in changed},
+                             {"De", "b", "c", "bondlength", "angle", "kt"})
+        self.assertTrue(all(row[5] for row in changed))
+        self.shot("24b-train-changed")
         # The trained force field in the force field workspace
+        self.click('#nav button[data-view="molprop"]')
+        self.browser.execute_script("document.getElementById('tr-result').scrollIntoView()")
         self.click("#tr-use")
         self.wait(lambda b: b.find_element(By.ID, "view-force-field").is_displayed()
                   or self.errors())
