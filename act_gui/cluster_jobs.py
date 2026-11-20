@@ -28,7 +28,7 @@ import re
 import subprocess
 import tarfile
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from .cluster import (STATUS_FILE, ClusterError, ClusterSettings, remote_command,
                       ssh_command)
@@ -51,7 +51,7 @@ COMMAND_TIMEOUT = 60.0
 MAX_FETCH_BYTES = 2 * 1024 ** 3
 
 
-def _check_name(name: Any) -> str:
+def check_name(name: Any) -> str:
     """!
     @brief Check the name of a job.
     @param name The name.
@@ -95,7 +95,7 @@ def _job_dir(settings: ClusterSettings, name: str) -> str:
     @param name     The name of the job.
     @return The path, below the working directory.
     """
-    return "%s/%s" % (settings.workdir, _check_name(name))
+    return "%s/%s" % (settings.workdir, check_name(name))
 
 
 def _run(settings: ClusterSettings, remote: str, *, program: str,
@@ -193,6 +193,61 @@ def submit(settings: ClusterSettings, name: str, script: str,
     return slurm_id
 
 
+def status_all(settings: ClusterSettings, jobs: Sequence[Tuple[str, str]], *,
+               program: str = "ssh",
+               run: Optional[Callable[..., Any]] = None) -> Dict[str, Dict[str, Any]]:
+    """!
+    @brief Ask how jobs are doing, all of them in one login.
+    @param settings The settings of the cluster.
+    @param jobs     For each job its name and the number that Slurm gave it.
+    @param program  The ssh program.
+    @param run      The function that runs a command, subprocess.run() if None.
+    @return For each job, by name, an object with "state": waiting,
+    running, finished, failed or lost (Slurm has the job no more and it
+    left no exit status: it was stopped or ran out of time); "slurm" with
+    the state as Slurm names it, and "exit" with the exit status of the
+    program if it ended.
+    @throws ClusterError if the server could not be asked.
+    """
+    if not jobs:
+        return {}
+    questions = []
+    for name, slurm_id in jobs:
+        directory = _job_dir(settings, name)
+        asked = remote_command(["squeue", "-h", "-j", _check_id(slurm_id), "-o", "%T"])
+        questions.append('echo ACT-JOB %s "state=$(%s 2>/dev/null | head -n 1)" '
+                         '"exit=$(cat %s 2>/dev/null | head -n 1)"'
+                         % (remote_command([name]), asked,
+                            remote_command(["%s/%s" % (directory, STATUS_FILE)])))
+    done = _run(settings, "; ".join(questions), program=program, run=run,
+                timeout=COMMAND_TIMEOUT)
+    found: Dict[str, Dict[str, str]] = {}
+    for line in done.stdout.decode("utf-8", errors="replace").splitlines():
+        words = line.split()
+        if len(words) >= 2 and words[0] == "ACT-JOB":
+            found[words[1]] = dict(word.split("=", 1) for word in words[2:] if "=" in word)
+    answers: Dict[str, Dict[str, Any]] = {}
+    for name, _ in jobs:
+        said = found.get(name)
+        if said is None or "state" not in said or "exit" not in said:
+            raise ClusterError("The state of the job %s could not be read on %s: %s"
+                               % (name, settings.server, _text(done)))
+        slurm = said["state"].upper()
+        answer: Dict[str, Any] = {"slurm": slurm}
+        if re.match(r"^[0-9]{1,3}$", said["exit"]):
+            # The program ended, whatever Slurm still says about the job
+            answer["exit"] = int(said["exit"])
+            answer["state"] = "finished" if answer["exit"] == 0 else "failed"
+        elif slurm in WAITING:
+            answer["state"] = "waiting"
+        elif slurm in RUNNING:
+            answer["state"] = "running"
+        else:
+            answer["state"] = "lost"
+        answers[name] = answer
+    return answers
+
+
 def status(settings: ClusterSettings, name: str, slurm_id: str, *, program: str = "ssh",
            run: Optional[Callable[..., Any]] = None) -> Dict[str, Any]:
     """!
@@ -202,40 +257,10 @@ def status(settings: ClusterSettings, name: str, slurm_id: str, *, program: str 
     @param slurm_id The number that Slurm gave the job.
     @param program  The ssh program.
     @param run      The function that runs a command, subprocess.run() if None.
-    @return An object with "state": waiting, running, finished, failed or
-    lost (Slurm has the job no more and it left no exit status: it was
-    stopped or ran out of time); "slurm" with the state as Slurm names it,
-    and "exit" with the exit status of the program if it ended.
+    @return What status_all() gives for the job.
     @throws ClusterError if the server could not be asked.
     """
-    directory = _job_dir(settings, name)
-    remote = "; ".join([
-        'echo ACT-STATE "$(%s)"' % remote_command(["squeue", "-h", "-j", _check_id(slurm_id),
-                                                    "-o", "%T"]) + " 2>/dev/null",
-        'echo ACT-EXIT "$(cat %s 2>/dev/null)"' % remote_command(
-            ["%s/%s" % (directory, STATUS_FILE)])])
-    done = _run(settings, remote, program=program, run=run, timeout=COMMAND_TIMEOUT)
-    found = {"ACT-STATE": None, "ACT-EXIT": None}
-    for line in done.stdout.decode("utf-8", errors="replace").splitlines():
-        words = line.split()
-        if words and words[0] in found:
-            found[words[0]] = words[1] if len(words) > 1 else ""
-    if found["ACT-STATE"] is None or found["ACT-EXIT"] is None:
-        raise ClusterError("The state of the job could not be read on %s: %s"
-                           % (settings.server, _text(done)))
-    slurm = (found["ACT-STATE"] or "").upper()
-    answer: Dict[str, Any] = {"slurm": slurm}
-    if re.match(r"^[0-9]{1,3}$", found["ACT-EXIT"] or ""):
-        # The program ended, whatever Slurm still says about the job
-        answer["exit"] = int(found["ACT-EXIT"])
-        answer["state"] = "finished" if answer["exit"] == 0 else "failed"
-    elif slurm in WAITING:
-        answer["state"] = "waiting"
-    elif slurm in RUNNING:
-        answer["state"] = "running"
-    else:
-        answer["state"] = "lost"
-    return answer
+    return status_all(settings, [(name, slurm_id)], program=program, run=run)[name]
 
 
 def fetch(settings: ClusterSettings, name: str, names: Sequence[str], target: Path, *,

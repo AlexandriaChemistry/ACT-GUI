@@ -92,6 +92,8 @@ class Task:
     scatter: bool = False
     ## The function that makes what is kept of the result, None for all of it
     digest: Optional[Callable[[Any], Any]] = None
+    ## Whether the task can run as a job on the cluster of the user
+    cluster: bool = False
 
 
 @dataclass(frozen=True)
@@ -188,7 +190,8 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          downloads=("g",) + evaluation.PLOTS,
          plots=evaluation.PLOTS,
          needs=(FORCEFIELD, MOLPROP, SELECTION, OBSERVABLES), workspace="molprop",
-         collect=evaluation.DIMER_FILES, scatter=True, digest=evaluation.digest),
+         collect=evaluation.DIMER_FILES, scatter=True, digest=evaluation.digest,
+         cluster=True),
 )}
 
 ## The values that the option mut of edit_ff takes
@@ -438,4 +441,4 @@ def describe_task(task: Task, command_info: Optional[Any]) -> Dict[str, Any]:
             "progress": task.progress, "downloads": list(task.downloads),
             "plots": list(task.plots), "package": task.package,
             "needs": list(task.needs), "workspace": task.workspace,
-            "options": described}
+            "cluster": task.cluster, "options": described}

@@ -71,6 +71,9 @@ class Settings:
     config_file: Optional[Path] = None
     ## The ssh program with which the interface logs in on a cluster
     ssh_program: str = "ssh"
+    ## Where the jobs on the cluster are noted and their results are kept,
+    ## between runs. None for a directory below the data directory.
+    cluster_jobs_dir: Optional[Path] = None
     ## The number of progress reports of a job that are kept for plotting
     max_progress_points: int = 5000
     ## The smallest and largest value of options with a number, by task and option
@@ -92,6 +95,9 @@ class Settings:
         self.default_forcefield = Path(self.default_forcefield).expanduser()
         if self.config_file is not None:
             self.config_file = Path(self.config_file).expanduser()
+        if self.cluster_jobs_dir is None:
+            self.cluster_jobs_dir = self.data_dir / "cluster"
+        self.cluster_jobs_dir = Path(self.cluster_jobs_dir).expanduser().resolve()
         if self.mode not in ("desktop", "server"):
             raise ValueError("The mode must be desktop or server, not '%s'" % self.mode)
 

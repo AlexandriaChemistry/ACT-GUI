@@ -247,3 +247,12 @@ input.wide { width: 100%; }
 .outcome.good { color: var(--good); background: color-mix(in srgb, var(--good) 8%, var(--surface)); }
 .outcome.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, var(--surface)); }
 .list.plain li span:first-child { font: 600 13px var(--mono); }
+
+/* ---------- jobs on the cluster ---------- */
+.row.tight { gap: 6px; flex-wrap: nowrap; }
+table.data tr.more td { white-space: normal; padding-top: 0; }
+table.data tr.more pre.code { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; }
+#ev-jobscript { max-height: 340px; overflow-y: auto; }
+#ev-clusteropts input[type="number"] { width: 7.5em; }
+#ev-jobname { width: 16em; }
+table.data td.mono { font-family: var(--mono); font-size: 12.5px; }

@@ -261,7 +261,9 @@ def batch_script(settings: ClusterSettings, name: str, words: Sequence[str], *,
     if not words or not all(isinstance(word, str) and word and "\n" not in word
                             and "\0" not in word for word in words):
         raise ClusterError("The job has no command")
-    lines = ["#!/bin/bash",
+    # A login shell: the job is sent from a login without a terminal, in
+    # which the commands module and conda need not be known
+    lines = ["#!/bin/bash -l",
              "#SBATCH --job-name=%s" % name,
              "#SBATCH --partition=%s" % (settings.gpu_partition if gpu else settings.partition),
              "#SBATCH --ntasks=%d" % tasks,
@@ -292,6 +294,17 @@ def default_config_file() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME")
     root = Path(base) if base else Path.home() / ".config"
     return root / "act-gui" / "settings.json"
+
+
+def default_jobs_dir() -> Path:
+    """!
+    @brief Where the jobs on the cluster are noted and their results are kept.
+    @return The directory cluster-jobs in the directory act-gui of the data
+    directory of the user.
+    """
+    base = os.environ.get("XDG_DATA_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "share"
+    return root / "act-gui" / "cluster-jobs"
 
 
 def _read(path: Path) -> Dict[str, Any]:

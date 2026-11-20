@@ -328,8 +328,37 @@
           <input class="visually-hidden" type="file" id="ev-fffile" accept=".xml" tabindex="-1" aria-hidden="true">
           <div class="field grow"><span class="lab">Properties to compare</span><div class="row" id="ev-observables"></div></div>
         </div>
+        <div class="row top" id="ev-where" hidden>
+          <div class="field"><span class="lab">Run</span>
+            <div class="seg" id="ev-place" role="group" aria-label="Where the comparison runs"><button type="button" aria-pressed="true" data-v="here">On this computer</button><button type="button" aria-pressed="false" data-v="cluster">On the cluster</button></div></div>
+          <div class="row" id="ev-clusteropts" hidden>
+            <div class="field"><label for="ev-jobname">Name of the job</label>
+              <input class="mono" type="text" id="ev-jobname" placeholder="made from the date" maxlength="64" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
+            <div class="field"><label for="ev-tasks">Processes</label>
+              <input type="number" id="ev-tasks" min="1" max="4096" step="1" value="1"></div>
+            <div class="field"><label for="ev-hours">Time limit (hours)</label>
+              <input type="number" id="ev-hours" min="0.25" max="720" step="0.25" value="1"></div>
+            <div class="field"><span class="lab">Hardware</span>
+              <label class="check"><input type="checkbox" id="ev-gpu"> Needs a GPU</label></div>
+          </div>
+        </div>
         <div class="row"><button class="btn primary" id="run-ev" type="button">Compare</button>
           <span class="pill" id="ev-pill" hidden></span></div>
+      </div>
+    </div>
+    <div class="card" id="ev-job" hidden>
+      <div class="head"><h2>Job for the cluster</h2><span class="muted" id="ev-jobwhere"></span></div>
+      <div class="body">
+        <p class="muted">This is what would be sent. Nothing has been sent yet, and nobody has logged in.</p>
+        <p class="outcome bad" id="ev-jobtaken" hidden>There is a job with this name already. Give another name and show the job again.</p>
+        <div class="group"><h3>Files that go along</h3>
+          <div class="xscroll"><table class="data" id="ev-jobfiles"></table></div></div>
+        <div class="group"><h3>Script for Slurm</h3>
+          <pre class="code" id="ev-jobscript"></pre></div>
+        <div class="row"><button class="btn primary" id="ev-send" type="button">Send the job</button>
+          <button class="btn" id="ev-nosend" type="button">Do not send</button>
+          <span class="pill" id="ev-jobpill" hidden></span></div>
+        <p class="muted fine">Sending logs in on the cluster once. After that the job is followed in the tab Cluster, also when this page was closed in between.</p>
       </div>
     </div>
     <div class="cols plot-left" id="ev-result" hidden>
@@ -339,7 +368,7 @@
           <button class="btn small" id="ev-data" type="button">Save data</button></div>
         <div class="body"><div class="plot" id="evplot"></div>
           <p class="muted fine" id="ev-plotnote"></p></div></div>
-      <div class="card"><div class="head"><h2>Statistics</h2><span class="muted" id="ev-ncomp"></span><span class="spacer"></span>
+      <div class="card"><div class="head"><h2>Statistics</h2><span class="muted" id="ev-ncomp"></span><span class="muted" id="ev-source"></span><span class="spacer"></span>
           <button class="btn small" id="ev-log" type="button">Save log file</button></div>
         <div class="xscroll"><table class="data" id="ev-stats"></table></div>
         <div class="body"><p class="muted fine">RMSD is the root mean square deviation, MSE the mean signed error (force field minus reference), MAE the mean absolute error; the slope and R are those of a straight line through the points.</p></div></div>
@@ -354,6 +383,15 @@
           <div class="chips" id="cl-chips"></div></div>
         <span class="pill" id="cl-pill" hidden></span>
       </div>
+    </div>
+    <div class="card" id="cj-card">
+      <div class="head"><h2>Jobs on the cluster</h2><span class="muted" id="cj-note"></span><span class="spacer"></span>
+        <button class="btn small" id="cj-ask" type="button" disabled>Ask the cluster now</button></div>
+      <div class="xscroll"><table class="data" id="cj-table"></table></div>
+      <p class="empty pad" id="cj-empty">No jobs yet. A calculation that can run on the cluster has the choice “On the cluster”: for now the comparison of a force field with a molprop file, in the tab Molprop data.</p>
+      <div class="body" id="cj-foot" hidden>
+        <p class="outcome bad" id="cj-problem" role="status" hidden></p>
+        <p class="muted fine" id="cj-kept"></p></div>
     </div>
     <div class="cols form-left">
       <div class="card"><div class="body">
@@ -400,9 +438,10 @@
             <li><span class="ok">1</span><span>The interface starts the program <code>ssh</code> of this computer, which uses your own keys and settings. It never asks for a password and keeps none.</span></li>
             <li><span class="ok">2</span><span>So the login has to work without a question: <code>ssh user@server</code> in a terminal must log you in without typing anything. Set up a key for the server for that. If the server wants a password or a code every time, open one connection in a terminal with connection sharing (<code>ControlMaster</code> in the configuration of ssh) and leave it open.</span></li>
             <li><span class="ok">3</span><span>Jobs are submitted with <code>sbatch</code> from the working directory, each in a directory of its own.</span></li>
-            <li><span class="ok">4</span><span>Test the login logs in once, to see that the directory is there and that the server has Slurm. The interface logs in as seldom as it can.</span></li>
+            <li><span class="ok">4</span><span>Test the login logs in once, to see that the directory is there and that the server has Slurm.</span></li>
+            <li><span class="ok">5</span><span>The interface logs in as seldom as it can: once to send a job, once in a while to ask for the state of all jobs together, and once to fetch the results of a job that ended. After a login that did not work it does not try again by itself.</span></li>
           </ul>
-          <p class="muted fine">Sending jobs from the interface comes with a later version. These settings are what it will use.</p>
+          <p class="muted fine">Nothing is ever removed on the cluster: the directory of a job stays there until you remove it yourself.</p>
         </div></div>
     </div>
   </section>

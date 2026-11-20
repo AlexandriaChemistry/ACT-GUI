@@ -173,7 +173,7 @@ class SettingsTest(unittest.TestCase):
         chosen = cluster.parse({"server": "csb", "user": "spoel", "workdir": "act"})
         words = ["alexandria", "train_ff", "-ff", "ff.xml", "-mp", "my data.xml", "-fc_inter", "1"]
         script = cluster.batch_script(chosen, "act-1a2b", words)
-        self.assertEqual("""#!/bin/bash
+        self.assertEqual("""#!/bin/bash -l
 #SBATCH --job-name=act-1a2b
 #SBATCH --partition=CLUSTER,CLUSTER-AMD
 #SBATCH --ntasks=1
@@ -318,6 +318,32 @@ class FileTest(unittest.TestCase):
                 os.environ["XDG_CONFIG_HOME"] = saved
 
 
+## The stand-in for the program on the cluster
+ALEXANDRIA = r'''#!/bin/sh
+echo "{\"asked\": \"$*\"}" > result.json
+echo running "$@"
+command=$1
+status=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -json)
+      cat > "$2" <<END
+{"$command": {"molecules": {"0": {"name": "water#water", "dataset": "Train",
+                                  "atoms": {"0": {"fx": 1}},
+                                  "interaction_energies": {"c": {}}}},
+              "statistics": {"Train": {"INTERACTION": {"N": 2, "RMSD": 1.0}}},
+              "outliers": {}}}
+END
+      printf '@ s0 legend "Train"\n-20 -19\n-5 -6\n&\n' > INTERACTION.xvg;;
+    -epotcorr) printf '@ s0 legend "Train"\n1 2\n3 4\n&\n' > "$2";;
+    -fail) status=3;;
+  esac
+  shift
+done
+exit $status
+'''
+
+
 class FakeServer:
     """!
     @brief A directory that stands for a cluster, with a stand-in for ssh.
@@ -346,10 +372,12 @@ class FakeServer:
             "squeue": '#!/bin/sh\nhere=$(dirname "$0")\n'
                       'if [ -f "$here/../queue" ]; then cat "$here/../queue"; fi\n',
             "scancel": '#!/bin/sh\necho "$*" >> "$(dirname "$0")/../scancel.log"\n',
-            # Writes what it was asked in result.json, and fails for -fail
-            "alexandria": '#!/bin/sh\necho "{\\"asked\\": \\"$*\\"}" > result.json\n'
-                          'echo running "$@"\n'
-                          'case "$*" in *-fail*) exit 3;; esac\n',
+            # Starts the program, as for one process
+            "srun": '#!/bin/sh\nexec "$@"\n',
+            # Writes what it was asked in result.json, the file of -json
+            # with results as train_ff gives them and that of -epotcorr
+            # with two points, and fails for -fail
+            "alexandria": ALEXANDRIA,
         }
         for name, text in programs.items():
             path = self.dir / "bin" / name

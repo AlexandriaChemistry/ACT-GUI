@@ -60,6 +60,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--config", type=Path, default=None,
                         help="file with your settings, such as the cluster for long "
                         "jobs; %s by default" % cluster.default_config_file())
+    parser.add_argument("--cluster-jobs", type=Path, default=None,
+                        help="directory in which the jobs on the cluster are noted and "
+                        "their results are kept; %s by default" % cluster.default_jobs_dir())
     parser.add_argument("--no-browser", action="store_true",
                         help="do not open the browser, only print the address")
     parser.add_argument("--version", action="version", version="act-gui " + __version__)
@@ -71,7 +74,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         temporary = tempfile.TemporaryDirectory(prefix="act-gui-")
         data_dir = Path(temporary.name)
     settings = Settings(data_dir=data_dir, mode="desktop",
-                        config_file=args.config or cluster.default_config_file())
+                        config_file=args.config or cluster.default_config_file(),
+                        cluster_jobs_dir=args.cluster_jobs or cluster.default_jobs_dir())
     if not settings.default_forcefield.is_file():
         sys.stderr.write("The default force field %s does not exist\n"
                          % settings.default_forcefield)

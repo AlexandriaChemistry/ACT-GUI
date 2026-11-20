@@ -74,9 +74,11 @@ values of the force field against the reference values. The plot can be
 saved as a PDF file and the data as an xvg file.
 
 The tab Cluster, on the desktop, takes the Slurm cluster for long jobs:
-the server, your user name there and a working directory, see below.
+the server, your user name there and a working directory. The comparison
+can then run as a job on the cluster, and the tab lists the jobs, see
+below.
 
-Not there yet: sending jobs to the cluster, the comparison of two force
+Not there yet: training a force field, the comparison of two force
 fields, a choice of the compounds to compare on, histograms of the energies
 of a compound, and the server for several users.
 
@@ -103,7 +105,7 @@ removed at the end; `--data DIR` keeps them in a directory.
 
 ## The cluster for long jobs
 
-Long jobs will go to a Slurm cluster on which you have an account. In the
+Long jobs go to a Slurm cluster on which you have an account. In the
 tab Cluster you give the name of the server (a host name or a name from
 your ssh configuration), your user name there and a working directory,
 with its full path or as a path in your home directory. They are kept in
@@ -145,6 +147,38 @@ The button Test the login logs in once and tells whether the directory is
 there and the server has Slurm. The three settings are checked before they
 are used: a name that ssh could take for an option, or a directory with a
 character that means something to a shell, is refused.
+
+### Jobs
+
+With a cluster set, a calculation that can run there has the choice "On
+the cluster"; for now that is the comparison of a force field with a
+molprop file. You give the job a name (or leave that to the interface),
+the number of processes, a time limit and whether it needs a GPU. The
+interface then shows the job before anything is sent: the script for
+Slurm, the command and the files that go along. The files get a name
+after the option they are for (`ff.xml`, `mp.xml`), so no name of a file
+on your machine goes to the cluster. The command is made with the options
+that the `alexandria` of your machine knows; the program on the cluster,
+which is called `alexandria` there, has to know them as well.
+
+Sending a job is one login: the files and the script go to the directory
+`workdir/name-of-the-job`, where `sbatch` is started. The tab Cluster
+lists the jobs with their state. The interface asks the cluster for the
+state of all jobs in one login, not more often than `poll_seconds` says
+(the button Ask the cluster now asks sooner, but not within half a
+minute), and only while the page is open. When a job has ended its
+results are fetched in one more login, and Show results shows them as
+those of a calculation on your machine. After a login that did not work
+the cluster is not asked again until you press the button: a cluster may
+block an account that keeps trying.
+
+What is known about the jobs, and their results, are kept in the
+directory `act-gui/cluster-jobs` of your data directory (`~/.local/share`,
+or `XDG_DATA_HOME`), so that the jobs are there when the interface starts
+again; `--cluster-jobs DIR` names another directory. Stop cancels a job
+with `scancel`. Forget takes a job that is done from the list, with its
+results on your machine. Nothing is ever removed on the cluster: the
+directory of a job stays there until you remove it yourself.
 
 ## Tests
 
