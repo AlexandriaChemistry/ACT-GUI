@@ -406,6 +406,88 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual([mine], json.loads(made.vsites)["virtual_sites"])
         self.assertIn("v2x", table_of(made.atomtypes))
 
+    def test_sites_of_the_user(self):
+        """!
+        @brief Virtual sites that the user defined are written for gen_ff
+        with their particle types, after the predefined ones.
+        """
+        mine = [{"type": "v2x", "interaction": "VSITE2", "atoms": ["c3_b", "hc_b"],
+                 "parameters": {"vs2a": {"min": -0.5, "max": 1}}},
+                {"type": "v3y", "interaction": "VSITE3OUT", "atoms": ["hc_b", "c3_b", "hc_b"],
+                 "parameters": {"vs3out_a": {"min": 0, "max": 0.5},
+                                "vs3out_b": {"min": 0, "max": 0.5},
+                                "vs3out_c": {"min": -10, "max": 10}}}]
+        chosen = self.choices(vsites={"files": ["vsite4_amine"], "sites": mine})
+        self.assertEqual(tuple(mine), chosen.sites)
+        made = ffgen.build(chosen, self.types)
+        written = json.loads(made.vsites)["virtual_sites"]
+        self.assertEqual(mine, written[-2:])
+        self.assertEqual(len(ffgen.read_vsites("vsite4_amine")) + 2, len(written))
+        rows = table_of(made.atomtypes)
+        self.assertEqual(["v4n", "v2x", "v3y", "hc", "c3", "Na+"], list(rows))
+        self.assertEqual(("VS", "v2x", "v2x_z"), (rows["v2x"]["element"], rows["v2x"]["bondtype"],
+                                                  rows["v2x"]["zetatype"]))
+        # Without sites nothing changes
+        self.assertEqual((), self.choices().sites)
+
+    def test_sites_that_are_refused(self):
+        """!
+        @brief A site must be complete, of a known kind, on atoms that are
+        in the force field and make bonds, and with bounds that are numbers.
+        """
+        good = {"type": "v2x", "interaction": "VSITE2", "atoms": ["c3_b", "hc_b"],
+                "parameters": {"vs2a": {"min": 0, "max": 1}}}
+        self.choices(vsites={"sites": [good]})
+
+        def changed(**change):
+            return dict(good, **change)
+        refused = [
+            "v2x", {"sites": good}, [good] * 51,
+            ["v2x"],
+            [changed(type="x2")], [changed(type="v")], [changed(type="v2x; rm")],
+            [changed(type="v" + "a" * 15)], [changed(type=7)],
+            # The name of the site that is made for an atom type itself
+            [changed(type="v1hc")],
+            [changed(interaction="BONDS")], [changed(interaction="VSITE1")],
+            [changed(interaction=None)],
+            [changed(atoms=["c3_b"])], [changed(atoms=["c3_b", "hc_b", "hc_b"])],
+            [changed(atoms="c3_b hc_b")],
+            # Not selected, no bond type, or an ion that makes no bonds
+            [changed(atoms=["c3_b", "ow_b"])], [changed(atoms=["c3_b", "hc"])],
+            [changed(atoms=["c3_b", "Na+_b"])], [changed(atoms=["c3_b", 5])],
+            [changed(parameters={})], [changed(parameters={"vs3a": {"min": 0, "max": 1}})],
+            [changed(parameters={"vs2a": {"min": 0, "max": 1}, "vs3a": {"min": 0, "max": 1}})],
+            [changed(parameters={"vs2a": {"min": 0}})],
+            [changed(parameters={"vs2a": {"min": 0, "max": 1, "value": 0.5}})],
+            [changed(parameters={"vs2a": {"min": 1, "max": 0}})],
+            [changed(parameters={"vs2a": {"min": "0", "max": 1}})],
+            [changed(parameters={"vs2a": {"min": True, "max": 1}})],
+            [changed(parameters={"vs2a": {"min": 0, "max": 1e9}})],
+            [changed(parameters={"vs2a": {"min": float("nan"), "max": 1}})],
+            [changed(parameters={"vs2a": [0, 1]})],
+            [changed(comment="mine")],
+        ]
+        for sites in refused:
+            with self.subTest(sites=str(sites)[:80]):
+                with self.assertRaises(ffgen.GeneratorError):
+                    self.choices(vsites={"sites": sites} if not isinstance(sites, dict)
+                                 or "sites" not in sites else sites)
+
+    def test_kinds_of_sites(self):
+        """!
+        @brief Each kind of site that can be defined is known with its
+        atoms and parameters, also to the browser.
+        """
+        described = ffgen.describe(self.types)["site_kinds"]
+        self.assertEqual(list(ffgen.SITE_KINDS), [kind["name"] for kind in described])
+        for kind in described:
+            self.assertIn(kind["atoms"], (2, 3, 4))
+            self.assertTrue(kind["parameters"])
+            atoms = ["c3_b", "hc_b", "hc_b", "hc_b"][:kind["atoms"]]
+            site = {"type": "vx", "interaction": kind["name"], "atoms": atoms,
+                    "parameters": {name: {"min": 0, "max": 0.3} for name in kind["parameters"]}}
+            self.assertEqual((site,), self.choices(vsites={"sites": [site]}).sites)
+
     def test_description(self):
         """!
         @brief The description for the browser has everything that can be

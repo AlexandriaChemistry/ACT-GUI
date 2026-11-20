@@ -25,6 +25,8 @@ user reaches the files or the command line.
 from __future__ import annotations
 
 import json
+import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
@@ -174,6 +176,28 @@ VSITE_FILES: Dict[str, Tuple[str, bool]] = {
     "vsite4_amine": ("Lone pair on amine nitrogen", False),
 }
 
+## The kinds of virtual sites that the user can define: for each the number
+## of atoms it is made from and the names of its parameters
+SITE_KINDS: Dict[str, Tuple[int, Tuple[str, ...]]] = {
+    "VSITE2": (2, ("vs2a",)),
+    "VSITE2FD": (2, ("vs2fd_a",)),
+    "VSITE3S": (3, ("vs3sa",)),
+    "VSITE3": (3, ("vs3a", "vs3b")),
+    "VSITE3FD": (3, ("vs3fd_a", "vs3fd_b")),
+    "VSITE3OUTS": (3, ("vs3outs_a", "vs3outs_c")),
+    "VSITE3OUT": (3, ("vs3out_a", "vs3out_b", "vs3out_c")),
+    "VSITE4S3": (4, ("vs4s3a",)),
+    "VSITE4S": (4, ("vs4sa", "vs4sb")),
+    "VSITE4": (4, ("vs4a", "vs4b", "vs4c")),
+}
+## What the name of the particle type of a virtual site looks like. It
+## starts with a v, as the predefined ones, so that it is no atom type.
+_SITE_TYPE = re.compile(r"^v[A-Za-z0-9]{1,14}$")
+## The largest number of virtual sites of the user, and the largest
+## absolute value of a bound of their parameters
+MAX_SITES = 50
+MAX_SITE_PARAMETER = 1000.0
+
 ## The combination rules of the exchange correction on virtual sites
 _VDW_CORRECTION_RULES = (("aexp", "Kronecker"), ("bexp", "Arithmetic"), ("vsite", "Geometric"))
 
@@ -317,6 +341,8 @@ class Choices:
     exchange: bool = False
     ## The combination rules, by interaction and parameter
     rules: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    ## The virtual sites that the user defined, in the form of gen_ff -vs
+    sites: Tuple[Mapping[str, Any], ...] = ()
 
 
 def default_rules(vdw: str, induction: str) -> Dict[str, Dict[str, str]]:
@@ -403,14 +429,82 @@ def _number(value: Any, default: float, limits: Tuple[float, float], what: str,
     return value
 
 
+def _sites(given: Any, chosen: List["TypeChoice"],
+           atom_types: Mapping[str, AtomType]) -> Tuple[Mapping[str, Any], ...]:
+    """!
+    @brief Check the virtual sites that the user defined.
+    @param given      What the request gave: a list of objects with type,
+    interaction, atoms and parameters, as gen_ff -vs reads them.
+    @param chosen     The atom types that are selected.
+    @param atom_types The atom types that can be chosen.
+    @return The sites, with nothing in them but what was checked.
+    @throws GeneratorError if a site is not complete or not possible.
+    """
+    if given is None:
+        return ()
+    if not isinstance(given, list):
+        raise GeneratorError("The virtual sites must be a list")
+    if len(given) > MAX_SITES:
+        raise GeneratorError("At most %d virtual sites can be defined" % MAX_SITES)
+    # A site is made from atoms that make bonds and are in the force field
+    bondtypes = {choice.name + "_b" for choice in chosen if atom_types[choice.name].bonds > 0}
+    particles = set(atom_types) | {choice.name + "_s" for choice in chosen} \
+        | {"v1" + choice.name for choice in chosen}
+    sites = []
+    for entry in given:
+        entry = _object(entry, "A virtual site")
+        for key in entry:
+            if key not in ("type", "interaction", "atoms", "parameters"):
+                raise GeneratorError("A virtual site has no '%s'" % (key,))
+        name = entry.get("type")
+        if not isinstance(name, str) or not _SITE_TYPE.match(name) or name in particles:
+            raise GeneratorError("'%s' cannot be the name of a virtual site: use a v and up "
+                                 "to 14 letters and digits, and no name of an atom type"
+                                 % (name,))
+        kind = _one_of(entry.get("interaction"), SITE_KINDS, "", "kind of virtual site")
+        if not kind:
+            raise GeneratorError("The virtual site %s has no kind" % name)
+        natom, names = SITE_KINDS[kind]
+        atoms = entry.get("atoms")
+        if not isinstance(atoms, list) or len(atoms) != natom:
+            raise GeneratorError("A virtual site of kind %s is made from %d atoms"
+                                 % (kind, natom))
+        for atom in atoms:
+            if not isinstance(atom, str) or atom not in bondtypes:
+                raise GeneratorError("The virtual site %s is on '%s', which is not the bond "
+                                     "type of an atom type that is selected" % (name, atom))
+        parameters = _object(entry.get("parameters"), "The parameters of %s" % name)
+        if set(parameters) != set(names):
+            raise GeneratorError("A virtual site of kind %s has the parameters %s"
+                                 % (kind, ", ".join(names)))
+        bounds = {}
+        for param in names:
+            limits = _object(parameters[param], "The bounds of %s" % param)
+            if set(limits) != {"min", "max"}:
+                raise GeneratorError("The parameter %s needs a min and a max" % param)
+            low, high = limits["min"], limits["max"]
+            for value in (low, high):
+                if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                        or not math.isfinite(value) or abs(value) > MAX_SITE_PARAMETER:
+                    raise GeneratorError("The bounds of %s must be numbers between %g and %g"
+                                         % (param, -MAX_SITE_PARAMETER, MAX_SITE_PARAMETER))
+            if low > high:
+                raise GeneratorError("The minimum of %s is larger than its maximum" % param)
+            bounds[param] = {"min": low, "max": high}
+        sites.append({"type": name, "interaction": kind, "atoms": list(atoms),
+                      "parameters": bounds})
+    return tuple(sites)
+
+
 def parse_choices(request: Any, atom_types: Mapping[str, AtomType]) -> Choices:
     """!
     @brief Check what the browser sent and fill in what it left out.
     @param request    The object "generator" of a request: atomtypes (a
     list of objects with name, vsite and shell), vdw (potential, particles,
     nexcl), charge (model, epsilonr, maxrow, symmetric), bonds, angles,
-    dihedrals, induction (potential, particles), vsites (files, exchange)
-    and rules (by interaction and parameter).
+    dihedrals, induction (potential, particles), vsites (files, exchange
+    and sites, the virtual sites of the user) and rules (by interaction and
+    parameter).
     @param atom_types The atom types that can be chosen.
     @return The choices.
     @throws GeneratorError if something is not one of the possibilities.
@@ -497,7 +591,8 @@ def parse_choices(request: Any, atom_types: Mapping[str, AtomType]) -> Choices:
         induction_shell=_flag(induction_on.get("shell"), False, "shell"),
         vsite_files=tuple(files),
         exchange=_flag(vsites.get("exchange"), False, "exchange"),
-        rules=rules)
+        rules=rules,
+        sites=_sites(vsites.get("sites"), types, atom_types))
 
 
 class _Table:
@@ -630,8 +725,8 @@ def build(choices: Choices, atom_types: Mapping[str, AtomType],
     @brief Make the input of gen_ff.
     @param choices      The choices of the user.
     @param atom_types   The atom types that can be chosen.
-    @param extra_vsites Virtual sites of the user, in the form that gen_ff
-    -vs reads, next to the predefined ones.
+    @param extra_vsites More virtual sites in the form that gen_ff -vs
+    reads, next to the predefined ones and those of the choices.
     @return The table, the virtual sites and the options.
     """
     table = _Table()
@@ -648,8 +743,8 @@ def build(choices: Choices, atom_types: Mapping[str, AtomType],
         for site in read_vsites(name):
             sites.append(site)
             site_types[site["type"]] = choices.exchange and VSITE_FILES[name][1]
-    for site in extra_vsites or []:
-        sites.append(site)
+    for site in list(choices.sites) + list(extra_vsites or []):
+        sites.append(dict(site))
         site_types.setdefault(site["type"], False)
     correction = any(site_types.values())
     for name, exchange in site_types.items():
@@ -796,4 +891,6 @@ def describe(atom_types: Mapping[str, AtomType]) -> Dict[str, Any]:
         "vsites": [{"name": name, "label": label, "sigma_hole": sigma}
                    for name, (label, sigma) in VSITE_FILES.items()],
         "rules": list(COMBINATION_RULES),
+        "site_kinds": [{"name": name, "atoms": natom, "parameters": list(names)}
+                       for name, (natom, names) in SITE_KINDS.items()],
     }

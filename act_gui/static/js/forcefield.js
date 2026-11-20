@@ -20,6 +20,7 @@
  * text, never as markup.
  */
 import { $, $$, alertBox, call, el, num, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
+import { chosenSites, redrawVsites, startVsites } from "./vsites.js";
 
 /** What the workspace knows. */
 const state = {
@@ -274,7 +275,8 @@ function generatorChoices() {
     charge: { model: state.qmodel, epsilonr: numberOf("g-epsr"), maxrow: numberOf("g-row"), symmetric: $("#g-qsymm").checked },
     bonds: $("#g-bonds").value, angles: $("#g-angles").value, dihedrals: $("#g-dihedrals").value,
     induction: { potential: $("#g-ic").value, particles: { atom: $("#g-ic-atom").checked, shell: $("#g-ic-shell").checked } },
-    vsites: { files: $$("#g-vsites input").filter(b => b.checked).map(b => b.dataset.name), exchange: $("#g-exchange").checked },
+    vsites: { files: $$("#g-vsites input").filter(b => b.checked).map(b => b.dataset.name), exchange: $("#g-exchange").checked,
+              sites: chosenSites() },
     rules: { VANDERWAALS: chosenRules($("#g-vdwrules")) },
   };
   if (choices.induction.potential !== "NONE") choices.rules.INDUCTIONCORRECTION = chosenRules($("#g-icrules"));
@@ -575,7 +577,7 @@ async function repair() {
 
 /* ---------- start ---------- */
 
-const TABS = { gen: "fftab-gen", geom: "fftab-geom", edit: "fftab-edit" };
+const TABS = { gen: "fftab-gen", vsite: "fftab-vsite", geom: "fftab-geom", edit: "fftab-edit" };
 
 /**
  * Make the workspace work. Called when the server has told who we are.
@@ -583,7 +585,11 @@ const TABS = { gen: "fftab-gen", geom: "fftab-geom", edit: "fftab-edit" };
  */
 export async function startForceFields(told) {
   state.told = told;
-  tabs($("#fftabs"), name => showOnly(Object.values(TABS), TABS[name]));
+  tabs($("#fftabs"), name => {
+    showOnly(Object.values(TABS), TABS[name]);
+    // The viewer can only be drawn when it is on the page
+    if (name === "vsite") requestAnimationFrame(redrawVsites);
+  });
   $("#ff-open").onclick = () => $("#ff-openfile").click();
   $("#ff-openfile").onchange = async e => {
     const file = e.target.files[0];
@@ -639,6 +645,10 @@ export async function startForceFields(told) {
   try {
     state.gen = await (await call("/generator")).json();
     generatorForm();
+    startVsites(state.gen.site_kinds, state.gen.atomtypes, () => {
+      const n = chosenSites().length;
+      $("#g-ownsites").textContent = n ? `and ${n} of your own, see the tab Virtual sites` : "";
+    });
   } catch (e) {
     alertBox("The choices for a new force field could not be fetched. " + e.message);
   }

@@ -495,6 +495,122 @@ class PageTest(unittest.TestCase):
         self.show_parameters("@particles", "no such type")
         self.assertIn("No type", self.text("#p-empty"))
 
+    def test_5b_virtual_sites_by_picking_atoms(self):
+        """!
+        @brief Atoms of a molecule are picked, a site is defined on them and
+        a force field is made with it.
+        """
+        import json  # pylint: disable=import-outside-toplevel
+        self.open_force_fields()
+        self.click('#fftabs button[data-tab="vsite"]')
+        self.assertTrue(self.browser.find_element(By.ID, "fftab-vsite").is_displayed())
+        self.assertFalse(self.browser.find_element(By.ID, "vs-add").is_enabled())
+        box = self.browser.find_element(By.ID, "vs-smiles")
+        box.clear()
+        box.send_keys("CO")
+        self.click("#vs-load")
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#vs-atoms tbody tr")) == 6)
+        self.assertEqual("", self.errors())
+        rows = self.browser.execute_script(
+            "return [...document.querySelectorAll('#vs-atoms tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertEqual(["", "C1"], rows[0][:2])
+        oxygen = [i for i, row in enumerate(rows) if row[1].startswith("O")][0]
+        hydroxyl = [i for i, row in enumerate(rows) if row[1].startswith("H")
+                    and rows[oxygen][1] in row[3].split(", ")][0]
+        types = [rows[i][2] for i in (0, oxygen, hydroxyl)]
+
+        def pick(i):
+            self.browser.execute_script(
+                "document.querySelectorAll('#vs-atoms tbody tr')[arguments[0]].cells[1].click()", i)
+
+        def kinds():
+            return [o.text for o in Select(self.browser.find_element(By.ID, "vs-kind")).options]
+
+        def order(i):
+            return self.browser.execute_script(
+                "return document.querySelectorAll('#vs-atoms tbody tr')[arguments[0]]"
+                ".cells[0].textContent", i)
+        # Two atoms: a site on their line
+        pick(oxygen)
+        self.assertEqual([], kinds())
+        pick(0)
+        self.assertEqual(["VSITE2", "VSITE2FD"], kinds())
+        self.assertIn("line", self.text("#vs-help"))
+        self.assertEqual(["vs2a"], [e.text for e in self.browser.find_elements(
+            By.CSS_SELECTOR, "#vs-params .name")])
+        # A third atom: sites in or out of the plane. An atom that is
+        # picked again is let go of.
+        pick(hydroxyl)
+        self.assertEqual(["1", "2", "3"], [order(i) for i in (oxygen, 0, hydroxyl)])
+        self.assertEqual(["VSITE3S", "VSITE3", "VSITE3FD", "VSITE3OUTS", "VSITE3OUT"], kinds())
+        pick(0)
+        self.assertEqual(["1", "", "2"], [order(i) for i in (oxygen, 0, hydroxyl)])
+        self.click("#vs-clear")
+        self.assertEqual([], kinds())
+        # The lone pairs of the oxygen: carbon, oxygen in the middle, hydrogen
+        for atom in (0, oxygen, hydroxyl):
+            pick(atom)
+        # The default force field has a hydrogen type that a new force field
+        # has not: one of its own is proposed, and the user chooses another
+        choice = Select(self.browser.find_element(
+            By.CSS_SELECTOR, '#vs-atoms select[data-atom="%d"]' % hydroxyl))
+        self.assertEqual("hc", choice.first_selected_option.text)
+        self.assertIn("ho", [o.text for o in choice.options])
+        self.assertNotIn("c3", [o.text for o in choice.options])
+        choice.select_by_value("ho")
+        # Choosing a type does not let go of the atom
+        self.assertEqual("3", order(hydroxyl))
+        types = [types[0], types[1], "ho"]
+        Select(self.browser.find_element(By.ID, "vs-kind")).select_by_value("VSITE3OUTS")
+        self.assertEqual(["vs3outs_a", "vs3outs_c"], [e.text for e in self.browser.find_elements(
+            By.CSS_SELECTOR, "#vs-params .name")])
+        low = self.browser.find_element(
+            By.CSS_SELECTOR, '#vs-params input[data-name="vs3outs_a"][data-part="min"]')
+        low.clear()
+        low.send_keys("-0.3")
+        name = self.browser.find_element(By.ID, "vs-type")
+        name.clear()
+        name.send_keys("not a name")
+        self.click("#vs-add")
+        self.wait(lambda b: "name of the site type" in b.find_element(By.ID, "toast").text)
+        name.clear()
+        name.send_keys("v3lp")
+        self.shot("17-ff-vsite")
+        self.click("#vs-add")
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#vs-list li button")) == 1)
+        listed = self.text("#vs-list")
+        self.assertIn("v3lp · VSITE3OUTS · %s" % ", ".join(t + "_b" for t in types), listed)
+        self.assertIn("vs3outs_a −0.3 to 0.4", listed)
+        saved = json.loads(self.saved_file("#vs-save", "vsites.json", "{"))
+        self.assertEqual([{"type": "v3lp", "interaction": "VSITE3OUTS",
+                           "atoms": [t + "_b" for t in types],
+                           "parameters": {"vs3outs_a": {"min": -0.3, "max": 0.4},
+                                          "vs3outs_c": {"min": -12, "max": 12}}}],
+                         saved["virtual_sites"])
+        # The force field is made with it, if it has the types of these atoms
+        self.click('#fftabs button[data-tab="gen"]')
+        self.assertIn("1 of your own", self.text("#g-ownsites"))
+        self.click("#g-none")
+        for atomtype in sorted(set(types) | {"hc"}):
+            self.click('#g-types input[data-name="%s"][data-key="on"]' % atomtype)
+        self.click("#run-gen")
+        self.wait(lambda b: b.find_element(By.ID, "gen-pill").text in ("Done", "Failed"))
+        self.assertEqual("", self.errors())
+        self.assertIn("VSITE3OUTS", self.text("#g-inter"))
+        self.assertIn("v3lp", self.saved_file("#g-save-vs", "vsites.json", "{"))
+        # Without one of its atom types the site cannot be made, which is said
+        self.click('#g-types input[data-name="%s"][data-key="on"]' % types[1])
+        self.click("#run-gen")
+        self.wait(lambda b: b.find_element(By.ID, "gen-pill").text == "Failed")
+        self.assertIn("v3lp", self.errors())
+        self.assertIn("not the bond type", self.errors())
+        # Taking the site off the list
+        self.click('#fftabs button[data-tab="vsite"]')
+        self.click("#vs-list li button")
+        self.assertIn("None yet", self.text("#vs-list"))
+        self.assertFalse(self.browser.find_element(By.ID, "vs-save").is_displayed())
+
     def test_6_change_a_force_field_and_use_it(self):
         """!
         @brief The default force field is opened, one parameter is fixed,
