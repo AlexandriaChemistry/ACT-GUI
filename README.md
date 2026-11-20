@@ -73,17 +73,19 @@ compound, and the page shows the statistics and, for each property, the
 values of the force field against the reference values. The plot can be
 saved as a PDF file and the data as an xvg file.
 
-Not there yet: the comparison of two force fields, a choice of the
-compounds to compare on, histograms of the energies of a compound, and the
-server for several users.
+The tab Cluster, on the desktop, takes the Slurm cluster for long jobs:
+the server, your user name there and a working directory, see below.
+
+Not there yet: sending jobs to the cluster, the comparison of two force
+fields, a choice of the compounds to compare on, histograms of the energies
+of a compound, and the server for several users.
 
 The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 `act_gui/static/vendor/`) to show molecules.
 
 ## Requirements
 
-- ACT with the Python package `act` (the main branch of ACT; the force
-  field workspace needs the branch `python-api-2` until that is merged) and
+- ACT with the Python package `act` (the main branch of ACT) and
   the `alexandria` program in the `PATH`, or its path in the environment
   variable `ACT_ALEXANDRIA`;
 - Python 3.9 or newer with `fastapi` and `uvicorn`;
@@ -98,6 +100,34 @@ prints an address and opens it in the browser. The server listens on the
 local machine only, and the address has a key without which the server does
 not answer. Uploads and results are kept in a temporary directory that is
 removed at the end; `--data DIR` keeps them in a directory.
+
+## The cluster for long jobs
+
+Long jobs will go to a Slurm cluster on which you have an account. In the
+tab Cluster you give the name of the server (a host name or a name from
+your ssh configuration), your user name there and a working directory,
+with its full path or as a path in your home directory. They are kept in
+the file `settings.json` in the directory `act-gui` of your configuration
+directory (`~/.config`, or `XDG_CONFIG_HOME`), which is read when the
+interface starts; `--config FILE` names another file. The file looks like
+
+    {
+      "cluster": {
+        "server": "csb",
+        "user": "yourname",
+        "workdir": "act-jobs"
+      }
+    }
+
+The interface logs in with the `ssh` program of your machine, which uses
+your own keys and settings. It never asks for a password or a key and
+stores none, so the login has to work without a question: set up a key for
+the server, or open a connection in a terminal with connection sharing
+(`ControlMaster`) if the server asks for a password or a code each time.
+The button Test the login logs in once and tells whether the directory is
+there and the server has Slurm. The three settings are checked before they
+are used: a name that ssh could take for an option, or a directory with a
+character that means something to a shell, is refused.
 
 ## Tests
 

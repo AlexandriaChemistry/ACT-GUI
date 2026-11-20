@@ -16,7 +16,7 @@ import os
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 ## The directory with the files that come with the package
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -66,6 +66,11 @@ class Settings:
     max_workers: int = 2
     ## The number of calculations that can wait or run before new ones are refused
     max_active_jobs: int = 8
+    ## The file with the settings of the user that are kept between runs,
+    ## such as the cluster for long jobs. None to keep them in memory only.
+    config_file: Optional[Path] = None
+    ## The ssh program with which the interface logs in on a cluster
+    ssh_program: str = "ssh"
     ## The number of progress reports of a job that are kept for plotting
     max_progress_points: int = 5000
     ## The smallest and largest value of options with a number, by task and option
@@ -85,6 +90,8 @@ class Settings:
         """
         self.data_dir = Path(self.data_dir).expanduser().resolve()
         self.default_forcefield = Path(self.default_forcefield).expanduser()
+        if self.config_file is not None:
+            self.config_file = Path(self.config_file).expanduser()
         if self.mode not in ("desktop", "server"):
             raise ValueError("The mode must be desktop or server, not '%s'" % self.mode)
 

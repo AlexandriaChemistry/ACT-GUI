@@ -14,6 +14,7 @@
       <button role="tab" data-view="molecule" aria-selected="true">Molecule</button>
       <button role="tab" data-view="force-field" aria-selected="false">Force field</button>
       <button role="tab" data-view="molprop" aria-selected="false">Molprop data</button>
+      <button role="tab" data-view="cluster" aria-selected="false" hidden>Cluster</button>
       <span class="ink"></span>
     </nav>
     <div class="status"><span class="dot"></span><span id="status-text">Starting</span></div>
@@ -342,6 +343,44 @@
           <button class="btn small" id="ev-log" type="button">Save log file</button></div>
         <div class="xscroll"><table class="data" id="ev-stats"></table></div>
         <div class="body"><p class="muted fine">RMSD is the root mean square deviation, MSE the mean signed error (force field minus reference), MAE the mean absolute error; the slope and R are those of a straight line through the points.</p></div></div>
+    </div>
+  </section>
+
+  <!-- ================= Cluster ================= -->
+  <section class="view" id="view-cluster" hidden>
+    <div class="card">
+      <div class="bar">
+        <div class="field grow"><span class="lab">Cluster for long jobs</span>
+          <div class="chips" id="cl-chips"></div></div>
+        <span class="pill" id="cl-pill" hidden></span>
+      </div>
+    </div>
+    <div class="cols form-left">
+      <div class="card"><div class="body">
+        <div class="field"><label for="cl-server">Server</label>
+          <input class="mono wide" type="text" id="cl-server" placeholder="csb.example.org" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
+        <div class="field"><label for="cl-user">Your user name on the server</label>
+          <input class="mono wide" type="text" id="cl-user" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
+        <div class="field"><label for="cl-workdir">Working directory on the server</label>
+          <input class="mono wide" type="text" id="cl-workdir" placeholder="act-jobs" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
+        <p class="muted fine">The server is a host name or a name from your ssh configuration. The directory is given with its full path, or as a path in your home directory there; it has to exist.</p>
+        <div class="row"><button class="btn primary" id="cl-save" type="button">Save</button>
+          <button class="btn" id="cl-check" type="button" disabled>Test the login</button>
+          <span class="spacer"></span>
+          <button class="btn" id="cl-forget" type="button" hidden>Forget</button></div>
+        <p class="outcome" id="cl-result" role="status" hidden></p>
+        <p class="muted fine" id="cl-file"></p>
+      </div></div>
+      <div class="card"><div class="head"><h2>How the login works</h2></div>
+        <div class="body">
+          <ul class="list plain">
+            <li><span class="ok">1</span><span>The interface starts the program <code>ssh</code> of this computer, which uses your own keys and settings. It never asks for a password and keeps none.</span></li>
+            <li><span class="ok">2</span><span>So the login has to work without a question: <code>ssh user@server</code> in a terminal must log you in without typing anything. Set up a key for the server for that. If the server wants a password or a code every time, open one connection in a terminal with connection sharing (<code>ControlMaster</code> in the configuration of ssh) and leave it open.</span></li>
+            <li><span class="ok">3</span><span>Jobs are submitted with <code>sbatch</code> from the working directory, each in a directory of its own.</span></li>
+            <li><span class="ok">4</span><span>Test the login logs in once, to see that the directory is there and that the server has Slurm. The interface logs in as seldom as it can.</span></li>
+          </ul>
+          <p class="muted fine">Sending jobs from the interface comes with a later version. These settings are what it will use.</p>
+        </div></div>
     </div>
   </section>
 </div>

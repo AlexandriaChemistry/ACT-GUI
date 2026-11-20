@@ -33,7 +33,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import __version__, evaluation, ffgen, openmm_package, plots
+from . import __version__, cluster, evaluation, ffgen, openmm_package, plots
 from .jobs import FINISHED, JobError, JobManager
 from .settings import PACKAGE_DIR, Settings
 from .tasks import TASKS, RequestError, build_request, describe_task, find_task
@@ -104,6 +104,14 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
     app.state.settings = settings
     app.state.jobs = manager
     app.state.uploads = uploads
+    # The cluster for long jobs, from the file with the settings of the
+    # user. A file that cannot be used does not stop the interface.
+    try:
+        app.state.cluster = cluster.load(settings.config_file)
+        app.state.cluster_error = ""
+    except cluster.ClusterError as exc:
+        app.state.cluster = None
+        app.state.cluster_error = str(exc)
     app.add_middleware(TrustedHostMiddleware,
                        allowed_hosts=allowed_hosts or ["127.0.0.1", "localhost", "testserver"])
 
@@ -200,7 +208,89 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             "limits": settings.limits,
             "pdf": can_plot,
             "observables": evaluation.describe(),
+            "cluster": settings.mode == "desktop",
         }
+
+    def cluster_state() -> Dict[str, Any]:
+        """!
+        @brief The settings of the cluster, for the browser.
+        @return Whether there are settings, the settings, where they are
+        kept and what was wrong with the file, if anything.
+        """
+        current = app.state.cluster
+        return {"configured": current is not None,
+                "cluster": None if current is None else
+                {"server": current.server, "user": current.user, "workdir": current.workdir},
+                "file": str(settings.config_file) if settings.config_file else "",
+                "problem": app.state.cluster_error}
+
+    def desktop_only() -> None:
+        """!
+        @brief Refuse a request that is for the interface of one user: on a
+        server for several users nobody logs in elsewhere as somebody else.
+        """
+        if settings.mode != "desktop":
+            raise fail(404, "This server sends no jobs to a cluster for its users")
+
+    @app.get("/api/cluster")
+    async def get_cluster() -> Dict[str, Any]:
+        """!
+        @brief The cluster on which long jobs run.
+        @return See cluster_state().
+        """
+        desktop_only()
+        return cluster_state()
+
+    @app.put("/api/cluster")
+    async def put_cluster(request: Request) -> Dict[str, Any]:
+        """!
+        @brief Set the cluster on which long jobs run, and keep it in the
+        file with the settings of the user.
+        @param request The request, with a JSON object: server, user and workdir.
+        @return See cluster_state().
+        """
+        desktop_only()
+        try:
+            chosen = cluster.parse(await request.json())
+            if settings.config_file is not None:
+                cluster.save(settings.config_file, chosen)
+        except ValueError as exc:
+            # Also what is no JSON
+            raise fail(400, str(exc)) from exc
+        app.state.cluster = chosen
+        app.state.cluster_error = ""
+        return cluster_state()
+
+    @app.delete("/api/cluster")
+    async def delete_cluster() -> Dict[str, Any]:
+        """!
+        @brief Forget the cluster, also in the file.
+        @return See cluster_state().
+        """
+        desktop_only()
+        try:
+            if settings.config_file is not None:
+                cluster.save(settings.config_file, None)
+        except cluster.ClusterError as exc:
+            raise fail(500, str(exc)) from exc
+        app.state.cluster = None
+        app.state.cluster_error = ""
+        return cluster_state()
+
+    @app.post("/api/cluster/check")
+    def check_cluster() -> Dict[str, Any]:
+        """!
+        @brief Log in on the cluster once, with the ssh program of this
+        machine, and see whether jobs can be sent. Not an async function,
+        so that the server does other things while ssh waits.
+        @return Whether it worked and a message for the user, see
+        cluster.check().
+        """
+        desktop_only()
+        current = app.state.cluster
+        if current is None:
+            raise fail(400, "Give the server, your user name and a working directory first")
+        return cluster.check(current, program=settings.ssh_program)
 
     @app.get("/api/generator")
     async def generator() -> Dict[str, Any]:

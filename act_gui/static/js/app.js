@@ -18,6 +18,7 @@ import { $, $$, alertBox, call, fmt, moveInk, pill, runTask, saveFile, seg, sess
 import { css, esc, limits, plot, redrawPlots } from "./plot.js";
 import { startForceFields } from "./forcefield.js";
 import { startMolprops } from "./molprop.js";
+import { startCluster } from "./cluster.js";
 
 /* global $3Dmol */
 
@@ -597,7 +598,7 @@ $("#e-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.sim, "e",
 
 const TABS = { charges: "tab-charges", minimize: "tab-minimize", modes: "tab-modes", simulate: "tab-simulate", openmm: "tab-openmm" };
 tabs($("#tasks"), name => { state.ui.tab = name; showOnly(Object.values(TABS), TABS[name]); scene(); });
-const VIEWS = { molecule: "view-molecule", "force-field": "view-force-field", molprop: "view-molprop" };
+const VIEWS = { molecule: "view-molecule", "force-field": "view-force-field", molprop: "view-molprop", cluster: "view-cluster" };
 tabs($("#nav"), name => { showOnly(Object.values(VIEWS), VIEWS[name]); if (name === "molecule") scene(); else if (V) V.stopAnimate(); });
 window.addEventListener("resize", () => { redrawPlots(); $$(".tabs").forEach(moveInk); if (V) { V.resize(); V.render(); } });
 if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { redrawPlots(); scene(); });
@@ -616,6 +617,8 @@ async function start() {
     $("#status-text").textContent = (told.mode === "desktop" ? "Desktop mode" : "Server") + " · version " + told.version;
     startForceFields(told);
     startMolprops(told);
+    // The tab of the cluster is there on the desktop only
+    startCluster(told).then(() => $$(".tabs").forEach(moveInk));
     // Open a molecule that is named in the address, as in #smiles=CCO
     const wanted = new URLSearchParams(location.hash.slice(1)).get("smiles");
     if (wanted) { $("#smiles").value = wanted; }

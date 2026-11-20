@@ -58,7 +58,14 @@ class PageTest(unittest.TestCase):
         cls._executable = act.config.executable
         act.config.executable = ALEXANDRIA
         cls._tmp = tempfile.TemporaryDirectory()
-        cls.settings = Settings(data_dir=Path(cls._tmp.name), token="e2e-token")
+        # The settings of the user go to a file of the test, and a small
+        # program stands in for ssh: no test logs in anywhere
+        from tests.test_cluster import FakeServer  # pylint: disable=import-outside-toplevel
+        cls.cluster = FakeServer(Path(cls._tmp.name) / "cluster")
+        cls.config = Path(cls._tmp.name) / "config" / "settings.json"
+        cls.settings = Settings(data_dir=Path(cls._tmp.name), token="e2e-token",
+                                config_file=cls.config,
+                                ssh_program=str(cls.cluster.program))
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             cls.port = sock.getsockname()[1]
@@ -841,6 +848,67 @@ class PageTest(unittest.TestCase):
         # The result of the comparison before this one is gone
         self.assertFalse(self.browser.find_element(By.ID, "ev-result").is_displayed())
         self.shot("22-molprop-default")
+
+    # --- the cluster for long jobs ---
+
+    def test_a_cluster_settings(self):
+        """!
+        @brief The user gives the server, the user name and the working
+        directory; they are kept in a file and are there when the page is
+        opened again, and the login is tested.
+        """
+        import json  # pylint: disable=import-outside-toplevel
+        self.open_page()
+        self.click('#nav button[data-view="cluster"]')
+        self.assertTrue(self.browser.find_element(By.ID, "view-cluster").is_displayed())
+        self.assertIn("No cluster yet", self.text("#cl-chips"))
+        self.assertFalse(self.browser.find_element(By.ID, "cl-check").is_enabled())
+        self.assertFalse(self.browser.find_element(By.ID, "cl-forget").is_displayed())
+        self.assertIn(str(self.config), self.text("#cl-file"))
+
+        def fill(server, user, workdir):
+            for field, value in (("cl-server", server), ("cl-user", user), ("cl-workdir", workdir)):
+                box = self.browser.find_element(By.ID, field)
+                box.clear()
+                box.send_keys(value)
+        # Settings that cannot be are refused and not kept
+        fill("-oProxyCommand=evil", "spoel", "act")
+        self.click("#cl-save")
+        self.wait(lambda b: "name of a server" in self.errors())
+        self.assertFalse(self.config.exists())
+        fill("good", "spoel", "act/jobs/")
+        self.click("#cl-save")
+        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").text)
+        self.assertEqual("", self.errors())
+        self.assertEqual({"cluster": {"server": "good", "user": "spoel", "workdir": "act/jobs"}},
+                         json.loads(self.config.read_text()))
+        self.assertEqual("act/jobs", self.browser.find_element(
+            By.ID, "cl-workdir").get_attribute("value"))
+        # The login
+        self.click("#cl-check")
+        self.wait(lambda b: b.find_element(By.ID, "cl-pill").text == "Ready")
+        self.assertIn("The login works", self.text("#cl-result"))
+        self.assertIn("slurm 23.02.7", self.text("#cl-result"))
+        self.assertEqual(1, len(self.cluster.calls()))
+        self.shot("30-cluster")
+        # A change has to be saved before it is tested
+        self.browser.find_element(By.ID, "cl-workdir").send_keys("/nothere")
+        self.assertFalse(self.browser.find_element(By.ID, "cl-check").is_enabled())
+        self.click("#cl-save")
+        self.wait(lambda b: b.find_element(By.ID, "cl-check").is_enabled())
+        self.click("#cl-check")
+        self.wait(lambda b: b.find_element(By.ID, "cl-pill").text == "Not ready")
+        self.assertIn("is not there", self.text("#cl-result"))
+        # The page is opened again: the settings are those of the file
+        self.open_page()
+        self.click('#nav button[data-view="cluster"]')
+        self.wait(lambda b: b.find_element(By.ID, "cl-server").get_attribute("value") == "good")
+        self.assertEqual("act/jobs/nothere", self.browser.find_element(
+            By.ID, "cl-workdir").get_attribute("value"))
+        self.click("#cl-forget")
+        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").text)
+        self.assertEqual({}, json.loads(self.config.read_text()))
+        self.assertEqual("", self.browser.find_element(By.ID, "cl-server").get_attribute("value"))
 
 
 if __name__ == "__main__":
