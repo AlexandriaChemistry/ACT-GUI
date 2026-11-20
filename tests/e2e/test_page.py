@@ -15,6 +15,7 @@ selenium is installed and ACT_ALEXANDRIA points to the alexandria program;
 they are skipped otherwise. With ACT_GUI_SHOTS set to a directory, pictures
 of the page are saved there at the main steps.
 """
+import json
 import os
 import socket
 import tempfile
@@ -781,7 +782,7 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
         # A file with dimers offers the properties of dimers, the first is ticked
         offered = self.browser.execute_script(
-            "return [...document.querySelectorAll('#ev-observables input')]"
+            "return [...document.querySelectorAll('#ev-observables input[type=checkbox]')]"
             ".map(b => b.dataset.name + (b.checked ? '*' : ''))")
         self.assertEqual("inter*", offered[0])
         self.assertIn("elec", offered)
@@ -961,6 +962,108 @@ class PageTest(unittest.TestCase):
         self.click('#ev-what button[data-v="compare"]')
         self.assertFalse(self.browser.find_element(By.ID, "tr-opts").is_displayed())
         self.assertEqual("Compare", self.text("#run-ev"))
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_9c_compounds_and_weights(self):
+        """!
+        @brief The user says in the table what each compound is used for:
+        training, testing or nothing, one by one or for all that the table
+        shows. A comparison then has both data sets, and a training gets
+        them with the weights of the properties.
+        """
+        data = Path(TESTDATA)
+        self.open_page()
+        self.click('#nav button[data-view="molprop"]')
+        self.browser.find_element(By.ID, "mpw-file").send_keys(str(data / "molprop" / "mpdimer.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        self.assertEqual("3 for training", self.text("#mpw-sets"))
+
+        def uses():
+            return self.browser.execute_script(
+                "return [...document.querySelectorAll('#mpw-table button[data-use]')]"
+                ".map(b => b.textContent)")
+
+        def use(row, times=1):
+            for _ in range(times):
+                self.browser.execute_script(
+                    "document.querySelectorAll('#mpw-table button[data-use]')[arguments[0]].click()",
+                    row)
+        self.assertEqual(["Training"] * 3, uses())
+        use(0)
+        use(1, 2)
+        self.assertEqual(["Testing", "Not used", "Training"], uses())
+        self.assertEqual("1 for training, 1 for testing, 1 not used", self.text("#mpw-sets"))
+        # A click on the button does not open the details of the compound
+        self.assertFalse(self.browser.find_element(By.ID, "mpw-detail").is_displayed())
+
+        self.browser.find_element(By.ID, "ev-fffile").send_keys(
+            str(data / "forcefields" / "ACS-pol.xml"))
+        Select(self.browser.find_element(By.ID, "ev-ff")).select_by_value("upload")
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text == "Done")
+        self.assertEqual("", self.errors())
+        self.assertEqual("2 compounds", self.text("#ev-ncomp"))
+        rows = self.browser.execute_script(
+            "return [...document.querySelectorAll('#ev-stats tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertEqual({"Train", "Test"}, {row[1] for row in rows})
+        self.shot("25-compounds-chosen")
+
+        # In a training the compounds for testing are those of the table,
+        # and each property that is chosen has a weight
+        self.browser.execute_script("document.getElementById('ev-card').scrollIntoView()")
+        self.click('#ev-what button[data-v="train"]')
+        percent = self.browser.find_element(By.ID, "tr-test")
+        self.assertFalse(percent.is_enabled())
+        self.assertTrue(self.browser.find_element(By.ID, "tr-testnote").is_displayed())
+        weight = self.browser.find_element(By.CSS_SELECTOR, '#ev-observables input[data-weight="inter"]')
+        other = self.browser.find_element(By.CSS_SELECTOR, '#ev-observables input[data-weight="elec"]')
+        self.assertTrue(weight.is_displayed())
+        self.assertEqual("1", weight.get_attribute("value"))
+        self.assertFalse(other.is_displayed())
+        self.click('#ev-observables input[data-name="elec"]')
+        self.assertTrue(other.is_displayed())
+        weight.clear()
+        weight.send_keys("2.5")
+        # What the page asks the server for
+        self.browser.execute_script(
+            "window.asked = []; const send = window.fetch;"
+            "window.fetch = (url, init) => { if (init && init.body && typeof init.body === 'string')"
+            " window.asked.push(init.body); return send(url, init); };")
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#tr-kinds button")) > 0)
+        self.browser.execute_script("document.querySelector('#tr-kinds button').click()")
+        iterations = self.browser.find_element(By.ID, "tr-iter")
+        iterations.clear()
+        iterations.send_keys("2")
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text in ("Done", "Failed"))
+        asked = [json.loads(body) for body in self.browser.execute_script("return window.asked")]
+        request = [body for body in asked if body.get("task") == "train"][0]
+        self.assertEqual({"inter": 2.5}, request["weights"])
+        self.assertEqual(["inter", "elec"], request["observables"])
+        self.assertEqual(0, request["training"]["test"])
+        sets = request["molprop"]["sets"]
+        self.assertEqual((1, 1), (len(sets["test"]), len(sets["ignore"])))
+        self.assertEqual("Done", self.text("#ev-pill"), self.errors())
+
+        # All that the table shows at once: those with a name that is found
+        self.browser.execute_script("document.getElementById('mpw-content').scrollIntoView()")
+        self.click('#mpw-setbar button[data-set="ignore"]')
+        self.assertEqual(["Not used"] * 3, uses())
+        self.assertEqual("0 for training, 3 not used", self.text("#mpw-sets"))
+        self.browser.execute_script("document.getElementById('run-ev').scrollIntoView()")
+        self.click("#run-ev")
+        self.wait(lambda b: "No compound is left" in b.find_element(By.ID, "toast").text)
+        self.click('#mpw-setbar button[data-set="train"]')
+        self.assertEqual("3 for training", self.text("#mpw-sets"))
+        self.assertTrue(percent.is_enabled())
+        self.assertFalse(self.browser.find_element(By.ID, "tr-testnote").is_displayed())
+        # Another file starts with all compounds for training
+        use(0)
+        self.browser.find_element(By.ID, "mpw-file").send_keys(
+            str(data / "molprop" / "molprop.xml"))
+        self.wait(lambda b: "molprop.xml" in b.find_element(By.ID, "mpw-chips").text)
+        self.assertNotIn("testing", self.text("#mpw-sets"))
 
     # --- the cluster for long jobs ---
 

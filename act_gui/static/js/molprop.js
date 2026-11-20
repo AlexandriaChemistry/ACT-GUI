@@ -31,6 +31,7 @@ const state = {
   maxProcesses: 1,  // the most processes of a calculation on this computer
   limits: {},     // the smallest and largest values of options, by task
   tr: { points: [], job: null, running: null },  // the training: its progress, the job when it is done and while it runs
+  sets: new Map(),  // what compounds are used for, by their name in the selection: test or ignore; the others are for training
   kinds: { key: "", list: [] },  // the kinds of parameters that the force field with this reference offers
   kindsAsked: 0,  // counts the times the kinds were asked for, to drop answers that come too late
 };
@@ -49,6 +50,8 @@ const PLOT_NAMES = {
   ALLELEC: "Electrostatics and induction", INDUCTION: "Induction", EXCHANGE: "Exchange", DISPERSION: "Dispersion",
   EXCHIND: "Exchange and induction", EXCHDISP: "Exchange and dispersion",
 };
+/** What the page calls the uses of a compound, and the order in which a click goes through them. */
+const SET_NAMES = { train: "Training", test: "Testing", ignore: "Not used" };
 /** The colours of the data sets in a plot. */
 const SET_COLOURS = ["--accent", "--warn", "--series2"];
 
@@ -85,17 +88,58 @@ function compoundTable() {
     : `${found.length} ${found.length === 1 ? "compound" : "compounds"}`;
   $("#mpw-empty").hidden = shown.length > 0;
   if (!shown.length) return;
-  table.append(el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Formula"), el("th", { class: "n" }, "Atoms"),
+  table.append(el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Used for"), el("th", {}, "Formula"), el("th", { class: "n" }, "Atoms"),
     el("th", { class: "n" }, "Charge"), el("th", { class: "n" }, "Compounds"), el("th", { class: "n" }, "Calculations"), el("th", {}, "Methods"))));
   const body = el("tbody"), invalid = new Set(state.data.validation.invalid || []);
   for (const { index, molecule: m } of shown) {
-    const bad = invalid.has(m.name) || invalid.has(m.iupac);
+    const bad = invalid.has(m.name) || invalid.has(m.iupac), set = state.sets.get(selectionName(m)) || "train";
     body.append(el("tr", { class: "pick" + (index === state.picked ? " sel" : ""), data: { i: String(index) } },
-      el("td", {}, m.name || m.iupac, bad ? el("span", { class: "pill bad ml8" }, "problem") : ""), el("td", { class: "num" }, m.formula),
+      el("td", {}, m.name || m.iupac, bad ? el("span", { class: "pill bad ml8" }, "problem") : ""),
+      el("td", {}, el("button", { class: "btn small use " + set, type: "button", data: { use: String(index) }, title: "Click to change: training, testing or not used" }, SET_NAMES[set])),
+      el("td", { class: "num" }, m.formula),
       el("td", { class: "n" }, String(m.natom)), el("td", { class: "n" }, String(m.charge)), el("td", { class: "n" }, String(m.fragments.length)),
       el("td", { class: "n" }, String(m.experiments)), el("td", {}, m.methods.join(", "))));
   }
   table.append(body);
+}
+
+/**
+ * The name of a compound in the selection that train_ff reads, as the server makes it.
+ * @param {object} molecule The compound as edit_mp describes it.
+ * @returns {string} The IUPAC name, or else the name.
+ */
+const selectionName = molecule => molecule.iupac || molecule.name;
+
+/**
+ * What the compounds are used for.
+ * @returns {object} The names of those for testing and of those that are not used, and the number for training.
+ */
+function chosenSets() {
+  const names = new Set(state.data.molecules.map(selectionName)), sets = { test: [], ignore: [] };
+  for (const [name, set] of state.sets) if (names.has(name)) sets[set].push(name);
+  return { ...sets, train: names.size - sets.test.length - sets.ignore.length };
+}
+
+/** Tell how many compounds are for training, for testing and not used, and what follows from that for the form. */
+function setsNote() {
+  const sets = chosenSets(), byHand = sets.test.length > 0;
+  $("#mpw-sets").textContent = `${sets.train} for training` + (byHand ? `, ${sets.test.length} for testing` : "") + (sets.ignore.length ? `, ${sets.ignore.length} not used` : "");
+  // Compounds for testing are chosen by hand or drawn as a part, not both
+  $("#tr-test").disabled = byHand;
+  $("#tr-testnote").hidden = !byHand;
+}
+
+/**
+ * Use compounds for something else.
+ * @param {object[]} molecules The compounds.
+ * @param {string} set         train, test or ignore.
+ */
+function useFor(molecules, set) {
+  for (const m of molecules) {
+    if (set === "train") state.sets.delete(selectionName(m)); else state.sets.set(selectionName(m), set);
+  }
+  compoundTable();
+  setsNote();
 }
 
 /** Show the details of the compound that was picked, or hide them. */
@@ -158,9 +202,21 @@ function observableBoxes() {
   let first = true;
   for (const o of state.observables) {
     if (o.dimer ? !dimers : !monomers) continue;
-    // The first of them is what most files are for
-    host.append(el("label", { class: "check" }, el("input", { type: "checkbox", data: { name: o.name }, checked: first }), " " + o.label));
+    // The first of them is what most files are for. In a training each has a weight.
+    host.append(el("span", { class: "obs" },
+      el("label", { class: "check" }, el("input", { type: "checkbox", data: { name: o.name }, checked: first }), " " + o.label),
+      el("input", { class: "weight", type: "number", min: "0.001", step: "any", value: "1", hidden: true, data: { weight: o.name },
+                    title: "How much this property counts in the training", "aria-label": "Weight of " + o.label })));
     first = false;
+  }
+  weightFields();
+}
+
+/** Show the weights of the properties that are chosen, for a training. */
+function weightFields() {
+  const train = training();
+  for (const box of $$("#ev-observables input[type=checkbox]")) {
+    $(`#ev-observables input[data-weight="${box.dataset.name}"]`).hidden = !train || !box.checked;
   }
 }
 
@@ -263,11 +319,15 @@ function compared(job, source = "") {
  * @returns {Promise<object|null>} The request, null if something has to be chosen first.
  */
 async function comparison() {
-  const observables = $$("#ev-observables input").filter(b => b.checked).map(b => b.dataset.name);
+  const observables = $$("#ev-observables input[type=checkbox]").filter(b => b.checked).map(b => b.dataset.name);
   if (!observables.length) { toast("Choose at least one property to compare."); return null; }
+  const sets = chosenSets();
+  if (sets.train < 1) { toast("No compound is left for training: the table of compounds says what each is used for."); return null; }
   const forcefield = await chosenForcefield();
   if (!forcefield) { toast("Choose a force field file first."); return null; }
-  return { task: "evaluate", forcefield, observables, molprop: { file: state.file.file, described: state.file.described } };
+  const molprop = { file: state.file.file, described: state.file.described };
+  if (sets.test.length || sets.ignore.length) molprop.sets = { test: sets.test, ignore: sets.ignore };
+  return { task: "evaluate", forcefield, observables, molprop };
 }
 
 /**
@@ -401,8 +461,16 @@ function trainingRequest(body) {
     toast(chosen.parallel ? `${chosen.name} needs between 2 and ${most} processes.` : `Give between 1 and ${most} processes.`);
     return null;
   }
-  const percent = Number($("#tr-test").value || 0);
+  // Compounds for testing that were chosen by hand are in the request already
+  const percent = $("#tr-test").disabled ? 0 : Number($("#tr-test").value || 0);
   if (!(percent >= 0 && percent <= 100 * state.training.max_test)) { toast(`At most ${100 * state.training.max_test} % of the compounds can be kept for testing.`); return null; }
+  const weights = {};
+  for (const name of body.observables) {
+    const weight = Number($(`#ev-observables input[data-weight="${name}"]`).value);
+    if (!(weight > 0)) { toast("The weight of a property is a number above zero."); return null; }
+    if (weight !== 1) weights[name] = weight;
+  }
+  if (Object.keys(weights).length) body = { ...body, weights };
   const request = { ...body, task: "train", options, training: { fit, test: percent / 100 } };
   return cluster ? request : { ...request, processes };
 }
@@ -505,6 +573,7 @@ function what() {
   $("#ev-about-train").hidden = !train;
   $("#tr-opts").hidden = !train;
   $("#ev-obslab").textContent = train ? "Properties to train on" : "Properties to compare";
+  weightFields();
   $("#tr-genfield").hidden = !chosen.parallel;
   if (chosen.parallel && Number($("#tr-procs").value) < 2) $("#tr-procs").value = Math.min(4, state.maxProcesses);
   $("#tr-note").textContent = chosen.parallel
@@ -634,6 +703,7 @@ async function compare() {
 function show(label, data) {
   state.data = data;
   state.picked = -1;
+  state.sets = new Map();
   state.ev = null;
   $("#ev-result").hidden = true;
   $("#tr-run").hidden = true;
@@ -655,6 +725,7 @@ function show(label, data) {
   compoundTable();
   compoundDetail();
   validation();
+  setsNote();
 }
 
 /**
@@ -766,7 +837,20 @@ export function startMolprops(told) {
     } finally { button.disabled = false; }
   };
   $("#mpw-search").oninput = e => { state.query = e.target.value; compoundTable(); };
+  // What the compounds are used for: one by one, or all that the table shows
+  $("#ev-observables").addEventListener("change", weightFields);
+  $("#mpw-setbar").addEventListener("click", e => {
+    const button = e.target.closest("button[data-set]");
+    if (button && state.data) useFor(compoundsShown().map(shown => shown.molecule), button.dataset.set);
+  });
   $("#mpw-table").addEventListener("click", e => {
+    const use = e.target.closest("button[data-use]");
+    if (use) {
+      const molecule = state.data.molecules[+use.dataset.use], order = Object.keys(SET_NAMES);
+      const now = state.sets.get(selectionName(molecule)) || "train";
+      useFor([molecule], order[(order.indexOf(now) + 1) % order.length]);
+      return;
+    }
     const row = e.target.closest("tr.pick");
     if (!row) return;
     state.picked = state.picked === +row.dataset.i ? -1 : +row.dataset.i;

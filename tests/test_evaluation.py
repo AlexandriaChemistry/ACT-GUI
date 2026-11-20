@@ -61,6 +61,62 @@ class EvaluationTest(unittest.TestCase):
         self.assertEqual("water#water|Train\nmethanol|Train\n1-propanol#ethane|Train\n",
                          evaluation.selection(molecules))
 
+    def test_compounds_chosen_by_hand(self):
+        """!
+        @brief The user says which compounds are for testing and which are
+        not used. Only names of the file are taken, and a compound is
+        left to train on.
+        """
+        molecules = [{"name": "w2", "iupac": "water#water"}, {"name": "methanol"},
+                     {"iupac": "ethanol"}, {"name": "propanol"}]
+        self.assertEqual("water#water|Train\nmethanol|Test\npropanol|Train\n",
+                         evaluation.selection(molecules, sets={"test": ["methanol"],
+                                                               "ignore": ["ethanol"]}))
+        self.assertEqual("water#water|Train\nmethanol|Train\nethanol|Train\npropanol|Train\n",
+                         evaluation.selection(molecules, sets={}))
+        self.assertEqual("methanol|Train\n", evaluation.selection(
+            molecules, sets={"ignore": ["water#water", "ethanol", "propanol"], "test": []}))
+        # A part for testing is drawn from the compounds that are used
+        drawn = evaluation.selection(molecules, 0.5, sets={"ignore": ["ethanol", "propanol"]})
+        self.assertEqual(["Test", "Train"], sorted(line.split("|")[1]
+                                                   for line in drawn.splitlines()))
+        self.assertEqual(["water#water", "methanol"],
+                         [line.split("|")[0] for line in drawn.splitlines()])
+        wrong = [
+            {"test": ["acetone"]}, {"ignore": ["w2"]}, {"test": "methanol"},
+            {"test": ["methanol"], "ignore": ["methanol"]}, {"test": ["methanol", "methanol"]},
+            {"train": ["methanol"]}, {"test": [3]}, ["methanol"], "methanol",
+            {"test": ["methanol|Train"]}, {"test": ["methanol\nwater|Test"]},
+            # Nothing left to train on
+            {"ignore": ["water#water", "methanol", "ethanol", "propanol"]},
+            {"test": ["water#water", "methanol", "ethanol", "propanol"]},
+            {"test": ["water#water", "methanol"], "ignore": ["ethanol", "propanol"]},
+        ]
+        for sets in wrong:
+            with self.assertRaises(evaluation.EvaluationError, msg=repr(sets)):
+                evaluation.selection(molecules, sets=sets)
+        # By hand or as a part, not both
+        with self.assertRaises(evaluation.EvaluationError):
+            evaluation.selection(molecules, 0.25, sets={"test": ["methanol"]})
+
+    def test_weights(self):
+        """!
+        @brief A property can weigh more or less than the others in a
+        training; a weight is a number above zero for a property that is
+        chosen.
+        """
+        self.assertEqual({"fc_epot": 2.5, "epotcorr": True, "fc_force": 1, "forcecorr": True},
+                         evaluation.options(["epot", "force"], {"epot": 2.5}))
+        self.assertEqual({"fc_inter": 0.01, "fc_elec": 3},
+                         evaluation.options(["inter", "elec"], {"inter": 0.01, "elec": 3}))
+        self.assertEqual({"fc_inter": 1}, evaluation.options(["inter"], {}))
+        self.assertEqual({"fc_inter": 1}, evaluation.options(["inter"], None))
+        for wrong in ({"epot": 0}, {"epot": -1}, {"epot": "2"}, {"epot": True},
+                      {"force": 2}, {"fc_epot": 2}, {"epot": 1e9}, {"epot": float("nan")},
+                      [2], "2", {"epot": None}):
+            with self.assertRaises(evaluation.EvaluationError, msg=repr(wrong)):
+                evaluation.options(["epot"], wrong)
+
     def test_names_that_cannot_be_selected(self):
         """!
         @brief A name cannot add a line or a field to the selection, and a

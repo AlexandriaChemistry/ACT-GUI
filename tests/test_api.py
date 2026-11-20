@@ -833,8 +833,32 @@ class ApiTest(unittest.TestCase):
                          sorted(line.split("|")[1]
                                 for line in options["sel"].read_text().splitlines()))
 
+        # The compounds for testing chosen by hand, and a property that counts double
+        chosen = dict(body, weights={"inter": 2},
+                      molprop=dict(body["molprop"], sets={"test": ["methanol#water"]}))
+        job = done(post(chosen))
+        self.assertEqual("finished", job["status"], job["error"])
+        options = self.run.calls[-1]["options"]
+        self.assertEqual(2, options["fc_inter"])
+        self.assertEqual("water#water|Train\nmethanol#water|Test\n", options["sel"].read_text())
+        ignored = dict(body, task="evaluate", observables=["inter"],
+                       molprop=dict(body["molprop"], sets={"ignore": ["water#water"]}))
+        del ignored["training"]
+        job = done(post(ignored))
+        self.assertEqual("finished", job["status"], job["error"])
+        self.assertEqual("methanol#water|Train\n",
+                         self.run.calls[-1]["options"]["sel"].read_text())
+
         ncalls = len(self.run.calls)
         wrong = [
+            dict(body, weights={"epot": 2}),
+            dict(body, weights={"inter": 0}),
+            dict(body, weights=[2]),
+            dict(body, molprop=dict(body["molprop"], sets={"test": ["acetone"]})),
+            dict(body, molprop=dict(body["molprop"], sets={"test": ["water#water",
+                                                                    "methanol#water"]})),
+            dict(body, molprop=dict(body["molprop"], sets={"test": ["methanol#water"]}),
+                 training={"fit": ["sigma"], "test": 0.5}),
             {k: v for k, v in body.items() if k != "training"},
             dict(body, training={}),
             dict(body, training={"fit": ["sigma", "-o"]}),
