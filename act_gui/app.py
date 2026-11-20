@@ -27,17 +27,18 @@ import dataclasses
 import hmac
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import __version__, cluster, evaluation, ffgen, openmm_package, plots
+from . import __version__, cluster, cluster_api, evaluation, ffgen, openmm_package, plots
+from .cluster_queue import ClusterQueue
 from .jobs import FINISHED, JobError, JobManager
 from .settings import PACKAGE_DIR, Settings
-from .tasks import TASKS, RequestError, build_request, describe_task, find_task
+from .tasks import TASKS, Prepared, RequestError, Task, build_request, describe_task, find_task
 from .uploads import UploadError, UploadStore
 
 ## The name of the cookie and of the header with the token
@@ -64,7 +65,8 @@ _SERIES_LABELS = {"TEMPERATURE": ("Temperature", "Temperature (K)")}
 def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
                program_info: Optional[Callable[[], Any]] = None,
                plotter: Optional[Callable[..., Any]] = None,
-               allowed_hosts: Optional[list] = None) -> FastAPI:
+               allowed_hosts: Optional[list] = None,
+               arguments: Optional[Callable[..., Any]] = None) -> FastAPI:
     """!
     @brief Make the web application.
     @param settings      The settings.
@@ -75,12 +77,29 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
     plots.make_pdf() if None.
     @param allowed_hosts The host names under which the server may be
     reached, the local machine if None.
+    @param arguments     The function that makes the arguments of a command
+    from its name, its options and the directory it runs in, and tells
+    which files it writes: act.build_arguments() if None. Used for jobs on
+    the cluster, which are not started by act.run().
     @return The application, to be served by uvicorn.
     """
     if run is None or program_info is None:
         import act  # pylint: disable=import-outside-toplevel
         run = run or act.run
         program_info = program_info or act.program_info
+
+    if arguments is None:
+        def arguments(command: str, options: Dict[str, Any], workdir: Path) -> Any:
+            """!
+            @brief The arguments of a command as act makes them.
+            @param command The command.
+            @param options The options.
+            @param workdir The directory the command runs in.
+            @return See act.build_arguments().
+            """
+            import act  # pylint: disable=import-outside-toplevel
+            return act.build_arguments(act.program_info().find_command(command), options,
+                                       workdir)
 
     # Without plotXVG the page does not offer to save plots
     can_plot = plotter is not None or plots.available()
@@ -374,6 +393,21 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         result = job.result
         return result.get("molecules") if isinstance(result, dict) else None
 
+    def prepare(body: Any) -> Tuple[Task, Prepared]:
+        """!
+        @brief Check a request for a calculation.
+        @param body The request.
+        @return The task and the options of its command.
+        """
+        try:
+            if not isinstance(body, dict):
+                raise RequestError("The request must be an object")
+            task = find_task(body.get("task"))
+            return task, build_request(task, body, settings, uploads, written_forcefield,
+                                       described_molprop)
+        except RequestError as exc:
+            raise fail(400, str(exc)) from exc
+
     @app.post("/api/jobs")
     async def submit(request: Request) -> Dict[str, Any]:
         """!
@@ -386,18 +420,12 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             body = await request.json()
         except ValueError as exc:
             raise fail(400, "The request is not valid JSON") from exc
+        task, prepared = prepare(body)
         try:
-            if not isinstance(body, dict):
-                raise RequestError("The request must be an object")
-            task = find_task(body.get("task"))
-            prepared = build_request(task, body, settings, uploads, written_forcefield,
-                                     described_molprop)
             job = manager.submit(task.name, task.command, prepared.options,
                                  progress=task.progress, outputs=dict(task.outputs),
                                  inputs=prepared.inputs, collect=task.collect,
                                  digest=task.digest)
-        except RequestError as exc:
-            raise fail(400, str(exc)) from exc
         except JobError as exc:
             raise fail(429, str(exc)) from exc
         return manager.summary(job)
@@ -542,6 +570,13 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         return Response(content=data, media_type="application/zip",
                         headers={"Content-Disposition":
                                  'attachment; filename="%s.zip"' % openmm_package.FOLDER})
+
+    if settings.mode == "desktop":
+        # Jobs on the cluster of the user. On a server for several users
+        # nobody logs in elsewhere as somebody else.
+        app.state.cluster_queue = ClusterQueue(settings.cluster_jobs_dir,
+                                               program=settings.ssh_program)
+        cluster_api.register(app, manager, app.state.cluster_queue, prepare, arguments, fail)
 
     static_dir = PACKAGE_DIR / "static"
     if static_dir.is_dir():

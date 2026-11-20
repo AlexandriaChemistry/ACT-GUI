@@ -294,6 +294,17 @@ def default_config_file() -> Path:
     return root / "act-gui" / "settings.json"
 
 
+def default_jobs_dir() -> Path:
+    """!
+    @brief Where the jobs on the cluster are noted and their results are kept.
+    @return The directory cluster-jobs in the directory act-gui of the data
+    directory of the user.
+    """
+    base = os.environ.get("XDG_DATA_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "share"
+    return root / "act-gui" / "cluster-jobs"
+
+
 def _read(path: Path) -> Dict[str, Any]:
     """!
     @brief Read the file with the settings.

@@ -25,7 +25,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 ## The states a job can be in
 QUEUED, RUNNING, FINISHED, FAILED, CANCELLED = (
@@ -54,6 +54,40 @@ class InputFile:
     name: str
     ## The content
     text: str
+
+
+def place_files(workdir: Path, options: Mapping[str, Any],
+                outputs: Optional[Mapping[str, str]] = None,
+                inputs: Optional[Mapping[str, Sequence[InputFile]]] = None
+                ) -> Tuple[Dict[str, Any], Dict[str, Path]]:
+    """!
+    @brief Give the files of a job their place in its directory: the
+    output files with a name of our choice, and the input files that are
+    made here, which are written.
+    @param workdir The directory of the job. It is made if there are input files.
+    @param options The options of the command.
+    @param outputs Output files by option name, see JobManager.submit().
+    @param inputs  Input files by option name, see JobManager.submit().
+    @return The options with the files, and the first input file that was
+    written for each option.
+    """
+    options = dict(options)
+    written: Dict[str, Path] = {}
+    for name, filename in (outputs or {}).items():
+        # Only a file name, in the directory of the job
+        options[name] = workdir / Path(filename).name
+    if inputs:
+        workdir.mkdir(parents=True, exist_ok=True)
+        for name, files in inputs.items():
+            paths = []
+            for item in files:
+                path = workdir / Path(item.name).name
+                path.write_text(item.text, encoding="utf-8")
+                paths.append(path)
+            # One file for an option that takes one file
+            options[name] = paths[0] if len(paths) == 1 and name not in MULTIPLE else paths
+            written[name] = paths[0]
+    return options, written
 
 
 @dataclass
@@ -169,21 +203,7 @@ class JobManager:
             job_id = uuid.uuid4().hex
             job = Job(id=job_id, task=task, command=command, workdir=self._dir / job_id)
             self._jobs[job_id] = job
-        options = dict(options)
-        for name, filename in (outputs or {}).items():
-            # Only a file name, in the directory of the job
-            options[name] = job.workdir / Path(filename).name
-        if inputs:
-            job.workdir.mkdir(parents=True, exist_ok=True)
-            for name, files in inputs.items():
-                paths = []
-                for item in files:
-                    path = job.workdir / Path(item.name).name
-                    path.write_text(item.text, encoding="utf-8")
-                    paths.append(path)
-                # One file for an option that takes one file
-                options[name] = paths[0] if len(paths) == 1 and name not in MULTIPLE else paths
-                job.inputs[name] = paths[0]
+        options, job.inputs = place_files(job.workdir, options, outputs, inputs)
         self._pool.submit(self._execute, job, options, progress, dict(collect or {}), digest)
         return job
 
@@ -238,6 +258,32 @@ class JobManager:
             with self._lock:
                 job.error = "" if cancelled else str(exc)
             self._finish(job, CANCELLED if cancelled else FAILED)
+
+    def adopt(self, task: str, command: str, workdir: Path, result: Any,
+              files: Mapping[str, Path], *, inputs: Optional[Mapping[str, Path]] = None,
+              created: Optional[float] = None, ended: Optional[float] = None) -> Job:
+        """!
+        @brief Take in a job that ran elsewhere, such as on a cluster, and
+        of which the results are on this machine. From here on it is a
+        finished job as any other.
+        @param task    The name of the task.
+        @param command The command of alexandria.
+        @param workdir The directory with the results.
+        @param result  The results of the command, as they are kept.
+        @param files   The files of the job by option name.
+        @param inputs  Those of the files that were made for the job.
+        @param created When the job was made, now if None.
+        @param ended   When it ended, now if None.
+        @return The job.
+        """
+        now = time.time()
+        job = Job(id=uuid.uuid4().hex, task=task, command=command, workdir=Path(workdir),
+                  status=FINISHED, created=now if created is None else created,
+                  ended=now if ended is None else ended, result=result,
+                  files=dict(files), inputs=dict(inputs or {}))
+        with self._lock:
+            self._jobs[job.id] = job
+        return job
 
     def _finish(self, job: Job, status: str) -> None:
         """!
