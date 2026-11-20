@@ -73,14 +73,31 @@ compound, and the page shows the statistics and, for each property, the
 values of the force field against the reference values. The plot can be
 saved as a PDF file and the data as an xvg file.
 
+A force field can also be trained on the data of the file, with `alexandria
+train_ff`: you give the kinds of parameters to train (such as `sigma
+epsilon`), the properties to train on, the optimizer (Monte Carlo, or the
+genetic algorithm with or without Monte Carlo, which needs two processes
+at least), the number of iterations and generations, and the part of the
+compounds that is kept for testing. `train_ff` has one set of parameters
+for each process, so the number of processes is the size of the
+population; more than one process needs `mpirun`, `mpiexec` or `srun` in
+the `PATH`, or the program in the environment variable `ACT_MPIEXEC`. The
+page follows the training with a plot of χ², from what
+`train_ff -progress` writes, lists the trained parameters and compares the
+trained force field with the data. The trained force field can be saved
+or opened in the force field workspace. A training on the desktop is
+stopped after the time limit of a calculation, ten minutes; long ones
+belong on the cluster, which comes next.
+
 The tab Cluster, on the desktop, takes the Slurm cluster for long jobs:
 the server, your user name there and a working directory. The comparison
 can then run as a job on the cluster, and the tab lists the jobs, see
 below.
 
-Not there yet: training a force field, the comparison of two force
-fields, a choice of the compounds to compare on, histograms of the energies
-of a compound, and the server for several users.
+Not there yet: training a force field on the cluster, the comparison of
+two force fields, a choice of the compounds to compare or train on,
+weights for the properties, histograms of the energies of a compound, and
+the server for several users.
 
 The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 `act_gui/static/vendor/`) to show molecules.

@@ -601,6 +601,11 @@ export async function startForceFields(told) {
     } catch (err) { alertBox("The file was not accepted. " + err.message); }
   };
   $("#ff-default").onclick = e => openForceField({ default: true }, told.default_forcefield, e.currentTarget);
+  // A force field that another workspace made, such as a trained one
+  document.addEventListener("act-open-forcefield", async e => {
+    await openForceField(e.detail.ref, e.detail.label, $("#ff-open"));
+    if (state.current && state.current.ref === e.detail.ref) $('#nav button[data-view="force-field"]').click();
+  });
   $("#ff-save").onclick = e => {
     const ref = state.current && state.current.ref;
     if (ref && ref.job) saveFile(e.currentTarget, `/jobs/${ref.job}/files/o`, {}, "Saving…", "forcefield.xml");

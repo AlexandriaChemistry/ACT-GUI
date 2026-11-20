@@ -27,6 +27,10 @@ const state = {
   pendingFF: null,  // a force field file that is uploaded when the comparison starts
   ev: null,       // the comparison: { job, files, sets }, sets by the name of the file
   job: null,      // the request for the job on the cluster that is shown, before it is sent
+  training: { optimizers: [], max_test: 0.5 },  // what the server says about training
+  maxProcesses: 1,  // the most processes of a calculation on this computer
+  limits: {},     // the smallest and largest values of options, by task
+  tr: { points: [], job: null, running: null },  // the training: its progress, the job when it is done and while it runs
 };
 
 /** The most compounds that are put in the table at once. */
@@ -273,6 +277,168 @@ async function comparison() {
   return { task: "evaluate", forcefield, observables, molprop: { file: state.file.file, described: state.file.described } };
 }
 
+/* ---------- training a force field ---------- */
+
+/**
+ * Whether the force field is trained, not only compared.
+ * @returns {boolean} True if the user chose to train.
+ */
+const training = () => $('#ev-what button[aria-pressed="true"]').dataset.v === "train";
+
+/**
+ * The optimizer that is chosen.
+ * @returns {object} Its name and whether it needs more than one process.
+ */
+const optimizer = () => state.training.optimizers.find(o => o.name === $("#tr-optimizer").value) || { name: "", parallel: false };
+
+/**
+ * A whole number from a field of the form.
+ * @param {string} id   The id of the field.
+ * @param {number} low  The smallest value.
+ * @param {number} high The largest value.
+ * @returns {number|null} The number, null if the field has no whole number within the limits.
+ */
+function whole(id, low, high) {
+  const value = Number($(id).value);
+  return $(id).value.trim() !== "" && Number.isInteger(value) && value >= low && value <= high ? value : null;
+}
+
+/**
+ * What the training adds to the request for a comparison.
+ * @param {object} body The request for the comparison.
+ * @returns {object|null} The request, null if something has to be given first.
+ */
+function trainingRequest(body) {
+  const fit = $("#tr-fit").value.trim().split(/[\s,]+/).filter(Boolean);
+  if (!fit.length) { toast("Give the kinds of parameters to train, for instance sigma epsilon."); return null; }
+  const chosen = optimizer(), limit = (state.limits || {}).train || {};
+  const iterations = whole("#tr-iter", 1, (limit.max_iter || [1, 100000])[1]);
+  if (iterations === null) { toast("Give the number of Monte Carlo iterations."); return null; }
+  const options = { optimizer: chosen.name, max_iter: iterations, random_init: $("#tr-random").checked };
+  if (chosen.parallel) {
+    options.max_generations = whole("#tr-gen", 1, (limit.max_generations || [1, 10000])[1]);
+    if (options.max_generations === null) { toast("Give the number of generations."); return null; }
+  }
+  if ($("#tr-seed").value.trim() !== "") {
+    options.seed = whole("#tr-seed", 1, 2147483647);
+    if (options.seed === null) { toast("The random seed is a whole number above zero."); return null; }
+  }
+  const processes = whole("#tr-procs", chosen.parallel ? 2 : 1, state.maxProcesses);
+  if (processes === null) {
+    toast(chosen.parallel ? `${chosen.name} needs between 2 and ${state.maxProcesses} processes.` : `Give between 1 and ${state.maxProcesses} processes.`);
+    return null;
+  }
+  const percent = Number($("#tr-test").value || 0);
+  if (!(percent >= 0 && percent <= 100 * state.training.max_test)) { toast(`At most ${100 * state.training.max_test} % of the compounds can be kept for testing.`); return null; }
+  return { ...body, task: "train", options, processes, training: { fit, test: percent / 100 } };
+}
+
+/** Plot the chi squared of a training as far as it is, and tell how far that is. */
+function trainingPlot() {
+  const points = state.tr.points, start = points.find(p => p.event === "start");
+  if (!start) return;
+  const generations = points.filter(p => p.event === "generation"), steps = points.filter(p => p.event === "step");
+  const last = points[points.length - 1], done = generations.length ? generations[generations.length - 1] : null;
+  const series = [];
+  let xlabel, xmax, fraction;
+  if (start.ngenerations > 1) {
+    // The lowest chi squared of all individuals after each generation
+    const x = [0, ...generations.map(g => g.generation)];
+    series.push({ type: "line", x, y: [start.chi2.train, ...generations.map(g => g.best.train)], endpoint: true });
+    if (start.chi2.test !== undefined && generations.every(g => g.best.test !== undefined)) {
+      series.push({ type: "line", x, y: [start.chi2.test, ...generations.map(g => g.best.test)], color: "--warn" });
+    }
+    xlabel = "Generation"; xmax = start.ngenerations;
+    fraction = (done ? done.generation : 0) / start.ngenerations;
+    $("#tr-plotnote").textContent = "The lowest χ² of all individuals on the compounds for training" + (series.length > 1 ? ", and in the other colour the χ² of that individual on the compounds for testing." : ".");
+  } else {
+    // The chain of this process, and the lowest chi squared it found
+    const x = [0, ...steps.map(s => s.iteration)], best = [start.chi2.train, ...steps.map(s => s.best.train)];
+    // The chain is known where a step was reported, the best also at the end
+    if (steps.length > 1) series.push({ type: "line", x: x.slice(), y: [start.chi2.train, ...steps.map(s => s.chi2.train)], color: "--muted", width: 1 });
+    if (done) { x.push(start.niterations); best.push(done.best.train); }
+    series.push({ type: "line", x, y: best, endpoint: true });
+    xlabel = "Monte Carlo iteration"; xmax = start.niterations;
+    fraction = done ? 1 : (steps.length ? steps[steps.length - 1].iteration / start.niterations : 0);
+    $("#tr-plotnote").textContent = "The lowest χ² so far on the compounds for training" + (series.length > 1 ? ", and in grey the χ² of the chain of the first process." : ".");
+  }
+  $("#tr-bar").style.width = Math.min(100, 100 * fraction) + "%";
+  const lowest = done ? done.best.train : (steps.length ? steps[steps.length - 1].best.train : start.chi2.train);
+  const where = start.ngenerations > 1 ? `generation ${done ? done.generation : 0} of ${start.ngenerations}` : `${start.niterations} iterations`;
+  $("#tr-status").textContent = `${start.optimizer} · ${where} · χ² ${num(lowest, 5)}` + (last.elapsed ? ` · ${num(last.elapsed.value, 3)} s` : "");
+  // On a logarithmic axis when the values differ much, as they do from a random start
+  const all = series.flatMap(s => s.y), low = Math.min(...all), log = low > 0 && Math.max(...all) / low > 50;
+  if (log) for (const s of series) s.y = s.y.map(Math.log10);
+  const short = v => Math.abs(v) >= 10000 || (v !== 0 && Math.abs(v) < 0.01) ? v.toExponential(1).replace("+", "") : num(v, 3);
+  plot("trplot", { label: "χ² during the training", xlim: [0, Math.max(xmax, 1)], ylim: limits(series.flatMap(s => s.y)), xlabel,
+                   ylabel: log ? "χ² (logarithmic)" : "χ²", height: 260, yfmt: v => short(log ? Math.pow(10, v) : v), series });
+}
+
+/**
+ * Show the parameters of a training.
+ * @param {object} job The calculation.
+ */
+function trained(job) {
+  const result = job.result, table = $("#tr-params"), spread = result.parameters.some(p => p.stdev);
+  state.tr.job = job.id;
+  table.textContent = "";
+  const heads = ["Kind", "Name", "Best"].concat(spread ? ["Mean", "Standard deviation", "Lowest", "Highest"] : []);
+  table.append(el("thead", {}, el("tr", {}, ...heads.map((h, i) => el("th", i > 1 ? { class: "n" } : {}, h)))));
+  const body = el("tbody");
+  for (const p of result.parameters) {
+    const cells = [el("td", {}, p.class || ""), el("td", { class: "mono" }, p.name || ""), el("td", { class: "n" }, num(p.best, 6))];
+    if (spread) for (const key of ["mean", "stdev", "min", "max"]) cells.push(el("td", { class: "n" }, p[key] === null || p[key] === undefined ? "" : num(p[key], 6)));
+    body.append(el("tr", {}, ...cells));
+  }
+  table.append(body);
+  $("#tr-count").textContent = `${result.parameters.length} ${result.parameters.length === 1 ? "parameter" : "parameters"}`;
+  const s = result.sensitivity || {};
+  $("#tr-sens").textContent = s.n_parameters === undefined ? ""
+    : `Sensitivity analysis (${s.mode}): ${s.n_parameters_converged} of ${s.n_parameters} parameters are at a minimum of χ²` +
+      (s.minimum === "yes" ? ", the force field is in a local minimum." : ", the force field is not in a local minimum: more iterations may improve it.");
+  $("#tr-result").hidden = false;
+}
+
+/**
+ * Train a force field on this computer and show how it goes.
+ * @param {object} body The request.
+ * @returns {Promise<object>} The calculation when it is done.
+ */
+async function runTraining(body) {
+  state.tr = { points: [], job: null, running: null };
+  $("#tr-result").hidden = true;
+  $("#tr-run").hidden = false;
+  $("#tr-bar").style.width = "0";
+  $("#tr-status").textContent = "Starting…";
+  $("#trplot").textContent = ""; $("#tr-plotnote").textContent = "";
+  $("#tr-stop").hidden = false;
+  $("#tr-run").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  try {
+    return await runTask(body, j => {
+      state.tr.running = j.id;
+      if (j.progress.length) { state.tr.points.push(...j.progress); trainingPlot(); }
+    });
+  } catch (e) {
+    $("#tr-status").textContent = e.message === "The calculation was stopped" ? "Stopped" : "Failed";
+    throw e;
+  } finally { $("#tr-stop").hidden = true; state.tr.running = null; }
+}
+
+/** Show what belongs to comparing and what to training. */
+function what() {
+  const train = training(), chosen = optimizer();
+  $("#ev-about-compare").hidden = train;
+  $("#ev-about-train").hidden = !train;
+  $("#tr-opts").hidden = !train;
+  $("#ev-obslab").textContent = train ? "Properties to train on" : "Properties to compare";
+  $("#tr-genfield").hidden = !chosen.parallel;
+  if (chosen.parallel && Number($("#tr-procs").value) < 2) $("#tr-procs").value = Math.min(4, state.maxProcesses);
+  $("#tr-note").textContent = chosen.parallel
+    ? `${chosen.name} has one set of parameters, an individual, for each process, and needs two at least. Each generation every individual does the Monte Carlo iterations${chosen.name === "GA" ? " (not used by GA)" : ""}.`
+    : "With more than one process each has its own Monte Carlo chain, and the best of them is kept.";
+  places();
+}
+
 /**
  * Whether the comparison goes to the cluster.
  * @returns {boolean} True if the user has a cluster and chose it.
@@ -338,10 +504,11 @@ async function sendJob() {
 
 /** Show whether the comparison can go to the cluster, and what is asked for then. */
 function places() {
-  $("#ev-where").hidden = !session.clusterReady;
+  // A training runs on this computer only, for now
+  $("#ev-where").hidden = !session.clusterReady || training();
   const cluster = onCluster();
   $("#ev-clusteropts").hidden = !cluster;
-  $("#run-ev").textContent = cluster ? "Show the job…" : "Compare";
+  $("#run-ev").textContent = cluster ? "Show the job…" : training() ? "Train" : "Compare";
   if (!cluster) { $("#ev-job").hidden = true; state.job = null; }
 }
 
@@ -352,25 +519,33 @@ async function compare() {
   alertBox("");
   $("#ev-job").hidden = true;
   state.job = null;
+  const train = training();
   try {
-    const body = await comparison();
+    let body = await comparison();
+    if (body && train) body = trainingRequest(body);
     if (!body) { pill("ev-pill", ""); return; }
     if (onCluster()) { await showJob(body); return; }
-    // What is on the page belongs to the comparison before this one
+    // What is on the page belongs to the calculation before this one
     state.ev = null;
     $("#ev-result").hidden = true;
-    pill("ev-pill", "Computing…");
-    const job = await runTask(body);
+    $("#tr-result").hidden = true;
+    if (!train) $("#tr-run").hidden = true;
+    pill("ev-pill", train ? "Training…" : "Computing…");
+    const job = train ? await runTraining(body) : await runTask(body);
     if (!Object.keys(job.result.statistics).length) {
       pill("ev-pill", "Nothing to compare", "warn");
       alertBox("Nothing could be compared: no compound of the file could be used with this force field, or the file has no data for these properties. The log file tells why.");
     } else pill("ev-pill", "Done", "good");
-    compared(job);
+    if (train) trained(job);
+    compared(job, train ? "· the trained force field" : "");
   } catch (e) {
-    pill("ev-pill", "Failed", "bad");
+    const stopped = e.message === "The calculation was stopped";
+    pill("ev-pill", stopped ? "Stopped" : "Failed", stopped ? "warn" : "bad");
     const none = /No molecules to train on/.test(e.message)
       ? " None of the compounds in the file could be used with this force field, for instance because it does not have their atom types." : "";
-    alertBox("The force field could not be compared with the data. " + e.message + "." + none);
+    const fit = /No parameters to train/.test(e.message)
+      ? " The force field has no parameters of these kinds that can be changed: they do not exist, or they are fixed." : "";
+    if (!stopped) alertBox((train ? "The force field could not be trained. " : "The force field could not be compared with the data. ") + e.message + "." + none + fit);
   } finally { button.disabled = false; }
 }
 
@@ -384,6 +559,8 @@ function show(label, data) {
   state.picked = -1;
   state.ev = null;
   $("#ev-result").hidden = true;
+  $("#tr-run").hidden = true;
+  $("#tr-result").hidden = true;
   $("#ev-card").hidden = false;
   pill("ev-pill", "");
   observableBoxes();
@@ -426,6 +603,24 @@ export function startMolprops(told) {
     else if ($("#ev-ff").value === "workspace") $("#ev-ff").value = "default";
   });
   $("#run-ev").onclick = compare;
+  // Training
+  state.training = told.training || state.training;
+  state.maxProcesses = told.max_processes || 1;
+  state.limits = told.limits || {};
+  for (const o of state.training.optimizers) {
+    $("#tr-optimizer").append(el("option", { value: o.name, selected: o.name === state.training.default_optimizer },
+      o.name === "MCMC" ? "Monte Carlo (MCMC)" : o.name === "GA" ? "Genetic algorithm (GA)" : "Genetic algorithm with Monte Carlo (HYBRID)"));
+  }
+  $("#tr-procs").max = String(state.maxProcesses);
+  $("#tr-test").max = String(100 * state.training.max_test);
+  seg($("#ev-what"), what);
+  $("#tr-optimizer").onchange = what;
+  what();
+  $("#tr-stop").onclick = () => { if (state.tr.running) call("/jobs/" + state.tr.running, { method: "DELETE" }).catch(() => {}); };
+  $("#tr-save").onclick = e => { if (state.tr.job) saveFile(e.currentTarget, `/jobs/${state.tr.job}/files/o`, {}, "Saving…", "trained.xml"); };
+  $("#tr-use").onclick = () => {
+    if (state.tr.job) document.dispatchEvent(new CustomEvent("act-open-forcefield", { detail: { ref: { job: state.tr.job }, label: "Trained force field" } }));
+  };
   // On the cluster, if the user has one
   seg($("#ev-place"), places);
   document.addEventListener("act-cluster", places);

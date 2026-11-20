@@ -849,6 +849,93 @@ class PageTest(unittest.TestCase):
         self.assertFalse(self.browser.find_element(By.ID, "ev-result").is_displayed())
         self.shot("22-molprop-default")
 
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_9b_train_a_force_field(self):
+        """!
+        @brief A force field is trained on the energies of the compounds in
+        a molprop file: the page asks what to train, follows the training,
+        lists the trained parameters, compares the trained force field with
+        the data and hands it to the force field workspace.
+        """
+        data = Path(TESTDATA)
+        self.open_page()
+        self.click('#nav button[data-view="molprop"]')
+        self.browser.find_element(By.ID, "mpw-file").send_keys(str(data / "molprop" / "booze-mono.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        self.assertFalse(self.browser.find_element(By.ID, "tr-opts").is_displayed())
+        self.assertEqual("Compare", self.text("#run-ev"))
+        self.click('#ev-what button[data-v="train"]')
+        self.assertTrue(self.browser.find_element(By.ID, "tr-opts").is_displayed())
+        self.assertEqual("Train", self.text("#run-ev"))
+        self.assertEqual("Properties to train on", self.text("#ev-obslab"))
+        # Monte Carlo is one generation on one process, the genetic
+        # algorithm has generations and needs two processes
+        optimizer = Select(self.browser.find_element(By.ID, "tr-optimizer"))
+        self.assertEqual("MCMC", optimizer.first_selected_option.get_attribute("value"))
+        self.assertFalse(self.browser.find_element(By.ID, "tr-genfield").is_displayed())
+        optimizer.select_by_value("HYBRID")
+        self.assertTrue(self.browser.find_element(By.ID, "tr-genfield").is_displayed())
+        self.assertGreaterEqual(int(self.browser.find_element(By.ID, "tr-procs").get_attribute("value")), 2)
+        self.assertIn("two at least", self.text("#tr-note"))
+        optimizer.select_by_value("MCMC")
+        procs = self.browser.find_element(By.ID, "tr-procs")
+        procs.clear()
+        procs.send_keys("1")
+        self.browser.find_element(By.ID, "ev-fffile").send_keys(
+            str(data / "forcefields" / "halgren-PG.xml"))
+        Select(self.browser.find_element(By.ID, "ev-ff")).select_by_value("upload")
+        # Nothing to train, nothing started
+        self.click("#run-ev")
+        self.wait(lambda b: "kinds of parameters" in b.find_element(By.ID, "toast").text)
+        self.assertFalse(self.browser.find_element(By.ID, "tr-run").is_displayed())
+        self.browser.find_element(By.ID, "tr-fit").send_keys("De b c bondlength angle kt")
+        for field, value in (("tr-iter", "5"), ("tr-seed", "1993")):
+            element = self.browser.find_element(By.ID, field)
+            element.clear()
+            element.send_keys(value)
+        self.shot("23-train-form")
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text == "Done")
+        self.assertEqual("", self.errors())
+        # How it went
+        self.assertTrue(self.browser.find_element(By.ID, "tr-run").is_displayed())
+        status = self.text("#tr-status")
+        self.assertIn("MCMC", status)
+        self.assertIn("5 iterations", status)
+        self.assertIn("χ²", status)
+        self.assertEqual("100%", self.browser.execute_script(
+            "return document.getElementById('tr-bar').style.width"))
+        self.assertGreaterEqual(len(self.browser.find_elements(By.CSS_SELECTOR, "#trplot svg path, #trplot svg polyline")), 1)
+        self.assertFalse(self.browser.find_element(By.ID, "tr-stop").is_displayed())
+        # The parameters and the comparison of the trained force field
+        self.assertTrue(self.browser.find_element(By.ID, "tr-result").is_displayed())
+        rows = self.browser.execute_script(
+            "return [...document.querySelectorAll('#tr-params tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertGreater(len(rows), 0)
+        self.assertEqual("%d parameters" % len(rows), self.text("#tr-count"))
+        self.assertLessEqual({row[0] for row in rows},
+                             {"De", "b", "c", "bondlength", "angle", "kt"})
+        self.assertTrue(all(row[2] for row in rows))
+        self.assertIn("Sensitivity analysis", self.text("#tr-sens"))
+        self.assertTrue(self.browser.find_element(By.ID, "ev-result").is_displayed())
+        self.assertIn("trained force field", self.text("#ev-source"))
+        self.assertIn("Potential energy", self.text("#ev-stats"))
+        self.browser.execute_script("document.getElementById('tr-run').scrollIntoView()")
+        self.shot("24-train-done")
+        # The trained force field in the force field workspace
+        self.click("#tr-use")
+        self.wait(lambda b: b.find_element(By.ID, "view-force-field").is_displayed()
+                  or self.errors())
+        self.assertEqual("", self.errors())
+        self.assertIn("Trained force field", self.text("#ffchips"))
+        self.assertEqual("", self.errors())
+        # Back to comparing, the form for training is gone
+        self.click('#nav button[data-view="molprop"]')
+        self.click('#ev-what button[data-v="compare"]')
+        self.assertFalse(self.browser.find_element(By.ID, "tr-opts").is_displayed())
+        self.assertEqual("Compare", self.text("#run-ev"))
+
     # --- the cluster for long jobs ---
 
     def test_a_cluster_settings(self):
