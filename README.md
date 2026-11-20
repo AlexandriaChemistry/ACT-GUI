@@ -77,7 +77,9 @@ workspace or an uploaded one) can be compared with its data: `alexandria
 train_ff -nooptimize` computes the properties that are chosen for every
 compound, and the page shows the statistics and, for each property, the
 values of the force field against the reference values. The plot can be
-saved as a PDF file and the data as an xvg file.
+saved as a PDF file and the data as an xvg file. For a compound with
+several structures, such as a dimer, a histogram shows which energies the
+reference and the force field have, for each term of the energy.
 
 The table of compounds says what each compound is used for: training,
 testing, or nothing. A click changes it for one compound, and the buttons
@@ -107,8 +109,7 @@ the server, your user name there and a working directory. The comparison
 can then run as a job on the cluster, and the tab lists the jobs, see
 below.
 
-Not there yet: histograms of the energies of a compound, and
-the server for several users.
+Not there yet: the server for several users.
 
 The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 `act_gui/static/vendor/`) to show molecules.

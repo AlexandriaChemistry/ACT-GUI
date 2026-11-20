@@ -10,6 +10,7 @@
 @file
 @brief Tests of the web interface, with a function in the place of act.run().
 """
+import json
 import tempfile
 import time
 import unittest
@@ -661,6 +662,13 @@ class ApiTest(unittest.TestCase):
                                                    "interaction_energies": {"c": {}}}},
                                "statistics": {"Train": {"INTERACTION": {"N": 2, "RMSD": 1.0}}},
                                "outliers": {}}
+                # The whole result is in a file, as the program writes it
+                whole = Path(workdir) / "train_ff.json"
+                whole.write_text(json.dumps({"train_ff": {"molecules": {"0": {
+                    "name": "water#water", "dataset": "Train", "atoms": {"0": {"fx": 1}},
+                    "interaction_energies": {"c": {"INTERACTION": {"QM": -20, "ACT": -19}},
+                                             "d": {"INTERACTION": {"QM": -5, "ACT": -6}}}}}}}))
+                result.files["json"] = [whole]
                 if kwargs.get("optimize") is not False:
                     # A training
                     result.data["parameters"] = {"0": {"class": "sigma", "name": "ow",
@@ -726,6 +734,22 @@ class ApiTest(unittest.TestCase):
         data = client.get("/api/jobs/%s/files/INTERACTION" % job["id"], headers=self.headers)
         self.assertEqual(200, data.status_code)
         self.assertIn("-20 -19", data.text)
+        # The energies of one compound, from the file with the whole result
+        one = client.get("/api/jobs/%s/compounds/0" % job["id"], headers=self.headers)
+        self.assertEqual(200, one.status_code, one.text)
+        self.assertEqual({"name": "water#water", "dataset": "Train", "truncated": False,
+                          "energies": {"INTERACTION": {"reference": [-20, -5],
+                                                       "forcefield": [-19, -6]}}}, one.json())
+        self.assertEqual(404, client.get("/api/jobs/%s/compounds/1" % job["id"],
+                                         headers=self.headers).status_code)
+        self.assertEqual(404, client.get("/api/jobs/%s/compounds/0" % described["id"],
+                                         headers=self.headers).status_code)
+        self.assertEqual(404, client.get("/api/jobs/nosuchjob/compounds/0",
+                                         headers=self.headers).status_code)
+        self.assertEqual(401, client.get("/api/jobs/%s/compounds/0" % job["id"]).status_code)
+        # The file itself is not handed out
+        self.assertEqual(404, client.get("/api/jobs/%s/files/json" % job["id"],
+                                         headers=self.headers).status_code)
         self.assertEqual(404, client.get("/api/jobs/%s/files/COULOMB" % job["id"],
                                          headers=self.headers).status_code)
         # The plot on paper compares the values point by point

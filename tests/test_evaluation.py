@@ -117,6 +117,43 @@ class EvaluationTest(unittest.TestCase):
             with self.assertRaises(evaluation.EvaluationError, msg=repr(wrong)):
                 evaluation.options(["epot"], wrong)
 
+    def test_energies_of_a_compound(self):
+        """!
+        @brief The energies of one compound, for each term the reference
+        values and those of the force field, in the order of the
+        calculations. What is no number is left out, and the atoms stay
+        on the server.
+        """
+        result = {"molecules": {
+            "0": {"name": "water#water", "dataset": "Train", "atoms": {"0": {"fx": 1.0}},
+                  "interaction_energies": {
+                      "c1": {"INTERACTION": {"QM": -20, "ACT": -19.5}, "COULOMB": {"QM": -5, "ACT": -6}},
+                      "c2": {"INTERACTION": {"QM": -5, "ACT": -6}, "COULOMB": {"QM": 1, "ACT": "x"}},
+                      "c3": "nothing", "c4": {"INTERACTION": {"QM": None, "ACT": 2}}}},
+            "1": {"name": "methanol", "dataset": "Test", "interaction_energies": None,
+                  "Energy terms": {"unit": "kJ/mol"}}}}
+        self.assertEqual({"name": "water#water", "dataset": "Train", "truncated": False,
+                          "energies": {"INTERACTION": {"reference": [-20, -5],
+                                                       "forcefield": [-19.5, -6]},
+                                       "COULOMB": {"reference": [-5], "forcefield": [-6]}}},
+                         evaluation.compound(result, 0))
+        self.assertEqual({"name": "methanol", "dataset": "Test", "truncated": False,
+                          "energies": {}}, evaluation.compound(result, 1))
+        # The same compounds in the same order as the digest has them
+        self.assertEqual([c["name"] for c in evaluation.digest(result)["compounds"]],
+                         [evaluation.compound(result, i)["name"] for i in range(2)])
+        for wrong in (2, -1, "0", None, 0.0, True):
+            with self.assertRaises(evaluation.EvaluationError, msg=repr(wrong)):
+                evaluation.compound(result, wrong)
+        with self.assertRaises(evaluation.EvaluationError):
+            evaluation.compound("text", 0)
+        # Of very many points the first ones are sent
+        many = {"molecules": [{"name": "w", "interaction_energies": {
+            "c%d" % i: {"INTERACTION": {"QM": i, "ACT": i}} for i in range(evaluation.MAX_POINTS + 5)}}]}
+        sent = evaluation.compound(many, 0)
+        self.assertTrue(sent["truncated"])
+        self.assertEqual(evaluation.MAX_POINTS, len(sent["energies"]["INTERACTION"]["reference"]))
+
     def test_names_that_cannot_be_selected(self):
         """!
         @brief A name cannot add a line or a field to the selection, and a

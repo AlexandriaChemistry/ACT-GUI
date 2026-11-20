@@ -311,6 +311,61 @@ function compared(job, source = "") {
   $("#ev-result").hidden = false;
   if (files.length) comparisonPlot();
   else { $("#evplot").textContent = ""; $("#ev-plotnote").textContent = "The file has no data for the properties that were chosen."; }
+  // The compounds with energies of several structures, one at a time
+  const compounds = $("#ev-compsel");
+  compounds.textContent = "";
+  result.compounds.forEach((c, index) => {
+    if (c.points > 0) compounds.append(el("option", { value: String(index) }, `${c.name} (${c.dataset}, ${c.points} structures)`));
+  });
+  state.ev.compounds = new Map();
+  $("#ev-comp").hidden = !compounds.options.length;
+  if (compounds.options.length) compoundEnergies();
+}
+
+/**
+ * Count values in bins of the same width.
+ * @param {number[]} values The values.
+ * @param {number} low      The start of the first bin.
+ * @param {number} width    The width of a bin.
+ * @param {number} bins     The number of bins.
+ * @returns {object} The x and y values of the outline of the histogram.
+ */
+function outline(values, low, width, bins) {
+  const counts = new Array(bins).fill(0);
+  for (const value of values) counts[Math.min(bins - 1, Math.max(0, Math.floor((value - low) / width)))] += 1;
+  const x = [low], y = [0];
+  counts.forEach((count, i) => { x.push(low + i * width, low + (i + 1) * width); y.push(count, count); });
+  x.push(low + bins * width); y.push(0);
+  return { x, y };
+}
+
+/** Show the energies of the compound that is chosen: how often the reference and the force field have which value. */
+async function compoundEnergies() {
+  const ev = state.ev, index = $("#ev-compsel").value;
+  if (!ev || index === "") return;
+  if (!ev.compounds.has(index)) {
+    try {
+      ev.compounds.set(index, await (await call(`/jobs/${ev.job}/compounds/${index}`)).json());
+    } catch (e) { alertBox("The energies of the compound could not be fetched. " + e.message); return; }
+  }
+  if (state.ev !== ev || $("#ev-compsel").value !== index) return;
+  const data = ev.compounds.get(index), terms = Object.keys(data.energies), select = $("#ev-compterm");
+  const wanted = terms.includes(select.value) ? select.value : terms[0];
+  select.textContent = "";
+  for (const term of terms) select.append(el("option", { value: term, selected: term === wanted }, PLOT_NAMES[term] || term));
+  const energies = data.energies[wanted];
+  if (!energies || !energies.reference.length) { $("#evhist").textContent = ""; $("#ev-compnote").textContent = "This compound has no energies to show."; return; }
+  const { reference, forcefield } = energies, n = reference.length;
+  const [low, high] = limits(reference.concat(forcefield), 0.02), bins = Math.max(5, Math.min(40, Math.round(Math.sqrt(n)) * 2));
+  const width = (high - low) / bins || 1;
+  const ref = outline(reference, low, width, bins), ff = outline(forcefield, low, width, bins);
+  plot("evhist", { label: `Energies of ${data.name}`, xlim: [low, low + bins * width], ylim: [0, Math.max(...ref.y, ...ff.y) * 1.08 || 1], height: 260,
+                   xlabel: `${PLOT_NAMES[wanted] || wanted} (kJ/mol)`, ylabel: "Structures",
+                   series: [{ type: "line", x: ref.x, y: ref.y, color: "--muted", fill: true }, { type: "line", x: ff.x, y: ff.y }] });
+  const errors = forcefield.map((v, i) => v - reference[i]);
+  const mse = errors.reduce((a, b) => a + b, 0) / n, rmsd = Math.sqrt(errors.reduce((a, b) => a + b * b, 0) / n);
+  $("#ev-compnote").textContent = `${n} structures: the reference in grey, the force field in colour. RMSD ${num(rmsd, 4)} kJ/mol, mean signed error ${num(mse, 4)} kJ/mol.` +
+    (data.truncated ? " The compound has more structures than are shown." : "");
 }
 
 /**
@@ -677,6 +732,7 @@ async function compare() {
     // What is on the page belongs to the calculation before this one
     state.ev = null;
     $("#ev-result").hidden = true;
+    $("#ev-comp").hidden = true;
     $("#tr-result").hidden = true;
     if (!train) $("#tr-run").hidden = true;
     pill("ev-pill", train ? "Training…" : "Computing…");
@@ -709,6 +765,7 @@ function show(label, data) {
   state.sets = new Map();
   state.ev = null;
   $("#ev-result").hidden = true;
+  $("#ev-comp").hidden = true;
   $("#tr-run").hidden = true;
   $("#tr-result").hidden = true;
   $("#ev-card").hidden = false;
@@ -813,10 +870,13 @@ export function startMolprops(told) {
     requestAnimationFrame(() => {
       if (train) trainingPlot();
       comparisonPlot();
+      compoundEnergies();
       $(!train ? "#ev-result" : $("#tr-run").hidden ? "#tr-result" : "#tr-run").scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
   $("#ev-plotsel").onchange = comparisonPlot;
+  $("#ev-compsel").onchange = compoundEnergies;
+  $("#ev-compterm").onchange = compoundEnergies;
   $("#ev-pdf").onclick = e => { if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/plots/${$("#ev-plotsel").value}`, {}, "Making PDF…", "comparison.pdf"); };
   $("#ev-data").onclick = e => { if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/files/${$("#ev-plotsel").value}`, {}, "Saving…", "comparison.xvg"); };
   $("#ev-log").onclick = e => { if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/files/g`, {}, "Saving…", "train_ff.log"); };

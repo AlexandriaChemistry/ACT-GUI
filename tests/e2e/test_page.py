@@ -857,6 +857,32 @@ class PageTest(unittest.TestCase):
             By.CSS_SELECTOR, "#evplot svg").get_attribute("aria-label"))
         self.browser.execute_script("document.getElementById('ev-result').scrollIntoView()")
         self.shot("21-molprop-comparison")
+        # The energies of one compound: how often which value, for the
+        # reference and for the force field
+        self.assertTrue(self.browser.find_element(By.ID, "ev-comp").is_displayed())
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#evhist svg path")) >= 2)
+        compounds = Select(self.browser.find_element(By.ID, "ev-compsel"))
+        listed = [option.text for option in compounds.options]
+        self.assertEqual(3, len(listed))
+        self.assertEqual({"37", "52", "154"}, {text.split()[-2] for text in listed})
+        first = listed[0].split()[-2]
+        self.assertTrue(self.text("#ev-compnote").startswith(first + " structures"))
+        self.assertIn("RMSD", self.text("#ev-compnote"))
+        terms = Select(self.browser.find_element(By.ID, "ev-compterm"))
+        self.assertEqual("INTERACTION", terms.first_selected_option.get_attribute("value"))
+        self.assertIn("COULOMB", [option.get_attribute("value") for option in terms.options])
+        terms.select_by_value("COULOMB")
+        self.wait(lambda b: "Electrostatics (kJ/mol)" in b.find_element(By.ID, "evhist").text)
+        compounds.select_by_index(1)
+        second = listed[1].split()[-2]
+        self.wait(lambda b: b.find_element(By.ID, "ev-compnote").text.startswith(
+            second + " structures"))
+        # The term stays the one that was chosen
+        self.assertEqual("COULOMB", Select(self.browser.find_element(
+            By.ID, "ev-compterm")).first_selected_option.get_attribute("value"))
+        self.assertEqual("", self.errors())
+        self.browser.execute_script("document.getElementById('ev-comp').scrollIntoView()")
+        self.shot("21b-compound-energies")
         # Another property
         Select(self.browser.find_element(By.ID, "ev-plotsel")).select_by_value("COULOMB")
         self.wait(lambda b: "Electrostatics" in b.find_element(
@@ -889,6 +915,7 @@ class PageTest(unittest.TestCase):
         self.assertIn("None of the compounds", self.errors())
         # The result of the comparison before this one is gone
         self.assertFalse(self.browser.find_element(By.ID, "ev-result").is_displayed())
+        self.assertFalse(self.browser.find_element(By.ID, "ev-comp").is_displayed())
         self.shot("22-molprop-default")
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")

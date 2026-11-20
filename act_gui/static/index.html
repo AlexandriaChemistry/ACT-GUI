@@ -444,6 +444,13 @@
         <div class="xscroll"><table class="data" id="ev-stats"></table></div>
         <div class="body"><p class="muted fine">RMSD is the root mean square deviation, MSE the mean signed error (force field minus reference), MAE the mean absolute error; the slope and R are those of a straight line through the points.</p></div></div>
     </div>
+    <div class="card" id="ev-comp" hidden>
+      <div class="head"><h2>Energies of a compound</h2><span class="spacer"></span>
+        <div class="field"><select id="ev-compsel" aria-label="Compound"></select></div>
+        <div class="field"><select id="ev-compterm" aria-label="Energy term"></select></div></div>
+      <div class="body"><div class="plot" id="evhist"></div>
+        <p class="muted fine" id="ev-compnote"></p></div>
+    </div>
   </section>
 
   <!-- ================= Cluster ================= -->

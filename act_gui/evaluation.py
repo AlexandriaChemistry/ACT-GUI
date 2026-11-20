@@ -81,6 +81,9 @@ PLOTS: Tuple[str, ...] = tuple(option for o in OBSERVABLES.values() for option i
 MAX_COMPOUNDS = 200000
 MAX_NAME_LENGTH = 300
 
+## The most data points of a term of a compound that are sent to the browser
+MAX_POINTS = 20000
+
 ## The largest weight of a property in a training
 MAX_WEIGHT = 1e6
 
@@ -215,11 +218,7 @@ def digest(data: Any) -> Any:
     if not isinstance(data, Mapping):
         return data
     compounds = []
-    molecules = data.get("molecules") or {}
-    listed = molecules.values() if isinstance(molecules, Mapping) else molecules
-    for molecule in listed:
-        if not isinstance(molecule, Mapping):
-            continue
+    for molecule in _molecules(data):
         points = molecule.get("interaction_energies")
         compounds.append({"name": molecule.get("name", ""),
                           "dataset": molecule.get("dataset", ""),
@@ -234,6 +233,60 @@ def digest(data: Any) -> Any:
             outliers[name] = [dict(entry, calculation=key) for key, entry in entries.items()
                               if isinstance(entry, Mapping)][:20]
     return {"compounds": compounds, "statistics": statistics, "outliers": outliers}
+
+
+def _molecules(data: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+    """!
+    @brief The compounds in the result of train_ff.
+    @param data The result of train_ff.
+    @return The compounds, in the order of the result.
+    """
+    molecules = data.get("molecules") or {}
+    listed = molecules.values() if isinstance(molecules, Mapping) else molecules
+    return [molecule for molecule in listed if isinstance(molecule, Mapping)]
+
+
+def compound(data: Any, index: Any) -> Dict[str, Any]:
+    """!
+    @brief The energies of one compound in the result of train_ff: for
+    each term, such as the interaction energy or the electrostatics, the
+    reference values and the values of the force field for the structures
+    of the compound.
+    @param data  The result of train_ff.
+    @param index The place of the compound in the list that digest() made.
+    @return The name, the data set and "energies": by the name of the term
+    an object with "reference" and "forcefield", two lists of the same
+    length. "truncated" tells whether there were more than MAX_POINTS
+    structures, of which the first are given.
+    @throws EvaluationError if there is no such compound.
+    """
+    molecules = _molecules(data) if isinstance(data, Mapping) else []
+    if isinstance(index, bool) or not isinstance(index, int) \
+            or not 0 <= index < len(molecules):
+        raise EvaluationError("There is no such compound")
+    molecule = molecules[index]
+    energies: Dict[str, Dict[str, List[float]]] = {}
+    points = molecule.get("interaction_energies")
+    truncated = False
+    if isinstance(points, Mapping):
+        for number, terms in enumerate(points.values()):
+            if number >= MAX_POINTS:
+                truncated = True
+                break
+            if not isinstance(terms, Mapping):
+                continue
+            for term, pair in terms.items():
+                if not isinstance(pair, Mapping):
+                    continue
+                reference, forcefield = pair.get("QM"), pair.get("ACT")
+                if any(isinstance(value, bool) or not isinstance(value, (int, float))
+                       for value in (reference, forcefield)):
+                    continue
+                kept = energies.setdefault(str(term), {"reference": [], "forcefield": []})
+                kept["reference"].append(reference)
+                kept["forcefield"].append(forcefield)
+    return {"name": molecule.get("name", ""), "dataset": molecule.get("dataset", ""),
+            "energies": energies, "truncated": truncated}
 
 
 def describe() -> List[Dict[str, Any]]:
