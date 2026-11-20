@@ -192,8 +192,9 @@ class ApiTest(unittest.TestCase):
         tasks = self.client.get("/api/tasks", headers=self.headers).json()["tasks"]
         names = [task["name"] for task in tasks]
         self.assertEqual(["charges", "minimize", "nma", "simulate", "openmm", "gen_ff",
-                          "geometry_ff", "ff_describe", "ff_edit", "ff_repair"], names)
-        self.assertEqual(["molecule"] * 5 + ["forcefield"] * 5,
+                          "geometry_ff", "ff_describe", "ff_edit", "ff_repair",
+                          "mp_describe"], names)
+        self.assertEqual(["molecule"] * 5 + ["forcefield"] * 5 + ["molprop"],
                          [task["workspace"] for task in tasks])
         self.assertEqual(["generator"], tasks[5]["needs"])
         self.assertEqual(["forcefield", "molprop"], tasks[6]["needs"])
@@ -595,6 +596,35 @@ class ApiTest(unittest.TestCase):
             self.assertEqual(400, answer.status_code, body)
         self.wait(self.client.get("/api/jobs", headers=self.headers).json()["jobs"][0]["id"])
         self.assertEqual(ncalls, len(self.run.calls))
+
+    def test_describe_molprop_file(self):
+        """!
+        @brief edit_mp gets the uploaded molprop file, and is asked to
+        describe and to validate it. Nothing else can be asked for.
+        """
+        molprop = self.upload("mols.xml", "molprop", MP).json()["id"]
+        answer = self.client.post("/api/jobs", headers=self.headers, json={
+            "task": "mp_describe", "molprop": {"file": molprop}})
+        self.assertEqual(200, answer.status_code, answer.text)
+        self.wait(answer.json()["id"])
+        call = self.run.calls[0]
+        self.assertEqual("edit_mp", call["command"])
+        self.assertEqual({"mp": [self.settings.uploads_dir / (molprop + ".xml")],
+                          "json": True, "validate": True}, call["options"])
+        forcefield = self.upload("my.xml", "forcefield", FF).json()["id"]
+        wrong = [
+            {"task": "mp_describe"},
+            {"task": "mp_describe", "molprop": {}},
+            {"task": "mp_describe", "molprop": {"file": forcefield}},
+            {"task": "mp_describe", "molprop": {"file": molprop}, "options": {"o": "/tmp/x"}},
+            {"task": "mp_describe", "molprop": {"file": molprop}, "options": {"db": "/tmp/x"}},
+            {"task": "mp_describe", "molprop": {"file": molprop},
+             "options": {"validate": False}},
+        ]
+        for body in wrong:
+            answer = self.client.post("/api/jobs", headers=self.headers, json=body)
+            self.assertEqual(400, answer.status_code, body)
+        self.assertEqual(1, len(self.run.calls))
 
     def test_molprop_files_may_be_larger(self):
         """!

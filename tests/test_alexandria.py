@@ -341,6 +341,36 @@ class RealProgramTest(unittest.TestCase):
         self.assertEqual(200, log.status_code)
         self.assertIn("Cannot find atomtype", log.text)
 
+    # --- the molprop workspace ---
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_describe_molprop_files(self):
+        """!
+        @brief The content of a file with monomers and of one with dimers,
+        and the result of the validation.
+        """
+        expected = {"molprop.xml": (3, 3, 0, "1-butanol", "DeltaHform"),
+                    "mpdimer.xml": (3, 0, 3, "1-propanol#ethane", "InteractionEnergy")}
+        for name, (total, monomers, dimers, first, observable) in expected.items():
+            uploaded = self.client.post(
+                "/api/uploads", params={"kind": "molprop", "name": name},
+                content=(Path(TESTDATA) / "molprop" / name).read_bytes(), headers=self.headers)
+            self.assertEqual(200, uploaded.status_code, uploaded.text)
+            job = self.run_task({"task": "mp_describe",
+                                 "molprop": {"file": uploaded.json()["id"]}})
+            self.assertEqual("finished", job["status"], job["error"])
+            summary = job["result"]["summary"]
+            self.assertEqual((total, monomers, dimers),
+                             (summary["molecules"], summary["monomers"], summary["dimers"]))
+            self.assertGreater(summary["properties"][observable], 0)
+            molecules = job["result"]["molecules"]
+            self.assertEqual(total, len(molecules))
+            self.assertEqual(first, molecules[0]["name"])
+            self.assertEqual(2 if dimers else 1, len(molecules[0]["fragments"]))
+            validation = job["result"]["validation"]
+            self.assertTrue(validation["checked"])
+            self.assertTrue(validation["ok"])
+
 
 if __name__ == "__main__":
     unittest.main()

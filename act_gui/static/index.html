@@ -254,9 +254,35 @@
     </div>
   </section>
 
+  <!-- ================= Molprop data ================= -->
   <section class="view" id="view-molprop" hidden>
-    <div class="card"><div class="body"><h2>Molprop data</h2>
-      <p class="muted">Validating molprop files and evaluating a force field against them is not available yet in this version.</p></div></div>
+    <div class="card">
+      <div class="bar">
+        <button class="btn primary" id="mpw-open" type="button">Open molprop file…</button>
+        <input class="visually-hidden" type="file" id="mpw-file" accept=".xml" tabindex="-1" aria-hidden="true">
+        <div class="field grow"><span class="lab">Molprop file</span>
+          <div class="chips" id="mpw-chips"><span class="chip">None yet. Open a file with compounds and their properties to see what is in it and to check it.</span></div></div>
+        <span class="pill" id="mpw-pill" hidden></span>
+      </div>
+    </div>
+    <div class="cols side-right" id="mpw-content" hidden>
+      <div class="card"><div class="head"><h2>Compounds</h2><span class="muted" id="mpw-count"></span><span class="spacer"></span>
+          <div class="field"><input type="text" id="mpw-search" placeholder="Find name or formula" aria-label="Find a compound" spellcheck="false" autocomplete="off"></div></div>
+        <div class="scroll flat maxh560"><table class="data" id="mpw-table"></table></div>
+        <p class="empty pad" id="mpw-empty" hidden>No compound with this text.</p></div>
+      <div class="stack">
+        <div class="card"><div class="head"><h2>Validation</h2><span class="spacer"></span><span class="pill" id="mpw-vpill" hidden></span></div>
+          <div class="body"><ul class="list" id="mpw-vlist"></ul>
+            <p class="muted fine">Checked: every calculation of a compound has the same atoms in the same order, and the compounds of a dimer are in the same order everywhere.</p></div></div>
+        <div class="card" id="mpw-detail" hidden><div class="head"><h2 id="mpw-dname"></h2></div>
+          <div class="body"><div class="chips" id="mpw-dchips"></div>
+            <div class="xscroll"><table class="data" id="mpw-dfrag"></table></div>
+            <div class="xscroll"><table class="data" id="mpw-dprop"></table></div></div></div>
+        <div class="card"><div class="head"><h2>Properties in the file</h2></div>
+          <div class="scroll flat maxh380"><table class="data" id="mpw-props"></table></div></div>
+      </div>
+    </div>
+    <p class="note">Evaluating a force field against a molprop file is not available yet in this version.</p>
   </section>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>

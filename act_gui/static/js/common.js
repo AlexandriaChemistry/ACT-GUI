@@ -19,6 +19,25 @@ export const $ = (s, r = document) => r.querySelector(s);
 export const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 /** A number with a real minus sign. */
 export const fmt = (x, d = 2) => (x < 0 ? "−" : "") + Math.abs(x).toFixed(d);
+/**
+ * Make an element.
+ * @param {string} tag       The name of the element.
+ * @param {object} props     Properties to set; "class" and "data" are understood.
+ * @param {...(Node|string)} children What goes inside, text as text.
+ * @returns {Element} The element.
+ */
+export function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props)) {
+    if (key === "class") node.className = value;
+    else if (key === "data") Object.assign(node.dataset, value);
+    else if (key in node) node[key] = value;
+    else node.setAttribute(key, value);
+  }
+  node.append(...children);
+  return node;
+}
+
 /** What the server told the page when it started. */
 export const session = {
   token: "",            // for requests that change something

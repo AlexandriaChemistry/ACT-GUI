@@ -55,8 +55,14 @@ there or opened from a file:
 Every step writes a new file on the server, which can be saved and which
 the molecule workspace can use for its calculations.
 
+The molprop workspace opens a molprop file and shows what is in it: the
+compounds with their formula, the compounds they consist of, the number of
+calculations and the methods, the number of values of each property, and
+the result of the validation of `alexandria edit_mp -validate`.
+
 Not there yet: virtual sites by point and click, the comparison of two
-force fields, the molprop workspace, and the server for several users.
+force fields, the evaluation of a force field against a molprop file, and
+the server for several users.
 
 The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 `act_gui/static/vendor/`) to show molecules.

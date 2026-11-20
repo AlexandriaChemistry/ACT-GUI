@@ -591,6 +591,59 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: log.is_file() and log.stat().st_size > 0)
         self.assertIn("Cannot find atomtype", log.read_text(errors="replace"))
 
+    # --- the molprop workspace ---
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_8_molprop_file(self):
+        """!
+        @brief A molprop file is opened: what is in it, the details of a
+        compound and the result of the validation.
+        """
+        self.open_page()
+        self.click('#nav button[data-view="molprop"]')
+        self.assertFalse(self.browser.find_element(By.ID, "mpw-content").is_displayed())
+        self.browser.find_element(By.ID, "mpw-file").send_keys(
+            str(Path(TESTDATA) / "molprop" / "mpdimer.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "mpw-content").is_displayed())
+        self.assertEqual("", self.errors())
+        chips = self.text("#mpw-chips")
+        self.assertIn("mpdimer.xml", chips)
+        self.assertIn("3 entries", chips)
+        self.assertIn("dimers 3", chips)
+        self.assertNotIn("monomers", chips)
+        self.assertEqual("Valid", self.text("#mpw-vpill"))
+        self.assertEqual("3 compounds", self.text("#mpw-count"))
+        self.assertIn("InteractionEnergy", self.text("#mpw-props"))
+        rows = self.browser.find_elements(By.CSS_SELECTOR, "#mpw-table tbody tr")
+        self.assertEqual(3, len(rows))
+        self.assertIn("1-propanol#ethane", rows[0].text)
+        # The details of a compound
+        self.assertFalse(self.browser.find_element(By.ID, "mpw-detail").is_displayed())
+        self.click("#mpw-table tbody tr.pick td")
+        self.assertEqual("1-propanol#ethane", self.text("#mpw-dname"))
+        self.assertEqual(2, len(self.browser.find_elements(By.CSS_SELECTOR, "#mpw-dfrag tbody tr")))
+        self.assertIn("InChI=1S/C2H6", self.text("#mpw-dfrag"))
+        self.shot("20-molprop")
+        # Finding a compound
+        box = self.browser.find_element(By.ID, "mpw-search")
+        box.send_keys("no such compound")
+        self.assertTrue(self.browser.find_element(By.ID, "mpw-empty").is_displayed())
+        box.clear()
+        box.send_keys("ETHANE")
+        self.assertGreaterEqual(len(self.browser.find_elements(By.CSS_SELECTOR, "#mpw-table tbody tr")), 1)
+        # Another file takes its place
+        self.browser.find_element(By.ID, "mpw-file").send_keys(
+            str(Path(TESTDATA) / "molprop" / "molprop.xml"))
+        self.wait(lambda b: "molprop.xml" in b.find_element(By.ID, "mpw-chips").text)
+        self.assertIn("monomers 3", self.text("#mpw-chips"))
+        self.assertFalse(self.browser.find_element(By.ID, "mpw-detail").is_displayed())
+        # A file that is no molprop file is refused with a message
+        self.browser.find_element(By.ID, "mpw-file").send_keys(
+            str(Path(TESTDATA) / "forcefields" / "ACS-g1.xml"))
+        self.wait(lambda b: "not" in self.errors())
+        self.assertIn("molprop", self.errors())
+        self.assertIn("monomers 3", self.text("#mpw-chips"))
+
 
 if __name__ == "__main__":
     unittest.main()

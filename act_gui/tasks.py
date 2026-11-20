@@ -166,6 +166,12 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          outputs={"o": "forcefield.xml"},
          downloads=("o",),
          needs=(FORCEFIELD,), forcefield="o", workspace="forcefield"),
+    # --- the molprop workspace ---
+    Task(name="mp_describe", command="edit_mp",
+         title="Read and check a molprop file",
+         fixed={"json": True, "validate": True},
+         downloads=("g",),
+         needs=(MOLPROP,), workspace="molprop"),
 )}
 
 ## The values that the option mut of edit_ff takes

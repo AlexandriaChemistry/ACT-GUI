@@ -17,6 +17,7 @@
 import { $, $$, alertBox, call, fmt, moveInk, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
 import { css, esc, limits, plot, redrawPlots } from "./plot.js";
 import { startForceFields } from "./forcefield.js";
+import { startMolprops } from "./molprop.js";
 
 /* global $3Dmol */
 
@@ -614,6 +615,7 @@ async function start() {
     $("#smiles").maxLength = told.max_smiles_length;
     $("#status-text").textContent = (told.mode === "desktop" ? "Desktop mode" : "Server") + " · version " + told.version;
     startForceFields(told);
+    startMolprops(told);
     // Open a molecule that is named in the address, as in #smiles=CCO
     const wanted = new URLSearchParams(location.hash.slice(1)).get("smiles");
     if (wanted) { $("#smiles").value = wanted; }

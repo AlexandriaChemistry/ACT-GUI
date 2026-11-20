@@ -217,3 +217,7 @@ table.data tr.off td:first-child { color: var(--ink); }
 #fftab-edit .head .field { display: block; }
 .range.fixed i { background: var(--muted); }
 
+/* ---------- the molprop workspace ---------- */
+#mpw-search { width: 190px; }
+#view-molprop .head .field { display: block; }
+.ml8 { margin-left: 8px; }

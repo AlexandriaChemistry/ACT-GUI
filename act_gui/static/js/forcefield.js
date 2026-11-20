@@ -19,7 +19,7 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, $$, alertBox, call, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
+import { $, $$, alertBox, call, el, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
 
 /** What the workspace knows. */
 const state = {
@@ -44,25 +44,6 @@ const MAX_ISSUES = 40;
 const MODEL_NAMES = { POINT: "Point", GAUSSIAN: "Gaussian", SLATER: "Slater", "P+G": "Point + Gaussian" };
 /** The elements of which an atom makes one bond. */
 const MONOVALENT = ["H", "F", "Cl", "Br", "I"];
-
-/**
- * Make an element.
- * @param {string} tag       The name of the element.
- * @param {object} props     Properties to set; "class" and "data" are understood.
- * @param {...(Node|string)} children What goes inside, text as text.
- * @returns {Element} The element.
- */
-function el(tag, props = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(props)) {
-    if (key === "class") node.className = value;
-    else if (key === "data") Object.assign(node.dataset, value);
-    else if (key in node) node[key] = value;
-    else node.setAttribute(key, value);
-  }
-  node.append(...children);
-  return node;
-}
 
 /**
  * A number as it is shown in a table: six digits, a real minus sign.
