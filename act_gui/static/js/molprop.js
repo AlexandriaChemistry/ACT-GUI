@@ -14,7 +14,7 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, $$, alertBox, call, el, num, pill, runTask, saveFile, session, toast, upload } from "./common.js";
+import { $, $$, alertBox, call, el, num, pill, runTask, saveFile, seg, session, toast, upload } from "./common.js";
 import { limits, plot } from "./plot.js";
 
 /** What the workspace knows. */
@@ -26,6 +26,7 @@ const state = {
   observables: [],  // the properties that a force field can be compared on
   pendingFF: null,  // a force field file that is uploaded when the comparison starts
   ev: null,       // the comparison: { job, files, sets }, sets by the name of the file
+  job: null,      // the request for the job on the cluster that is shown, before it is sent
 };
 
 /** The most compounds that are put in the table at once. */
@@ -217,9 +218,11 @@ async function comparisonPlot() {
 
 /**
  * Show the result of a comparison.
- * @param {object} job The calculation.
+ * @param {object} job    The calculation.
+ * @param {string} source Where it ran, if not on this computer.
  */
-function compared(job) {
+function compared(job, source = "") {
+  $("#ev-source").textContent = source;
   // In the order of the list of names, the main property first
   const result = job.result, files = Object.keys(PLOT_NAMES).filter(name => job.files.includes(name));
   state.ev = { job: job.id, files, sets: {} };
@@ -248,30 +251,116 @@ function compared(job) {
   else { $("#evplot").textContent = ""; $("#ev-plotnote").textContent = "The file has no data for the properties that were chosen."; }
 }
 
-/** Compare the force field that is chosen with the data of the file. */
-async function compare() {
+/**
+ * What the comparison needs: the force field, sent to the server if it is
+ * a file of the user, the molprop file and the properties.
+ * @returns {Promise<object|null>} The request, null if something has to be chosen first.
+ */
+async function comparison() {
   const observables = $$("#ev-observables input").filter(b => b.checked).map(b => b.dataset.name);
-  if (!observables.length) { toast("Choose at least one property to compare."); return; }
-  const button = $("#run-ev"), choice = $("#ev-ff").value;
+  if (!observables.length) { toast("Choose at least one property to compare."); return null; }
+  const choice = $("#ev-ff").value;
+  let forcefield = { default: true };
+  if (choice === "workspace" && session.forcefield) forcefield = session.forcefield.ref;
+  else if (choice === "upload") {
+    if (!state.pendingFF) { toast("Choose a force field file first."); return null; }
+    if (!state.pendingFF.id) {
+      pill("ev-pill", "Sending the force field…");
+      state.pendingFF.id = (await upload(state.pendingFF.file, "forcefield")).id;
+    }
+    forcefield = { file: state.pendingFF.id };
+  }
+  return { task: "evaluate", forcefield, observables, molprop: { file: state.file.file, described: state.file.described } };
+}
+
+/**
+ * Whether the comparison goes to the cluster.
+ * @returns {boolean} True if the user has a cluster and chose it.
+ */
+const onCluster = () => !$("#ev-where").hidden && $('#ev-place button[aria-pressed="true"]').dataset.v === "cluster";
+
+/**
+ * The size of a file in words.
+ * @param {number} bytes The number of bytes.
+ * @returns {string} The size in bytes, kB or MB.
+ */
+const fileSize = bytes => bytes < 1024 ? `${bytes} bytes` : bytes < 1048576 ? `${num(bytes / 1024, 3)} kB` : `${num(bytes / 1048576, 3)} MB`;
+
+/**
+ * Show the comparison as a job for the cluster, before anything is sent.
+ * @param {object} body The request for the comparison.
+ */
+async function showJob(body) {
+  const name = $("#ev-jobname").value.trim();
+  const cluster = { tasks: Number($("#ev-tasks").value), minutes: Math.round(Number($("#ev-hours").value) * 60), gpu: $("#ev-gpu").checked };
+  if (name) cluster.name = name;
+  pill("ev-pill", "");
+  const shown = await (await call("/cluster/jobs", { method: "POST", json: { ...body, cluster, send: false } })).json();
+  // The name that was shown is the name that is sent
+  state.job = { ...body, cluster: { ...cluster, name: shown.name }, send: true };
+  $("#ev-jobwhere").textContent = `${shown.name} · ${shown.server}:${shown.directory}`;
+  const table = $("#ev-jobfiles");
+  table.textContent = "";
+  table.append(el("thead", {}, el("tr", {}, el("th", {}, "Name on the cluster"), el("th", { class: "n" }, "Size"))));
+  const rows = el("tbody");
+  for (const file of shown.files) rows.append(el("tr", {}, el("td", { class: "mono" }, file.name), el("td", { class: "n" }, fileSize(file.size))));
+  table.append(rows);
+  $("#ev-jobscript").textContent = shown.script;
+  $("#ev-jobtaken").hidden = !shown.taken;
+  $("#ev-send").disabled = shown.taken;
+  pill("ev-jobpill", "");
+  $("#ev-job").hidden = false;
+  $("#ev-job").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+/** Send the job that is shown to the cluster: one login. */
+async function sendJob() {
+  if (!state.job) return;
+  const button = $("#ev-send");
   button.disabled = true;
   alertBox("");
-  // What is on the page belongs to the comparison before this one
-  state.ev = null;
-  $("#ev-result").hidden = true;
+  pill("ev-jobpill", "Logging in and sending…");
   try {
-    let forcefield = { default: true };
-    if (choice === "workspace" && session.forcefield) forcefield = session.forcefield.ref;
-    else if (choice === "upload") {
-      if (!state.pendingFF) { toast("Choose a force field file first."); return; }
-      if (!state.pendingFF.id) {
-        pill("ev-pill", "Sending the force field…");
-        state.pendingFF.id = (await upload(state.pendingFF.file, "forcefield")).id;
-      }
-      forcefield = { file: state.pendingFF.id };
-    }
+    const sent = await (await call("/cluster/jobs", { method: "POST", json: state.job })).json();
+    state.job = null;
+    $("#ev-job").hidden = true;
+    $("#ev-jobname").value = "";
+    pill("ev-pill", "Sent to the cluster", "good");
+    toast(`Sent ${sent.name} to the cluster, job ${sent.slurm} of Slurm`);
+    // The tab Cluster follows the job from here
+    document.dispatchEvent(new CustomEvent("act-cluster-jobs", { detail: { listing: sent, show: true } }));
+  } catch (e) {
+    pill("ev-jobpill", "Not sent", "bad");
+    alertBox("The job was not sent. " + e.message);
+    button.disabled = false;
+  }
+}
+
+/** Show whether the comparison can go to the cluster, and what is asked for then. */
+function places() {
+  $("#ev-where").hidden = !session.clusterReady;
+  const cluster = onCluster();
+  $("#ev-clusteropts").hidden = !cluster;
+  $("#run-ev").textContent = cluster ? "Show the job…" : "Compare";
+  if (!cluster) { $("#ev-job").hidden = true; state.job = null; }
+}
+
+/** Compare the force field that is chosen with the data of the file, here or as a job on the cluster. */
+async function compare() {
+  const button = $("#run-ev");
+  button.disabled = true;
+  alertBox("");
+  $("#ev-job").hidden = true;
+  state.job = null;
+  try {
+    const body = await comparison();
+    if (!body) { pill("ev-pill", ""); return; }
+    if (onCluster()) { await showJob(body); return; }
+    // What is on the page belongs to the comparison before this one
+    state.ev = null;
+    $("#ev-result").hidden = true;
     pill("ev-pill", "Computing…");
-    const job = await runTask({ task: "evaluate", forcefield, observables,
-                                molprop: { file: state.file.file, described: state.file.described } });
+    const job = await runTask(body);
     if (!Object.keys(job.result.statistics).length) {
       pill("ev-pill", "Nothing to compare", "warn");
       alertBox("Nothing could be compared: no compound of the file could be used with this force field, or the file has no data for these properties. The log file tells why.");
@@ -337,6 +426,19 @@ export function startMolprops(told) {
     else if ($("#ev-ff").value === "workspace") $("#ev-ff").value = "default";
   });
   $("#run-ev").onclick = compare;
+  // On the cluster, if the user has one
+  seg($("#ev-place"), places);
+  document.addEventListener("act-cluster", places);
+  $("#ev-send").onclick = sendJob;
+  $("#ev-nosend").onclick = () => { $("#ev-job").hidden = true; state.job = null; };
+  // The results of a job that ran on the cluster, from the tab Cluster
+  document.addEventListener("act-show-result", e => {
+    if (e.detail.job.task !== "evaluate") return;
+    alertBox("");
+    compared(e.detail.job, `· job ${e.detail.name} on the cluster`);
+    $('#nav button[data-view="molprop"]').click();
+    requestAnimationFrame(() => { comparisonPlot(); $("#ev-result").scrollIntoView({ behavior: "smooth", block: "start" }); });
+  });
   $("#ev-plotsel").onchange = comparisonPlot;
   $("#ev-pdf").onclick = e => { if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/plots/${$("#ev-plotsel").value}`, {}, "Making PDF…", "comparison.pdf"); };
   $("#ev-data").onclick = e => { if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/files/${$("#ev-plotsel").value}`, {}, "Saving…", "comparison.xvg"); };

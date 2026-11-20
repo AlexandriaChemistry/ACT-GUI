@@ -936,6 +936,139 @@ class PageTest(unittest.TestCase):
         self.assertEqual({}, json.loads(self.config.read_text()))
         self.assertEqual("", self.browser.find_element(By.ID, "cl-server").get_attribute("value"))
 
+    def test_b_job_on_the_cluster(self):
+        """!
+        @brief The comparison of a force field with a molprop file goes to
+        the cluster: the job is shown, sent, followed in the tab Cluster,
+        and its results are shown as those of a comparison on this
+        computer. A directory stands in for the cluster.
+        """
+        data = Path(TESTDATA)
+        self.open_page()
+        self.click('#nav button[data-view="cluster"]')
+        self.assertTrue(self.browser.find_element(By.ID, "cj-empty").is_displayed())
+        self.assertFalse(self.browser.find_element(By.ID, "cj-ask").is_enabled())
+        for field, value in (("cl-server", "good"), ("cl-user", "spoel"),
+                             ("cl-workdir", "act/jobs")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        Select(self.browser.find_element(By.ID, "cl-load")).select_by_value("none")
+        self.click("#cl-save")
+        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").text)
+        logins = len(self.cluster.calls())
+
+        # The comparison, with the choice of where it runs
+        self.click('#nav button[data-view="molprop"]')
+        self.browser.find_element(By.ID, "mpw-file").send_keys(
+            str(data / "molprop" / "mpdimer.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        self.assertTrue(self.browser.find_element(By.ID, "ev-where").is_displayed())
+        self.assertFalse(self.browser.find_element(By.ID, "ev-clusteropts").is_displayed())
+        self.assertEqual("Compare", self.text("#run-ev"))
+        self.browser.find_element(By.ID, "ev-fffile").send_keys(
+            str(data / "forcefields" / "ACS-pol.xml"))
+        Select(self.browser.find_element(By.ID, "ev-ff")).select_by_value("upload")
+        self.click('#ev-place button[data-v="cluster"]')
+        self.assertTrue(self.browser.find_element(By.ID, "ev-clusteropts").is_displayed())
+        self.assertEqual("Show the job…", self.text("#run-ev"))
+        for field, value in (("ev-jobname", "dimers-1"), ("ev-tasks", "2"), ("ev-hours", "1.5")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        self.click("#ev-gpu")
+        self.browser.execute_script("document.getElementById('run-ev').scrollIntoView()")
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-job").is_displayed())
+        self.assertEqual("", self.errors())
+        self.assertEqual("dimers-1 · spoel@good:act/jobs/dimers-1", self.text("#ev-jobwhere"))
+        script = self.text("#ev-jobscript")
+        for line in ("#SBATCH --job-name=dimers-1", "#SBATCH --partition=GPU,CLUSTER-AMD",
+                     "#SBATCH --gres=gpu:1", "#SBATCH --ntasks=2", "#SBATCH --time=0-01:30:00"):
+            self.assertIn(line, script)
+        self.assertIn("srun alexandria train_ff ", script)
+        self.assertIn(" -ff ff.xml ", script)
+        self.assertIn(" -mp mp.xml ", script)
+        self.assertIn(" -sel selection.dat", script)
+        # No name of a file of this computer
+        self.assertNotIn(self._tmp.name, script)
+        files = self.browser.execute_script(
+            "return [...document.querySelectorAll('#ev-jobfiles tbody tr')]"
+            ".map(r => r.cells[0].textContent)")
+        self.assertEqual(["ff.xml", "mp.xml", "selection.dat"], files)
+        # Showing the job logs in nowhere
+        self.assertEqual(logins, len(self.cluster.calls()))
+        self.browser.execute_script("document.getElementById('ev-job').scrollIntoView()")
+        self.shot("31-cluster-job-shown")
+
+        # Sent: the tab Cluster follows it
+        self.click("#ev-send")
+        self.wait(lambda b: b.find_element(By.ID, "view-cluster").is_displayed())
+        self.assertEqual("", self.errors())
+        self.assertEqual(logins + 1, len(self.cluster.calls()))
+
+        def row():
+            return self.browser.execute_script(
+                "const r = document.querySelector('#cj-table tbody tr[data-job=\"dimers-1\"]');"
+                "return r ? [...r.cells].map(c => c.textContent) : null")
+        self.wait(lambda b: row() is not None)
+        self.assertEqual(["dimers-1", "Compare a force field with the data of a molprop file",
+                          "Waiting"], row()[:3])
+        self.assertEqual("4242", row()[3])
+        self.assertEqual("2 processes, 1 h 30 min, GPU", row()[5])
+        self.assertEqual("spoel@good:act/jobs/dimers-1", row()[6])
+        self.assertIn("Stop", row()[7])
+        self.assertIn("1 not done", self.text("#cj-note"))
+        remote = self.cluster.dir / "home" / "act" / "jobs" / "dimers-1"
+        self.assertEqual(3, len((remote / "selection.dat").read_text().splitlines()))
+        self.assertIn("alexandria_chemistry", (remote / "ff.xml").read_text()[:400])
+
+        # The user asks: one login for the state and one for the results
+        self.assertTrue(self.browser.find_element(By.ID, "cj-ask").is_enabled())
+        self.click("#cj-ask")
+        self.wait(lambda b: row()[2] == "Finished")
+        self.assertEqual(logins + 3, len(self.cluster.calls()))
+        self.assertIn("Show results", row()[7])
+        self.assertIn("Forget", row()[7])
+        self.assertEqual("", self.text("#cj-note"))
+        self.assertFalse(self.browser.find_element(By.ID, "cj-ask").is_enabled())
+        self.assertIn("cluster", self.text("#cj-kept"))
+        self.shot("32-cluster-jobs")
+
+        # The results, where those of a comparison on this computer are
+        self.click('#cj-table button[data-act="open"]')
+        self.wait(lambda b: b.find_element(By.ID, "ev-result").is_displayed())
+        self.assertTrue(self.browser.find_element(By.ID, "view-molprop").is_displayed())
+        self.assertEqual("", self.errors())
+        self.assertIn("job dimers-1 on the cluster", self.text("#ev-source"))
+        rows = self.browser.execute_script(
+            "return [...document.querySelectorAll('#ev-stats tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertEqual(["INTERACTION", "Train", "2", "1"], rows[0][:4])
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#evplot svg path")) >= 2)
+        self.assertIn("2 Train", self.text("#ev-plotnote"))
+        saved = self.saved_file("#ev-data", "evaluate-INTERACTION.xvg", "@")
+        self.assertIn("-20 -19", saved)
+        self.shot("33-cluster-results")
+        self.assertEqual(logins + 3, len(self.cluster.calls()))
+
+        # The page is opened again: the job is still there, and is forgotten
+        self.open_page()
+        self.click('#nav button[data-view="cluster"]')
+        self.wait(lambda b: row() is not None)
+        self.assertEqual("Finished", row()[2])
+        self.click('#cj-table button[data-act="forget"]')
+        self.assertIn("with its results here?", row()[7])
+        self.click('#cj-table button[data-act="forget"]')
+        self.wait(lambda b: b.find_element(By.ID, "cj-empty").is_displayed())
+        self.assertTrue((remote / "job.sh").is_file())
+        self.assertEqual(logins + 3, len(self.cluster.calls()))
+        # Without a cluster the comparison runs on this computer only
+        self.click("#cl-forget")
+        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").text)
+        self.click('#nav button[data-view="molprop"]')
+        self.assertFalse(self.browser.find_element(By.ID, "ev-where").is_displayed())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,9 +14,13 @@
  * logs in with the ssh program of this machine; the page never sees a
  * password or a key.
  *
+ * Below the settings are the jobs that were sent to the cluster. The page
+ * asks the server of the interface for their state; that server decides
+ * when the cluster itself is asked, which is seldom.
+ *
  * All text that comes from the server is put on the page as text.
  */
-import { $, alertBox, call, el, pill, toast } from "./common.js";
+import { $, alertBox, call, el, pill, session, toast } from "./common.js";
 
 /** The fields of the form, by the name of the setting. */
 const FIELDS = {
@@ -60,6 +64,171 @@ function show(state) {
   $("#cl-check").disabled = !state.configured;
   $("#cl-forget").hidden = !state.configured;
   if (state.problem) alertBox(state.problem);
+  // The calculations that can go to the cluster offer it from now on, or no more
+  session.clusterReady = state.configured;
+  document.dispatchEvent(new CustomEvent("act-cluster"));
+}
+
+/* ---------- the jobs on the cluster ---------- */
+
+/** What the page calls the states of a job, and the colour of each. */
+const STATES = {
+  waiting: ["Waiting", ""], running: ["Running", "warn"], finished: ["Finished", "good"], failed: ["Failed", "bad"],
+  lost: ["Ended without result", "bad"], cancelled: ["Stopped", ""],
+};
+/** The jobs as the server last told them, and the timer of the next question. */
+const jobs = { listing: null, timer: null, busy: false };
+
+/**
+ * A time of today as hours and minutes, of another day with the date.
+ * @param {number} seconds Seconds since the epoch.
+ * @returns {string} The time, empty if there is none.
+ */
+function when(seconds) {
+  if (!seconds) return "";
+  const date = new Date(seconds * 1000), today = new Date().toDateString() === date.toDateString();
+  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return today ? time : `${date.toLocaleDateString([], { day: "numeric", month: "short" })} ${time}`;
+}
+
+/**
+ * What a job asked for, in words.
+ * @param {object} job The job.
+ * @returns {string} The processes, the time limit and the GPU.
+ */
+function asked(job) {
+  const hours = Math.floor(job.minutes / 60), minutes = job.minutes % 60;
+  const time = [hours ? `${hours} h` : "", minutes ? `${minutes} min` : ""].filter(Boolean).join(" ");
+  return `${job.tasks} ${job.tasks === 1 ? "process" : "processes"}, ${time}${job.gpu ? ", GPU" : ""}`;
+}
+
+/**
+ * A small button in the row of a job.
+ * @param {string} label The text.
+ * @param {string} act   What it does: stop, fetch, open or forget.
+ * @param {string} name  The name of the job.
+ * @returns {Element} The button.
+ */
+const action = (label, act, name) => el("button", { class: "btn small", type: "button", data: { act, name } }, label);
+
+/**
+ * Show the jobs, and ask the cluster again when it is time.
+ * @param {object} listing What the server says: jobs, poll_seconds, wait, paused, unread, directory and, after a question, problem.
+ */
+function showJobs(listing) {
+  jobs.listing = listing;
+  const table = $("#cj-table"), active = listing.jobs.filter(job => job.state === "waiting" || job.state === "running");
+  table.textContent = "";
+  $("#cj-empty").hidden = listing.jobs.length > 0;
+  if (listing.jobs.length) {
+    table.append(el("thead", {}, el("tr", {}, el("th", {}, "Job"), el("th", {}, "Calculation"), el("th", {}, "State"),
+      el("th", {}, "Slurm"), el("th", {}, "Sent"), el("th", {}, "Asked for"), el("th", {}, "On the cluster"), el("th", {}, ""))));
+    const body = el("tbody");
+    for (const job of listing.jobs) {
+      const [label, kind] = STATES[job.state] || [job.state, ""];
+      const done = job.state !== "waiting" && job.state !== "running";
+      const buttons = el("div", { class: "row tight" });
+      if (!done) buttons.append(action("Stop", "stop", job.name));
+      if (job.state === "finished" && job.fetched) buttons.append(action("Show results", "open", job.name));
+      if (done && job.state !== "cancelled" && !job.fetched) buttons.append(action("Fetch results", "fetch", job.name));
+      if (done) buttons.append(action("Forget", "forget", job.name));
+      body.append(el("tr", { data: { job: job.name } }, el("td", { class: "mono" }, job.name), el("td", {}, job.title),
+        el("td", {}, el("span", { class: "pill" + (kind ? " " + kind : "") }, label)),
+        el("td", { class: "mono" }, job.slurm + (job.slurm_state && !done ? ` ${job.slurm_state.toLowerCase()}` : "")),
+        el("td", {}, when(job.created)), el("td", {}, asked(job)), el("td", { class: "mono" }, `${job.server}:${job.directory}`),
+        el("td", {}, buttons)));
+      if (job.error) body.append(el("tr", { class: "more" }, el("td", { colSpan: 8 }, el("pre", { class: "code" }, job.error))));
+    }
+    table.append(body);
+  }
+  const checked = Math.max(0, ...listing.jobs.map(job => job.checked || 0));
+  $("#cj-note").textContent = active.length
+    ? `${active.length} not done · asked every ${listing.poll_seconds} s` + (checked ? ` · last at ${when(checked)}` : "")
+    : "";
+  $("#cj-ask").disabled = !active.length || jobs.busy;
+  const problem = listing.paused
+    ? listing.paused + " The cluster is not asked again until you press “Ask the cluster now”."
+    : (listing.problem || "");
+  $("#cj-problem").hidden = !problem;
+  $("#cj-problem").textContent = problem;
+  $("#cj-kept").textContent = (listing.jobs.length ? `What is known about the jobs, and their results, are kept in ${listing.directory}. ` : "")
+    + (listing.unread.length ? `Not read, because the file job.json there is not as the interface wrote it: ${listing.unread.join(", ")}.` : "");
+  $("#cj-foot").hidden = !problem && !$("#cj-kept").textContent;
+  // The next question, when there is something to ask and no failed login in the way
+  clearTimeout(jobs.timer);
+  if (active.length && !listing.paused) jobs.timer = setTimeout(() => ask(false), (Math.max(listing.wait, 5) + 1) * 1000);
+}
+
+/**
+ * Ask the cluster how the jobs are doing. The server does not log in more
+ * often than the settings say, whatever is asked here.
+ * @param {boolean} manual Whether it is the user who asks.
+ */
+async function ask(manual) {
+  if (jobs.busy) return;
+  jobs.busy = true;
+  $("#cj-ask").disabled = true;
+  if (manual) pill("cl-pill", "Asking the cluster…");
+  try {
+    const before = jobs.listing ? jobs.listing.jobs : [];
+    const listing = await (await call("/cluster/jobs/check", { method: "POST", params: manual ? { manual: "true" } : {} })).json();
+    jobs.busy = false;
+    showJobs(listing);
+    if (manual) pill("cl-pill", "");
+    if (manual && !listing.asked && listing.wait > 0) toast(`The cluster was asked a moment ago. Try again in ${Math.ceil(listing.wait)} s.`);
+    for (const job of listing.jobs) {
+      const was = before.find(old => old.name === job.name);
+      if (was && was.state !== job.state && job.state !== "waiting" && job.state !== "running") toast(`Job ${job.name}: ${(STATES[job.state] || [job.state])[0].toLowerCase()}`);
+    }
+  } catch (e) {
+    jobs.busy = false;
+    if (manual) { pill("cl-pill", ""); alertBox("The cluster could not be asked. " + e.message); }
+    if (jobs.listing) showJobs(jobs.listing);
+  }
+}
+
+/**
+ * Do what a button in the row of a job says.
+ * @param {Element} button The button.
+ */
+async function jobAction(button) {
+  const { act, name } = button.dataset;
+  if (act === "forget" && button.dataset.sure !== "yes") {
+    // Asked twice: the results on this computer go with the job
+    button.dataset.sure = "yes";
+    button.textContent = "Forget, with its results here?";
+    setTimeout(() => { if (button.isConnected) { button.dataset.sure = ""; button.textContent = "Forget"; } }, 5000);
+    return;
+  }
+  button.disabled = true;
+  alertBox("");
+  try {
+    if (act === "open") {
+      const opened = await (await call(`/cluster/jobs/${encodeURIComponent(name)}/open`, { method: "POST" })).json();
+      const job = await (await call("/jobs/" + opened.job)).json();
+      document.dispatchEvent(new CustomEvent("act-show-result", { detail: { job, name } }));
+      button.disabled = false;
+      return;
+    }
+    const path = `/cluster/jobs/${encodeURIComponent(name)}`;
+    const answer = act === "fetch" ? await call(path + "/fetch", { method: "POST" })
+      : await call(path, { method: "DELETE", params: act === "forget" ? { forget: "true" } : {} });
+    showJobs(await answer.json());
+    toast({ stop: `Stopped ${name}`, forget: `Forgot ${name}`, fetch: `Fetched the results of ${name}` }[act]);
+  } catch (e) {
+    button.disabled = false;
+    alertBox({ stop: "The job could not be stopped. ", forget: "The job could not be forgotten. ",
+               fetch: "The results could not be fetched. ", open: "The results could not be shown. " }[act] + e.message);
+  }
+}
+
+/** Fetch the jobs from the server of the interface, without asking the cluster. */
+async function listJobs() {
+  try {
+    showJobs(await (await call("/cluster/jobs")).json());
+  } catch (e) {
+    alertBox("The jobs on the cluster could not be listed. " + e.message);
+  }
 }
 
 /**
@@ -148,9 +317,20 @@ export async function startCluster(told) {
     field.addEventListener("change", changed);
     if (field.tagName === "INPUT") field.addEventListener("keydown", e => { if (e.key === "Enter") save(); });
   }
+  $("#cj-ask").onclick = () => ask(true);
+  $("#cj-table").addEventListener("click", e => {
+    const button = e.target.closest("button[data-act]");
+    if (button) jobAction(button);
+  });
+  // A job that was sent from another tab
+  document.addEventListener("act-cluster-jobs", e => {
+    showJobs(e.detail.listing);
+    if (e.detail.show) tab.click();
+  });
   try {
     show(await (await call("/cluster")).json());
   } catch (e) {
     alertBox("The settings of the cluster could not be fetched. " + e.message);
   }
+  await listJobs();
 }
