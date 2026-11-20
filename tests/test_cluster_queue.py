@@ -28,7 +28,8 @@ from tests.test_cluster import FakeServer
 
 ## The options of the stand-in for the commands that write a file, with
 ## the name of the file if none is given
-OUTPUTS = {"json": "%s.json", "epotcorr": "epot_corr.xvg", "o": "out.xml", "g": "%s.log"}
+OUTPUTS = {"json": "%s.json", "epotcorr": "epot_corr.xvg", "o": "out.xml", "g": "%s.log",
+           "progress": "progress.jsonl"}
 
 
 def fake_arguments(command, options, workdir):
@@ -274,6 +275,55 @@ class QueueTest(QueueCase):
                          tuple(summary[key] for key in ("name", "task", "state", "server",
                                                         "directory", "fetched")))
         self.assertNotIn(str(self.dir), json.dumps(summary))
+
+    def test_progress_of_a_job(self):
+        """!
+        @brief How far a job is comes with its state, in the same login,
+        and is kept with the job; when the job has ended, all it reported
+        is on this machine.
+        """
+        job = self.send(progress=True)
+        self.assertEqual("progress.jsonl", job.progress_file)
+        self.assertIsNone(job.progress)
+        # As if it were still running
+        (self.server.dir / "queue").write_text("RUNNING\n")
+        (self.remote / "job1" / "act-exit-status").unlink()
+        self.clock.now += 200
+        self.assertTrue(self.queue.check(120)["asked"])
+        self.assertEqual(2, self.logins())
+        expected = {"event": "generation", "generation": 2, "ngenerations": 3, "chi2": 46.5,
+                    "seconds": 3.0}
+        self.assertEqual(("running", expected), (job.state, job.progress))
+        self.assertEqual(expected, self.queue.summaries()[0]["progress"])
+        self.assertEqual([], self.queue.progress_reports("job1", 10))
+        # Kept between runs, and checked when it is read
+        self.assertEqual(expected, self.new_queue().get("job1").progress)
+        record = self.local / "job1" / "job.json"
+        content = json.loads(record.read_text())
+        content["progress"] = {"event": "generation", "generation": "<b>", "more": [1]}
+        record.write_text(json.dumps(content))
+        self.assertEqual({"event": "generation"}, self.new_queue().get("job1").progress)
+        content["progress"] = "rm -rf"
+        record.write_text(json.dumps(content))
+        self.assertIsNone(self.new_queue().get("job1").progress)
+        # The job ends: what it reported comes with the results
+        (self.server.dir / "queue").unlink()
+        (self.remote / "job1" / "act-exit-status").write_text("0\n")
+        self.clock.now += 200
+        self.assertTrue(self.queue.check(120)["asked"])
+        self.assertEqual(("finished", True), (job.state, job.fetched))
+        reports = self.queue.progress_reports("job1", 10)
+        self.assertEqual(["start", "generation", "generation", "step"],
+                         [report["event"] for report in reports])
+        self.assertEqual(reports[:2], self.queue.progress_reports("job1", 2))
+        # Lines that are no objects are left out
+        (self.local / "job1" / "progress.jsonl").write_text('{"event":"start"}\nnot json\n[1]\n')
+        self.assertEqual([{"event": "start"}], self.queue.progress_reports("job1", 10))
+        # A job that does not report, and one that does not exist
+        self.send("job2")
+        self.assertEqual("", self.queue.get("job2").progress_file)
+        self.assertEqual([], self.queue.progress_reports("job2", 10))
+        self.assertEqual([], self.queue.progress_reports("nosuchjob", 10))
 
     def test_jobs_are_there_when_the_interface_starts_again(self):
         """!

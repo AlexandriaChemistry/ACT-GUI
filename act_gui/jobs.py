@@ -268,7 +268,8 @@ class JobManager:
 
     def adopt(self, task: str, command: str, workdir: Path, result: Any,
               files: Mapping[str, Path], *, inputs: Optional[Mapping[str, Path]] = None,
-              created: Optional[float] = None, ended: Optional[float] = None) -> Job:
+              created: Optional[float] = None, ended: Optional[float] = None,
+              progress: Optional[Sequence[Any]] = None) -> Job:
         """!
         @brief Take in a job that ran elsewhere, such as on a cluster, and
         of which the results are on this machine. From here on it is a
@@ -281,13 +282,15 @@ class JobManager:
         @param inputs  Those of the files that were made for the job.
         @param created When the job was made, now if None.
         @param ended   When it ended, now if None.
+        @param progress The reports of its progress, if it made them.
         @return The job.
         """
         now = time.time()
         job = Job(id=uuid.uuid4().hex, task=task, command=command, workdir=Path(workdir),
                   status=FINISHED, created=now if created is None else created,
                   ended=now if ended is None else ended, result=result,
-                  files=dict(files), inputs=dict(inputs or {}))
+                  files=dict(files), inputs=dict(inputs or {}),
+                  progress=list(progress or [])[:self._max_progress])
         with self._lock:
             self._jobs[job.id] = job
         return job

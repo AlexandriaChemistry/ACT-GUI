@@ -396,10 +396,12 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         result = job.result
         return result.get("molecules") if isinstance(result, dict) else None
 
-    def prepare(body: Any) -> Tuple[Task, Prepared]:
+    def prepare(body: Any, processes: Optional[int] = None) -> Tuple[Task, Prepared]:
         """!
         @brief Check a request for a calculation.
-        @param body The request.
+        @param body      The request.
+        @param processes The number of processes that the command will run
+        on when that is not up to the request, as for a job on a cluster.
         @return The task and the options of its command.
         """
         try:
@@ -407,7 +409,8 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
                 raise RequestError("The request must be an object")
             task = find_task(body.get("task"))
             return task, build_request(task, body, settings, uploads, written_forcefield,
-                                       described_molprop)
+                                       described_molprop,
+                                       processes if task.parallel else None)
         except RequestError as exc:
             raise fail(400, str(exc)) from exc
 

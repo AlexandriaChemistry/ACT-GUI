@@ -209,7 +209,7 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          plots=evaluation.PLOTS,
          needs=(FORCEFIELD, MOLPROP, SELECTION, OBSERVABLES, TRAINING), forcefield="o",
          workspace="molprop", collect=evaluation.DIMER_FILES, scatter=True,
-         digest=training.digest, parallel=True),
+         digest=training.digest, cluster=True, parallel=True),
 )}
 
 ## The values that the option mut of edit_ff takes

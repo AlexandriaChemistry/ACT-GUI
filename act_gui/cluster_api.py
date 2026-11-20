@@ -30,8 +30,8 @@ from fastapi import FastAPI, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
 from . import cluster_jobs
-from .cluster import ClusterError, ClusterSettings
-from .cluster_queue import ACTIVE, ClusterQueue, Plan, make_plan
+from .cluster import MAX_TASKS, ClusterError, ClusterSettings
+from .cluster_queue import ACTIVE, PROGRESS, ClusterQueue, Plan, make_plan
 from .jobs import JobManager
 from .tasks import TASKS, Prepared, Task
 
@@ -39,10 +39,12 @@ from .tasks import TASKS, Prepared, Task
 CHOICES = ("name", "tasks", "minutes", "gpu")
 ## The largest number of jobs that wait or run on the cluster
 MAX_ACTIVE = 50
+## The largest number of reports of its progress that are read of a job
+MAX_REPORTS = 5000
 
 
 def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
-             prepare: Callable[[Any], Tuple[Task, Prepared]],
+             prepare: Callable[..., Tuple[Task, Prepared]],
              arguments: Callable[..., Any],
              fail: Callable[[int, str], HTTPException]) -> None:
     """!
@@ -51,8 +53,9 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
     @param manager   The job engine, which takes in the results.
     @param queue     The jobs on the cluster.
     @param prepare   The function that checks a request for a calculation
-    and gives the task and the options of its command. It raises the answer
-    for a request that is not accepted.
+    and gives the task and the options of its command, for the request and
+    the number of processes of the job. It raises the answer for a request
+    that is not accepted.
     @param arguments The function that makes the arguments of a command,
     see cluster_queue.make_plan().
     @param fail      The function that makes the answer for an error.
@@ -93,15 +96,24 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         @param name    The name of the job.
         @return The plan.
         """
-        task, prepared = prepare(body)
+        chosen = body.get("cluster") or {}
+        tasks = chosen.get("tasks", 1)
+        if isinstance(tasks, bool) or not isinstance(tasks, int) or not 1 <= tasks <= MAX_TASKS:
+            raise fail(400, "The number of processes is between 1 and %d" % MAX_TASKS)
+        # A command with an individual for each process gets as many as the job has
+        task, prepared = prepare(body, tasks)
         if not task.cluster:
             raise fail(400, "%s runs on this computer only" % task.title)
-        chosen = body.get("cluster") or {}
+        options = dict(prepared.options)
+        if task.progress:
+            # In a file in the directory of the job, which is read when
+            # the cluster is asked for the state of the job
+            options[PROGRESS] = True
         try:
-            return make_plan(name, task.name, task.command, prepared.options, staging,
+            return make_plan(name, task.name, task.command, options, staging,
                              arguments, app.state.cluster, outputs=dict(task.outputs),
                              inputs=prepared.inputs, collect=dict(task.collect),
-                             tasks=chosen.get("tasks", 1), minutes=chosen.get("minutes", 60),
+                             tasks=tasks, minutes=chosen.get("minutes", 60),
                              gpu=chosen.get("gpu", False))
         except (ValueError, OSError) as exc:
             # Also an option that the command does not take
@@ -239,7 +251,8 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         if task.digest is not None:
             data = task.digest(data)
         adopted = manager.adopt(task.name, task.command, queue.directory(name), data, files,
-                                inputs=inputs, created=job.created, ended=job.ended)
+                                inputs=inputs, created=job.created, ended=job.ended,
+                                progress=queue.progress_reports(name, MAX_REPORTS))
         queue.adopted(name, adopted.id)
         return {"job": adopted.id, "task": task.name}
 

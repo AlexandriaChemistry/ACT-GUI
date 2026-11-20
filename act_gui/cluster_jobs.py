@@ -24,6 +24,7 @@ checked before they are used.
 from __future__ import annotations
 
 import io
+import json
 import re
 import subprocess
 import tarfile
@@ -47,6 +48,10 @@ RUNNING = ("RUNNING", "COMPLETING", "STAGE_OUT", "SIGNALING")
 ## Seconds that one login may take, for commands that move files and others
 TRANSFER_TIMEOUT = 600.0
 COMMAND_TIMEOUT = 60.0
+
+## What a line of the progress file of a job can be, and its largest length
+PROGRESS_EVENTS = ("start", "step", "generation")
+MAX_PROGRESS_LINE = 2000
 ## The largest result that is fetched, in bytes
 MAX_FETCH_BYTES = 2 * 1024 ** 3
 
@@ -193,41 +198,99 @@ def submit(settings: ClusterSettings, name: str, script: str,
     return slurm_id
 
 
-def status_all(settings: ClusterSettings, jobs: Sequence[Tuple[str, str]], *,
+def progress_summary(report: Any) -> Optional[Dict[str, Any]]:
+    """!
+    @brief What is kept of a line of the progress file of a job, which
+    comes from the cluster: a few numbers, nothing else.
+    @param report The line as an object, or as the text of one; or what
+    this function made of a line before.
+    @return The event (start, step or generation) and, as far as the line
+    has them, the generation, the numbers of generations and iterations,
+    the iteration, the lowest chi squared on the compounds for training
+    and the seconds since the start. None if it is no such line.
+    """
+    if isinstance(report, str):
+        if len(report) > MAX_PROGRESS_LINE:
+            return None
+        try:
+            report = json.loads(report)
+        except ValueError:
+            return None
+    if not isinstance(report, dict) or report.get("event") not in PROGRESS_EVENTS:
+        return None
+
+    def number(value: Any) -> Optional[float]:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or value != value or value in (float("inf"), float("-inf")):
+            return None
+        return value
+    kept: Dict[str, Any] = {"event": report["event"]}
+    for key in ("generation", "ngenerations", "niterations", "iteration"):
+        value = number(report.get(key))
+        if value is not None:
+            kept[key] = value
+    # The lowest so far, or at the start the one of the first population
+    for key in ("best", "chi2"):
+        value = report.get(key)
+        lowest = number(value.get("train")) if isinstance(value, dict) else number(value)
+        if lowest is not None:
+            kept["chi2"] = lowest
+            break
+    elapsed = report.get("elapsed")
+    seconds = number(elapsed.get("value")) if isinstance(elapsed, dict) \
+        else number(report.get("seconds"))
+    if seconds is not None:
+        kept["seconds"] = seconds
+    return kept
+
+
+def status_all(settings: ClusterSettings, jobs: Sequence[Sequence[str]], *,
                program: str = "ssh",
                run: Optional[Callable[..., Any]] = None) -> Dict[str, Dict[str, Any]]:
     """!
     @brief Ask how jobs are doing, all of them in one login.
     @param settings The settings of the cluster.
-    @param jobs     For each job its name and the number that Slurm gave it.
+    @param jobs     For each job its name, the number that Slurm gave it
+    and, for a job that reports its progress, the name of the file in
+    which it does.
     @param program  The ssh program.
     @param run      The function that runs a command, subprocess.run() if None.
     @return For each job, by name, an object with "state": waiting,
     running, finished, failed or lost (Slurm has the job no more and it
     left no exit status: it was stopped or ran out of time); "slurm" with
-    the state as Slurm names it, and "exit" with the exit status of the
-    program if it ended.
+    the state as Slurm names it, "exit" with the exit status of the
+    program if it ended, and "progress" with what progress_summary() makes
+    of the last line of its progress file, the last one for a generation
+    if there is one.
     @throws ClusterError if the server could not be asked.
     """
     if not jobs:
         return {}
     questions = []
-    for name, slurm_id in jobs:
+    for name, slurm_id, *more in jobs:
         directory = _job_dir(settings, name)
         asked = remote_command(["squeue", "-h", "-j", _check_id(slurm_id), "-o", "%T"])
         questions.append('echo ACT-JOB %s "state=$(%s 2>/dev/null | head -n 1)" '
                          '"exit=$(cat %s 2>/dev/null | head -n 1)"'
                          % (remote_command([name]), asked,
                             remote_command(["%s/%s" % (directory, STATUS_FILE)])))
+        if more and more[0]:
+            report = remote_command(["%s/%s" % (directory, more[0])])
+            questions.append('echo ACT-PROGRESS %s "$( (grep \'"event":"generation"\' %s '
+                             '|| tail -n 1 %s) 2>/dev/null | tail -n 1)"'
+                             % (remote_command([name]), report, report))
     done = _run(settings, "; ".join(questions), program=program, run=run,
                 timeout=COMMAND_TIMEOUT)
     found: Dict[str, Dict[str, str]] = {}
+    reports: Dict[str, Optional[Dict[str, Any]]] = {}
     for line in done.stdout.decode("utf-8", errors="replace").splitlines():
         words = line.split()
         if len(words) >= 2 and words[0] == "ACT-JOB":
             found[words[1]] = dict(word.split("=", 1) for word in words[2:] if "=" in word)
+        elif len(words) >= 3 and words[0] == "ACT-PROGRESS":
+            reports[words[1]] = progress_summary(line.split(None, 2)[2])
     answers: Dict[str, Dict[str, Any]] = {}
-    for name, _ in jobs:
+    for name, *_ in jobs:
         said = found.get(name)
         if said is None or "state" not in said or "exit" not in said:
             raise ClusterError("The state of the job %s could not be read on %s: %s"
@@ -244,6 +307,8 @@ def status_all(settings: ClusterSettings, jobs: Sequence[Tuple[str, str]], *,
             answer["state"] = "running"
         else:
             answer["state"] = "lost"
+        if reports.get(name) is not None:
+            answer["progress"] = reports[name]
         answers[name] = answer
     return answers
 

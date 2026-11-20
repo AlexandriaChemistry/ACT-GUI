@@ -141,6 +141,53 @@ class ClusterJobTest(unittest.TestCase):
                          cluster_jobs.status(self.settings, "job2", "4242", program=self.ssh))
         # Each question is one login
         self.assertEqual(2 + 6, len(self.server.calls()))
+
+    def test_progress_of_a_job(self):
+        """!
+        @brief A job that reports its progress is asked for it in the same
+        login as for its state: the last generation, or without one the
+        last line. Of what the cluster sends only a few numbers are kept.
+        """
+        self.send("job1", ("train_ff", "-progress", "progress.jsonl"))
+        self.send("job2", ("train_ff",))
+        # As if they were still running
+        (self.server.dir / "queue").write_text("RUNNING\n")
+        for name in ("job1", "job2"):
+            (self.remote / name / "act-exit-status").unlink()
+        logins = len(self.server.calls())
+        said = cluster_jobs.status_all(self.settings, [("job1", "4242", "progress.jsonl"),
+                                                       ("job2", "4242", ""),
+                                                       ("job3", "4242")], program=self.ssh)
+        self.assertEqual(logins + 1, len(self.server.calls()))
+        self.assertEqual({"slurm": "RUNNING", "state": "running",
+                          "progress": {"event": "generation", "generation": 2,
+                                       "ngenerations": 3, "chi2": 46.5, "seconds": 3.0}},
+                         said["job1"])
+        self.assertNotIn("progress", said["job2"])
+        self.assertNotIn("progress", said["job3"])
+        # Before the first generation: the last line that is there
+        report = self.remote / "job1" / "progress.jsonl"
+        report.write_text(report.read_text().splitlines()[0] + "\n")
+        said = cluster_jobs.status_all(self.settings, [("job1", "4242", "progress.jsonl")],
+                                       program=self.ssh)
+        self.assertEqual({"event": "start", "ngenerations": 3, "niterations": 20, "chi2": 96.5},
+                         said["job1"]["progress"])
+        # A file that is not there yet, or that has something else
+        report.unlink()
+        self.assertNotIn("progress", cluster_jobs.status_all(
+            self.settings, [("job1", "4242", "progress.jsonl")], program=self.ssh)["job1"])
+        for text in ("$(reboot)\n", '{"event":"reboot","generation":1}\n', "[1, 2]\n",
+                     '{"event":"generation","generation":"<b>1</b>","best":{"train":"x"}}\n',
+                     '{"event":"step","x":"' + "y" * 3000 + '"}\n'):
+            report.write_text(text)
+            said = cluster_jobs.status_all(self.settings, [("job1", "4242", "progress.jsonl")],
+                                           program=self.ssh)["job1"]
+            self.assertIn(said.get("progress"), (None, {"event": "generation"}), text)
+        # The name of the file is checked as the other names in a command
+        self.assertEqual({"event": "generation"}, cluster_jobs.progress_summary(
+            {"event": "generation", "best": {"train": float("nan")}, "generation": True}))
+        self.assertIsNone(cluster_jobs.progress_summary({"generation": 1}))
+        self.assertIsNone(cluster_jobs.progress_summary(None))
         for wrong in ("42; reboot", "", "-1", "abc", 42):
             with self.assertRaises(cluster.ClusterError):
                 cluster_jobs.status(self.settings, "job1", wrong, program=self.ssh)

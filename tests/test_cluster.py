@@ -332,10 +332,21 @@ while [ $# -gt 0 ]; do
                                   "atoms": {"0": {"fx": 1}},
                                   "interaction_energies": {"c": {}}}},
               "statistics": {"Train": {"INTERACTION": {"N": 2, "RMSD": 1.0}}},
+              "parameters": {"0": {"class": "sigma", "name": "ow", "best": 0.3}},
+              "sensitivity": {"mode": "1D", "minimum": "yes"},
               "outliers": {}}}
 END
       printf '@ s0 legend "Train"\n-20 -19\n-5 -6\n&\n' > INTERACTION.xvg;;
     -epotcorr) printf '@ s0 legend "Train"\n1 2\n3 4\n&\n' > "$2";;
+    -o) echo "<alexandria_chemistry/>" > "$2";;
+    -progress)
+      cat > "$2" <<END
+{"event":"start","optimizer":"HYBRID","ngenerations":3,"niterations":20,"population":4,"nparameters":6,"chi2":{"train":96.5}}
+{"event":"generation","generation":1,"ngenerations":3,"best":{"train":51.25},"improved":true,"elapsed":{"value":1.5,"unit":"s"}}
+{"event":"generation","generation":2,"ngenerations":3,"best":{"train":46.5},"improved":true,"elapsed":{"value":3.0,"unit":"s"}}
+{"event":"step","generation":3,"iteration":0.5,"chi2":{"train":80.0},"best":{"train":60.0},"elapsed":{"value":3.5,"unit":"s"}}
+END
+      ;;
     -fail) status=3;;
   esac
   shift

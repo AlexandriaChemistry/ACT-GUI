@@ -323,14 +323,17 @@ function trainingRequest(body) {
     options.seed = whole("#tr-seed", 1, 2147483647);
     if (options.seed === null) { toast("The random seed is a whole number above zero."); return null; }
   }
-  const processes = whole("#tr-procs", chosen.parallel ? 2 : 1, state.maxProcesses);
+  // On the cluster the job has the processes, which are asked for with the job
+  const cluster = onCluster(), most = cluster ? Number($("#ev-tasks").max) : state.maxProcesses;
+  const processes = whole(cluster ? "#ev-tasks" : "#tr-procs", chosen.parallel ? 2 : 1, most);
   if (processes === null) {
-    toast(chosen.parallel ? `${chosen.name} needs between 2 and ${state.maxProcesses} processes.` : `Give between 1 and ${state.maxProcesses} processes.`);
+    toast(chosen.parallel ? `${chosen.name} needs between 2 and ${most} processes.` : `Give between 1 and ${most} processes.`);
     return null;
   }
   const percent = Number($("#tr-test").value || 0);
   if (!(percent >= 0 && percent <= 100 * state.training.max_test)) { toast(`At most ${100 * state.training.max_test} % of the compounds can be kept for testing.`); return null; }
-  return { ...body, task: "train", options, processes, training: { fit, test: percent / 100 } };
+  const request = { ...body, task: "train", options, training: { fit, test: percent / 100 } };
+  return cluster ? request : { ...request, processes };
 }
 
 /** Plot the chi squared of a training as far as it is, and tell how far that is. */
@@ -504,10 +507,12 @@ async function sendJob() {
 
 /** Show whether the comparison can go to the cluster, and what is asked for then. */
 function places() {
-  // A training runs on this computer only, for now
-  $("#ev-where").hidden = !session.clusterReady || training();
+  $("#ev-where").hidden = !session.clusterReady;
   const cluster = onCluster();
   $("#ev-clusteropts").hidden = !cluster;
+  // The processes of a training on the cluster are those of the job
+  $("#tr-procfield").hidden = cluster;
+  if (cluster && training() && optimizer().parallel && Number($("#ev-tasks").value) < 2) $("#ev-tasks").value = "4";
   $("#run-ev").textContent = cluster ? "Show the job…" : training() ? "Train" : "Compare";
   if (!cluster) { $("#ev-job").hidden = true; state.job = null; }
 }
@@ -628,11 +633,26 @@ export function startMolprops(told) {
   $("#ev-nosend").onclick = () => { $("#ev-job").hidden = true; state.job = null; };
   // The results of a job that ran on the cluster, from the tab Cluster
   document.addEventListener("act-show-result", e => {
-    if (e.detail.job.task !== "evaluate") return;
+    const job = e.detail.job, train = job.task === "train";
+    if (job.task !== "evaluate" && !train) return;
     alertBox("");
-    compared(e.detail.job, `· job ${e.detail.name} on the cluster`);
+    $("#tr-run").hidden = !train || !(job.progress || []).length;
+    $("#tr-result").hidden = true;
+    if (train) {
+      // How the training went, from what it reported on the cluster
+      state.tr = { points: job.progress || [], job: null, running: null };
+      $("#tr-stop").hidden = true;
+      $("#trplot").textContent = ""; $("#tr-plotnote").textContent = ""; $("#tr-status").textContent = "";
+      $("#tr-bar").style.width = "100%";
+      trained(job);
+    }
+    compared(job, `· job ${e.detail.name} on the cluster` + (train ? ", the trained force field" : ""));
     $('#nav button[data-view="molprop"]').click();
-    requestAnimationFrame(() => { comparisonPlot(); $("#ev-result").scrollIntoView({ behavior: "smooth", block: "start" }); });
+    requestAnimationFrame(() => {
+      if (train) trainingPlot();
+      comparisonPlot();
+      $(!train ? "#ev-result" : $("#tr-run").hidden ? "#tr-result" : "#tr-run").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   });
   $("#ev-plotsel").onchange = comparisonPlot;
   $("#ev-pdf").onclick = e => { if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/plots/${$("#ev-plotsel").value}`, {}, "Making PDF…", "comparison.pdf"); };

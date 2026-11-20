@@ -44,6 +44,8 @@ from .jobs import InputFile, place_files
 PROGRAM = "alexandria"
 ## The file with what is known about a job, in its directory on this machine
 RECORD = "job.json"
+## The option of a command for the file in which it reports its progress
+PROGRESS = "progress"
 ## The states of a job on the cluster
 WAITING, RUNNING, FINISHED, FAILED, LOST, CANCELLED = (
     "waiting", "running", "finished", "failed", "lost", "cancelled")
@@ -242,9 +244,22 @@ class ClusterJob:
     error: str = ""
     ## The number of times in a row that Slurm did not know the job
     missing: int = 0
+    ## How far the job was when the cluster was last asked, for a job that
+    ## reports its progress: what cluster_jobs.progress_summary() gives
+    progress: Optional[Dict[str, Any]] = None
     ## The identifier of the job in the job engine, once its results are
     ## shown. Not kept in the file.
     job: str = ""
+
+    @property
+    def progress_file(self) -> str:
+        """!
+        @brief The file in which the job reports its progress.
+        @return The name of the file in the directory of the job, empty if
+        the job does not report its progress.
+        """
+        names = self.outputs.get(PROGRESS) or []
+        return names[0] if names else ""
 
     def summary(self) -> Dict[str, Any]:
         """!
@@ -257,7 +272,8 @@ class ClusterJob:
                 "tasks": self.tasks, "minutes": self.minutes, "gpu": self.gpu,
                 "server": "%s@%s" % (self.cluster.user, self.cluster.server),
                 "directory": "%s/%s" % (self.cluster.workdir, self.name),
-                "fetched": self.fetched, "error": self.error, "job": self.job}
+                "fetched": self.fetched, "error": self.error, "job": self.job,
+                "progress": self.progress}
 
 
 def _names(given: Any, lists: bool) -> Dict[str, Any]:
@@ -314,7 +330,8 @@ def _from_record(content: Any) -> ClusterJob:
         inputs=_names(content.get("inputs", {}), False),
         collect=_names(content.get("collect", {}), False),
         fetched=bool(content.get("fetched", False)), error=content.get("error", ""),
-        missing=int(content.get("missing", 0)), **numbers)
+        missing=int(content.get("missing", 0)),
+        progress=cluster_jobs.progress_summary(content.get("progress")), **numbers)
 
 
 class ClusterQueue:
@@ -540,7 +557,8 @@ class ClusterQueue:
             for settings, jobs in groups.items():
                 try:
                     states = cluster_jobs.status_all(
-                        settings, [(job.name, job.slurm) for job in jobs],
+                        settings, [(job.name, job.slurm, job.progress_file)
+                                   for job in jobs],
                         program=self._program, run=self._run)
                 except ClusterError as exc:
                     problems.append(str(exc))
@@ -578,6 +596,8 @@ class ClusterQueue:
             job.state = state
             if "exit" in said:
                 job.exit = int(said["exit"])
+            if said.get("progress") is not None:
+                job.progress = said["progress"]
             if state not in ACTIVE:
                 job.ended = now
         problem = ""
@@ -682,6 +702,35 @@ class ClusterQueue:
             if isinstance(data, dict) and len(data) == 1:
                 data = next(iter(data.values()))
         return data, files, inputs
+
+    def progress_reports(self, name: str, limit: int) -> List[Any]:
+        """!
+        @brief The progress of a job as it reported it, from the file that
+        was fetched with its results.
+        @param name  The name of the job.
+        @param limit The largest number of reports.
+        @return The lines of the file that are objects, the first ones if
+        there are more than the limit. Empty if the job did not report.
+        """
+        job = self.get(name)
+        if job is None or not job.progress_file:
+            return []
+        reports: List[Any] = []
+        try:
+            with open(self._dir / job.name / job.progress_file, encoding="utf-8",
+                      errors="replace") as lines:
+                for line in lines:
+                    if len(reports) >= limit:
+                        break
+                    try:
+                        report = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(report, dict):
+                        reports.append(report)
+        except OSError:
+            return []
+        return reports
 
     def adopted(self, name: str, job_id: str) -> None:
         """!
