@@ -871,19 +871,45 @@ class PageTest(unittest.TestCase):
                 box = self.browser.find_element(By.ID, field)
                 box.clear()
                 box.send_keys(value)
+        def value(field):
+            return self.browser.find_element(By.ID, field).get_attribute("value")
+        # What is proposed: the module ACT and the partitions of csb
+        self.assertEqual(("module", "ACT", "CLUSTER,CLUSTER-AMD", "GPU,CLUSTER-AMD", "gpu:1", "",
+                          "srun", "120"),
+                         tuple(value(f) for f in ("cl-load", "cl-loadname", "cl-partition",
+                                                  "cl-gpupartition", "cl-gres", "cl-account",
+                                                  "cl-launcher", "cl-poll")))
+        self.assertEqual("Name of the module", self.text("#cl-loadlabel"))
         # Settings that cannot be are refused and not kept
         fill("-oProxyCommand=evil", "spoel", "act")
         self.click("#cl-save")
         self.wait(lambda b: "name of a server" in self.errors())
         self.assertFalse(self.config.exists())
         fill("good", "spoel", "act/jobs/")
+        # ACT from a file that the shell reads, and other partitions
+        Select(self.browser.find_element(By.ID, "cl-load")).select_by_value("source")
+        self.assertEqual("The file, with its path", self.text("#cl-loadlabel"))
+        for field, text in (("cl-loadname", "/opt/act/bin/ACTRC"), ("cl-partition", "cpu,cpu-long")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(text)
         self.click("#cl-save")
         self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").text)
         self.assertEqual("", self.errors())
-        self.assertEqual({"cluster": {"server": "good", "user": "spoel", "workdir": "act/jobs"}},
+        self.assertIn("cpu,cpu-long", self.text("#cl-chips"))
+        self.assertEqual({"cluster": {"server": "good", "user": "spoel", "workdir": "act/jobs",
+                                      "load": "source", "load_name": "/opt/act/bin/ACTRC",
+                                      "partition": "cpu,cpu-long",
+                                      "gpu_partition": "GPU,CLUSTER-AMD", "gpu_gres": "gpu:1",
+                                      "account": "", "launcher": "srun", "poll_seconds": 120}},
                          json.loads(self.config.read_text()))
-        self.assertEqual("act/jobs", self.browser.find_element(
-            By.ID, "cl-workdir").get_attribute("value"))
+        self.assertEqual("act/jobs", value("cl-workdir"))
+        # Nothing to load: the field for it goes away
+        Select(self.browser.find_element(By.ID, "cl-load")).select_by_value("none")
+        self.assertFalse(self.browser.find_element(By.ID, "cl-loadfield").is_displayed())
+        Select(self.browser.find_element(By.ID, "cl-load")).select_by_value("source")
+        self.click("#cl-save")
+        self.wait(lambda b: b.find_element(By.ID, "cl-check").is_enabled())
         # The login
         self.click("#cl-check")
         self.wait(lambda b: b.find_element(By.ID, "cl-pill").text == "Ready")

@@ -8,29 +8,49 @@
  */
 /**
  * @file The cluster for long jobs: the user gives the server, the user
- * name there and a working directory. The server of the interface keeps
- * them in a file that it reads when it starts, and logs in with the ssh
- * program of this machine; the page never sees a password or a key.
+ * name there and a working directory, and can change how ACT is made
+ * available in a job and where jobs go in Slurm. The server of the
+ * interface keeps the settings in a file that it reads when it starts, and
+ * logs in with the ssh program of this machine; the page never sees a
+ * password or a key.
  *
  * All text that comes from the server is put on the page as text.
  */
 import { $, alertBox, call, el, pill, toast } from "./common.js";
 
 /** The fields of the form, by the name of the setting. */
-const FIELDS = { server: "cl-server", user: "cl-user", workdir: "cl-workdir" };
+const FIELDS = {
+  server: "cl-server", user: "cl-user", workdir: "cl-workdir", load: "cl-load", load_name: "cl-loadname",
+  partition: "cl-partition", gpu_partition: "cl-gpupartition", gpu_gres: "cl-gres", account: "cl-account",
+  launcher: "cl-launcher", poll_seconds: "cl-poll",
+};
+/** What is asked for with each way of making ACT available. */
+const LOAD_LABELS = { module: "Name of the module", source: "The file, with its path", conda: "Name of the environment" };
+
+/** Show the field for what is loaded, with the question that fits the way. */
+function loadKind() {
+  const kind = $("#cl-load").value;
+  $("#cl-loadfield").hidden = kind === "none";
+  $("#cl-loadlabel").textContent = LOAD_LABELS[kind] || "";
+}
 
 /**
  * Show the settings that the server has.
- * @param {object} state What the server says: configured, cluster, file and problem.
+ * @param {object} state What the server says: configured, cluster, proposed, file and problem.
  */
 function show(state) {
-  for (const [key, id] of Object.entries(FIELDS)) $("#" + id).value = state.cluster ? state.cluster[key] : "";
+  // What the user has not given yet starts with what is proposed
+  const values = { server: "", user: "", workdir: "", ...state.proposed, ...(state.cluster || {}) };
+  for (const [key, id] of Object.entries(FIELDS)) $("#" + id).value = values[key];
+  loadKind();
   const chips = $("#cl-chips");
   chips.textContent = "";
   if (state.configured) {
     const c = state.cluster;
     chips.append(el("span", { class: "chip" }, "jobs go to ", el("b", {}, `${c.user}@${c.server}`)),
-                 el("span", { class: "chip" }, "in ", el("b", {}, c.workdir)));
+                 el("span", { class: "chip" }, "in ", el("b", {}, c.workdir)),
+                 el("span", { class: "chip" }, "partitions ", el("b", {}, c.partition)),
+                 el("span", { class: "chip" }, "with a GPU ", el("b", {}, `${c.gpu_partition}, ${c.gpu_gres}`)));
   } else {
     chips.append(el("span", { class: "chip" }, "No cluster yet. Long jobs cannot be sent anywhere."));
   }
@@ -44,11 +64,14 @@ function show(state) {
 
 /**
  * What the form says.
- * @returns {object} server, user and workdir.
+ * @returns {object} The settings, as the server takes them.
  */
 function form() {
   const given = {};
   for (const [key, id] of Object.entries(FIELDS)) given[key] = $("#" + id).value.trim();
+  // A whole number; what is no number is refused by the server with a message
+  const seconds = Number(given.poll_seconds);
+  given.poll_seconds = given.poll_seconds !== "" && Number.isInteger(seconds) ? seconds : given.poll_seconds;
   return given;
 }
 
@@ -117,10 +140,13 @@ export async function startCluster(told) {
   $("#cl-save").onclick = save;
   $("#cl-check").onclick = check;
   $("#cl-forget").onclick = forget;
+  $("#cl-load").addEventListener("change", loadKind);
   // The settings that were saved are checked, so a change has to be saved first
   for (const id of Object.values(FIELDS)) {
-    $("#" + id).addEventListener("input", () => { $("#cl-check").disabled = true; result(""); });
-    $("#" + id).addEventListener("keydown", e => { if (e.key === "Enter") save(); });
+    const field = $("#" + id), changed = () => { $("#cl-check").disabled = true; result(""); };
+    field.addEventListener("input", changed);
+    field.addEventListener("change", changed);
+    if (field.tagName === "INPUT") field.addEventListener("keydown", e => { if (e.key === "Enter") save(); });
   }
   try {
     show(await (await call("/cluster")).json());

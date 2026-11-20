@@ -115,9 +115,26 @@ interface starts; `--config FILE` names another file. The file looks like
       "cluster": {
         "server": "csb",
         "user": "yourname",
-        "workdir": "act-jobs"
+        "workdir": "act-jobs",
+        "load": "module",
+        "load_name": "ACT",
+        "partition": "CLUSTER,CLUSTER-AMD",
+        "gpu_partition": "GPU,CLUSTER-AMD",
+        "gpu_gres": "gpu:1",
+        "account": "",
+        "launcher": "srun",
+        "poll_seconds": 120
       }
     }
+
+Only the first three have to be given; the others are filled in with these
+values, which are those for the cluster csb, and can be changed in the tab.
+`load` says how ACT is made available in a job: `module` (`module load`
+with the name in `load_name`), `source` (the shell reads the file in
+`load_name`, such as the `ACTRC` of an installation), `conda` (the
+environment in `load_name` is activated) or `none`. Jobs without a GPU go
+to the partitions in `partition`; jobs that need one go to those in
+`gpu_partition` and ask for `gpu_gres` with `--gres`.
 
 The interface logs in with the `ssh` program of your machine, which uses
 your own keys and settings. It never asks for a password or a key and

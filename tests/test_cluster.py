@@ -116,6 +116,125 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(["/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
                           "-l", "spoel", "--", "csb", "cd -- 'act jobs'"], command)
 
+    def test_what_is_proposed_and_what_can_be_chosen(self):
+        """!
+        @brief Without more than the three settings, jobs load the module
+        ACT and go to the partitions of csb; all of it can be chosen.
+        """
+        base = {"server": "csb", "user": "spoel", "workdir": "act"}
+        proposed = cluster.parse(base)
+        self.assertEqual(("module", "ACT", "CLUSTER,CLUSTER-AMD", "GPU,CLUSTER-AMD", "gpu:1", "",
+                          "srun", 120),
+                         (proposed.load, proposed.load_name, proposed.partition,
+                          proposed.gpu_partition, proposed.gpu_gres, proposed.account,
+                          proposed.launcher, proposed.poll_seconds))
+        chosen = cluster.parse(dict(base, load="source", load_name="~/tools/bin/ACTRC",
+                                    partition="cpu", gpu_partition="gpu,gpu-long",
+                                    gpu_gres="gpu:a100:2", account="naiss2026-1-23",
+                                    launcher="mpirun", poll_seconds=600))
+        self.assertEqual(("source", "tools/bin/ACTRC", "cpu", "gpu,gpu-long", "gpu:a100:2",
+                          "naiss2026-1-23", "mpirun", 600),
+                         (chosen.load, chosen.load_name, chosen.partition, chosen.gpu_partition,
+                          chosen.gpu_gres, chosen.account, chosen.launcher, chosen.poll_seconds))
+        self.assertEqual("ACT/1.9b", cluster.parse(dict(base, load_name="ACT/1.9b")).load_name)
+        self.assertEqual("act-env", cluster.parse(dict(base, load="conda",
+                                                       load_name="act-env")).load_name)
+        # Nothing to load: what was given as a name is not kept
+        self.assertEqual("", cluster.parse(dict(base, load="none", load_name="ACT")).load_name)
+        wrong = [
+            dict(base, load="script"), dict(base, load="module", load_name=""),
+            dict(base, load_name="ACT; reboot"), dict(base, load_name="-x"),
+            dict(base, load_name="ACT $(id)"), dict(base, load_name="../ACT"),
+            dict(base, load="source", load_name="/opt/act/bin/ACTRC; id"),
+            dict(base, load="source", load_name=""),
+            dict(base, load="conda", load_name="my env"),
+            dict(base, load="conda", load_name="a/b"),
+            dict(base, partition=""), dict(base, partition="a b"), dict(base, partition="a,"),
+            dict(base, partition="a;b"), dict(base, partition="--wrap=id"),
+            dict(base, gpu_partition="GPU CLUSTER"), dict(base, gpu_gres="gpu:1 --wrap=id"),
+            dict(base, gpu_gres=""), dict(base, gpu_gres=":1"),
+            dict(base, account="-A"), dict(base, account="a b"), dict(base, account=5),
+            dict(base, launcher="bash -c"), dict(base, launcher=""),
+            dict(base, poll_seconds=5), dict(base, poll_seconds=100000),
+            dict(base, poll_seconds="120"), dict(base, poll_seconds=120.5),
+            dict(base, poll_seconds=True),
+        ]
+        for given in wrong:
+            with self.subTest(given={k: v for k, v in given.items() if k not in base}):
+                with self.assertRaises(cluster.ClusterError):
+                    cluster.parse(given)
+
+    def test_batch_script(self):
+        """!
+        @brief The script for Slurm has the partitions, the number of
+        processes and the time, loads ACT, runs the command with every
+        word quoted and leaves the exit status of the program in a file.
+        """
+        chosen = cluster.parse({"server": "csb", "user": "spoel", "workdir": "act"})
+        words = ["alexandria", "train_ff", "-ff", "ff.xml", "-mp", "my data.xml", "-fc_inter", "1"]
+        script = cluster.batch_script(chosen, "act-1a2b", words)
+        self.assertEqual("""#!/bin/bash
+#SBATCH --job-name=act-1a2b
+#SBATCH --partition=CLUSTER,CLUSTER-AMD
+#SBATCH --ntasks=1
+#SBATCH --time=0-01:00:00
+#SBATCH --output=slurm.out
+
+# Made by the user interface of ACT. The exit status of the program is
+# left in a file, so that the interface can tell how the job ended.
+module load ACT
+alexandria train_ff -ff ff.xml -mp 'my data.xml' -fc_inter 1
+status=$?
+echo $status > act-exit-status
+exit $status
+""", script)
+        # With a GPU, several processes, an account and more than a day
+        chosen = cluster.parse({"server": "csb", "user": "spoel", "workdir": "act",
+                                "account": "proj1", "load": "conda", "load_name": "act"})
+        script = cluster.batch_script(chosen, "train", words, tasks=16, minutes=36 * 60 + 5,
+                                      gpu=True)
+        lines = script.splitlines()
+        for line in ("#SBATCH --partition=GPU,CLUSTER-AMD", "#SBATCH --gres=gpu:1",
+                     "#SBATCH --ntasks=16", "#SBATCH --time=1-12:05:00",
+                     "#SBATCH --account=proj1", 'eval "$(conda shell.bash hook)"',
+                     "conda activate act",
+                     "srun alexandria train_ff -ff ff.xml -mp 'my data.xml' -fc_inter 1"):
+            self.assertIn(line, lines)
+        # All lines for Slurm come before the first command
+        first = min(i for i, line in enumerate(lines[1:], 1) if line and not line.startswith("#"))
+        self.assertTrue(all(not line.startswith("#SBATCH") for line in lines[first:]))
+        other = cluster.parse({"server": "csb", "user": "spoel", "workdir": "act",
+                               "launcher": "mpirun", "load": "source",
+                               "load_name": "/opt/act/bin/ACTRC"})
+        script = cluster.batch_script(other, "j", ["alexandria", "train_ff"], tasks=4)
+        self.assertIn("source /opt/act/bin/ACTRC\nmpirun -n 4 alexandria train_ff\n", script)
+        self.assertNotIn("module", cluster.batch_script(
+            cluster.parse({"server": "csb", "user": "u", "workdir": "w", "load": "none"}),
+            "j", ["alexandria"]))
+
+    def test_words_cannot_leave_the_command(self):
+        """!
+        @brief Whatever a word of the command is, the shell reads it as one
+        word; a job with a name or numbers that are not possible is not made.
+        """
+        chosen = cluster.parse({"server": "csb", "user": "spoel", "workdir": "act"})
+        nasty = ["alexandria", "x; reboot", "$(id)", "`id`", "a'b", "#SBATCH --wrap=id", "-x"]
+        script = cluster.batch_script(chosen, "j", nasty)
+        command = [line for line in script.splitlines() if line.startswith("alexandria")][0]
+        self.assertEqual(nasty, shlex.split(command))
+        self.assertEqual(1, script.count("reboot"))
+        for wrong in ({"name": "a b"}, {"name": "j\n#SBATCH --wrap=id"}, {"name": ""},
+                      {"name": "-x"}, {"tasks": 0}, {"tasks": 10**6}, {"tasks": 2.5},
+                      {"tasks": True}, {"minutes": 0}, {"minutes": 10**7}, {"minutes": "60"},
+                      {"words": []}, {"words": ["alexandria", ""]},
+                      {"words": ["alexandria", "a\nreboot"]}, {"words": ["alexandria", 5]}):
+            arguments = {"name": "j", "words": ["alexandria"]}
+            arguments.update(wrong)
+            with self.subTest(wrong=wrong):
+                with self.assertRaises(cluster.ClusterError):
+                    cluster.batch_script(chosen, arguments.pop("name"), arguments.pop("words"),
+                                         **arguments)
+
 
 class FileTest(unittest.TestCase):
     """!
@@ -145,9 +264,11 @@ class FileTest(unittest.TestCase):
         self.assertIsNone(cluster.load(None))
         cluster.save(self.file, self.chosen)
         self.assertEqual(self.chosen, cluster.load(self.file))
-        self.assertEqual({"cluster": {"server": "csb", "user": "spoel",
-                                      "workdir": "/home/spoel/act"}},
-                         json.loads(self.file.read_text()))
+        written = json.loads(self.file.read_text())
+        self.assertEqual(["cluster"], list(written))
+        self.assertEqual(("csb", "spoel", "/home/spoel/act", "module", "ACT"),
+                         tuple(written["cluster"][key] for key in
+                               ("server", "user", "workdir", "load", "load_name")))
         self.assertIn("\n  ", self.file.read_text())
         self.assertEqual(0o600, stat.S_IMODE(self.file.stat().st_mode))
         self.assertEqual(["settings.json"], [p.name for p in self.file.parent.iterdir()])
@@ -364,15 +485,22 @@ class ClusterApiTest(unittest.TestCase):
         client = self.client()
         self.assertEqual(401, client.get("/api/cluster").status_code)
         first = client.get("/api/cluster", headers=self.headers).json()
-        self.assertEqual({"configured": False, "cluster": None, "file": str(self.file),
-                          "problem": ""}, first)
+        self.assertEqual((False, None, str(self.file), ""),
+                         tuple(first[key] for key in ("configured", "cluster", "file",
+                                                      "problem")))
+        # What the form proposes for the cluster csb
+        self.assertEqual({"load": "module", "load_name": "ACT",
+                          "partition": "CLUSTER,CLUSTER-AMD", "gpu_partition": "GPU,CLUSTER-AMD",
+                          "gpu_gres": "gpu:1", "account": "", "launcher": "srun",
+                          "poll_seconds": 120}, first["proposed"])
+        self.assertEqual(["module", "source", "conda", "none"], first["load_kinds"])
         self.assertIs(True, client.get("/api/session", headers=self.headers).json()["cluster"])
         chosen = {"server": "good", "user": "spoel", "workdir": "~/act/jobs"}
         # Changing needs the key in the header
         self.assertEqual(401, client.put("/api/cluster", json=chosen).status_code)
         answer = client.put("/api/cluster", headers=self.headers, json=chosen)
         self.assertEqual(200, answer.status_code, answer.text)
-        kept = {"server": "good", "user": "spoel", "workdir": "act/jobs"}
+        kept = dict(first["proposed"], server="good", user="spoel", workdir="act/jobs")
         self.assertEqual(kept, answer.json()["cluster"])
         self.assertEqual({"cluster": kept}, json.loads(self.file.read_text()))
         # The interface starts again

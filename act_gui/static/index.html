@@ -364,6 +364,29 @@
         <div class="field"><label for="cl-workdir">Working directory on the server</label>
           <input class="mono wide" type="text" id="cl-workdir" placeholder="act-jobs" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
         <p class="muted fine">The server is a host name or a name from your ssh configuration. The directory is given with its full path, or as a path in your home directory there; it has to exist.</p>
+        <div class="group"><h3>How ACT is made available in a job</h3>
+          <div class="grid2">
+            <div class="field"><label for="cl-load">By</label>
+              <select id="cl-load"><option value="module">Loading a module</option><option value="source">Reading a file (ACTRC)</option><option value="conda">A conda environment</option><option value="none">Nothing, the program is found as it is</option></select></div>
+            <div class="field" id="cl-loadfield"><label for="cl-loadname" id="cl-loadlabel">Name of the module</label>
+              <input class="mono wide" type="text" id="cl-loadname" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
+          </div></div>
+        <div class="group"><h3>Jobs in Slurm</h3>
+          <div class="grid2">
+            <div class="field"><label for="cl-partition">Partitions</label>
+              <input class="mono wide" type="text" id="cl-partition" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
+            <div class="field"><label for="cl-account">Account (if needed)</label>
+              <input class="mono wide" type="text" id="cl-account" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
+            <div class="field"><label for="cl-gpupartition">Partitions for jobs with a GPU</label>
+              <input class="mono wide" type="text" id="cl-gpupartition" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
+            <div class="field"><label for="cl-gres">Such a job asks for (--gres)</label>
+              <input class="mono wide" type="text" id="cl-gres" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
+            <div class="field"><label for="cl-launcher">Parallel jobs start with</label>
+              <select id="cl-launcher"><option value="srun">srun</option><option value="mpirun">mpirun</option></select></div>
+            <div class="field"><label for="cl-poll">Seconds between status checks</label>
+              <input type="number" id="cl-poll" min="60" max="3600" step="30"></div>
+          </div>
+          <p class="muted fine">Several partitions are given with commas in between. What is filled in at first are the values for the cluster csb.</p></div>
         <div class="row"><button class="btn primary" id="cl-save" type="button">Save</button>
           <button class="btn" id="cl-check" type="button" disabled>Test the login</button>
           <span class="spacer"></span>

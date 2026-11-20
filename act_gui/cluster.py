@@ -48,6 +48,29 @@ MAX_WORKDIR = 500
 ## Seconds that ssh waits for the server, and that a check may take
 CONNECT_TIMEOUT = 15
 CHECK_TIMEOUT = 40.0
+## The ways in which ACT is made available in a job: a module, a file that
+## the shell reads (such as the ACTRC of an installation), a conda
+## environment, or nothing because the program is found as it is
+LOAD_KINDS = ("module", "source", "conda", "none")
+## The name of a module, such as ACT or ACT/1.9, and of a conda environment
+_MODULE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*(/[A-Za-z0-9][A-Za-z0-9._+-]*)*$")
+_ENVIRONMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+## One or more partitions of Slurm, with commas in between
+_PARTITIONS = re.compile(r"^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$")
+## What a job asks for to get a GPU, such as gpu:1 or gpu:a100:2
+_GRES = re.compile(r"^[A-Za-z0-9_]+(:[A-Za-z0-9_.-]+){0,3}$")
+## The name of an account for the accounting of Slurm
+_ACCOUNT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
+## The programs that start the processes of a parallel job
+LAUNCHERS = ("srun", "mpirun")
+## The shortest and longest time between two questions for the state of a
+## job, in seconds. A cluster may block an account that logs in often.
+POLL_RANGE = (60, 3600)
+## The largest number of processes and the longest time of a job, in minutes
+MAX_TASKS = 4096
+MAX_MINUTES = 30 * 24 * 60
+## What the name of a job looks like
+_JOB_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 class ClusterError(ValueError):
@@ -69,46 +92,195 @@ class ClusterSettings:
     ## The working directory on the server: an absolute path, or a path in
     ## the home directory of the user
     workdir: str
+    ## How ACT is made available in a job: one of LOAD_KINDS
+    load: str = "module"
+    ## What is loaded: the name of the module or of the conda environment,
+    ## or the file that the shell reads; empty for the kind none
+    load_name: str = "ACT"
+    ## The partitions for jobs without a GPU
+    partition: str = "CLUSTER,CLUSTER-AMD"
+    ## The partitions for jobs that need a GPU
+    gpu_partition: str = "GPU,CLUSTER-AMD"
+    ## What a job that needs a GPU asks for with --gres
+    gpu_gres: str = "gpu:1"
+    ## The account for the accounting of Slurm, empty for the default one
+    account: str = ""
+    ## The program that starts the processes of a parallel job
+    launcher: str = "srun"
+    ## Seconds between two questions for the state of a job
+    poll_seconds: int = 120
+
+
+## The settings that the user has to give; the others have a proposal
+REQUIRED = ("server", "user", "workdir")
+
+
+def _directory(given: str, what: str) -> str:
+    """!
+    @brief Check the name of a directory or a file on the server.
+    @param given The name: an absolute path, or a path in the home
+    directory with or without a tilde in front.
+    @param what  What it is, for the message.
+    @return The name without a tilde and without a slash at the end.
+    @throws ClusterError if it has a part that means something to a shell.
+    """
+    # In the home directory: with or without the tilde
+    name = given[2:] if given.startswith("~/") else given
+    absolute = name.startswith("/")
+    parts = [part for part in name.split("/") if part]
+    if len(name) > MAX_WORKDIR or not parts:
+        raise ClusterError("Give %s below your home directory or with its full path, of at "
+                           "most %d characters" % (what, MAX_WORKDIR))
+    for part in parts:
+        if not _PART.match(part):
+            raise ClusterError("'%s' cannot be part of %s: use letters, digits and "
+                               ". _ + @ -, and no spaces" % (part, what))
+    return ("/" if absolute else "") + "/".join(parts)
 
 
 def parse(given: Any) -> ClusterSettings:
     """!
     @brief Check settings that the user gave or that were read from a file.
-    @param given An object with server, user and workdir.
+    @param given An object with server, user and workdir, and optionally
+    load, load_name, partition, gpu_partition, gpu_gres, account, launcher
+    and poll_seconds. What is left out gets the value that is proposed.
     @return The settings.
     @throws ClusterError if one is missing or not possible.
     """
     if not isinstance(given, dict):
         raise ClusterError("The settings of the cluster must be an object")
+    default = ClusterSettings("", "", "")
+    known = tuple(asdict(default))
     for key in given:
-        if key not in ("server", "user", "workdir"):
+        if key not in known:
             raise ClusterError("The cluster has no setting '%s'" % (key,))
-    server, user, workdir = (given.get(key) for key in ("server", "user", "workdir"))
-    for name, value in (("name of the server", server), ("user name", user),
-                        ("working directory", workdir)):
-        if not isinstance(value, str) or not value.strip():
+    text: Dict[str, str] = {}
+    for key in known:
+        if key == "poll_seconds":
+            continue
+        value = given.get(key, None if key in REQUIRED else getattr(default, key))
+        if not isinstance(value, str):
+            raise ClusterError("Give the %s" % {"server": "name of the server",
+                                               "user": "user name",
+                                               "workdir": "working directory"}.get(key, key))
+        text[key] = value.strip()
+    for key, name in (("server", "name of the server"), ("user", "user name"),
+                      ("workdir", "working directory")):
+        if not text[key]:
             raise ClusterError("Give the %s" % name)
-    server, user, workdir = server.strip(), user.strip(), workdir.strip()
-    if not _SERVER.match(server):
+    if not _SERVER.match(text["server"]):
         raise ClusterError("'%s' cannot be the name of a server: use letters, digits, dots "
                            "and dashes, as in csb.example.org or a name from your ssh "
-                           "configuration" % server)
-    if not _USER.match(user):
-        raise ClusterError("'%s' cannot be a user name on the server" % user)
-    # In the home directory: with or without the tilde
-    if workdir.startswith("~/"):
-        workdir = workdir[2:]
-    absolute = workdir.startswith("/")
-    parts = [part for part in workdir.split("/") if part]
-    if len(workdir) > MAX_WORKDIR or not parts:
-        raise ClusterError("Give a working directory below your home directory or with its "
-                           "full path, of at most %d characters" % MAX_WORKDIR)
-    for part in parts:
-        if not _PART.match(part):
-            raise ClusterError("'%s' cannot be part of the working directory: use letters, "
-                               "digits and . _ + @ -, and no spaces" % part)
-    return ClusterSettings(server=server, user=user,
-                           workdir=("/" if absolute else "") + "/".join(parts))
+                           "configuration" % text["server"])
+    if not _USER.match(text["user"]):
+        raise ClusterError("'%s' cannot be a user name on the server" % text["user"])
+    text["workdir"] = _directory(text["workdir"], "the working directory")
+
+    # How ACT is made available in a job
+    kind, name = text["load"], text["load_name"]
+    if kind not in LOAD_KINDS:
+        raise ClusterError("ACT is loaded as one of: %s" % ", ".join(LOAD_KINDS))
+    if kind == "none":
+        name = ""
+    elif kind == "source":
+        name = _directory(name, "the file that is read") if name else ""
+    elif len(name) > 100 or not (_MODULE if kind == "module" else _ENVIRONMENT).match(name):
+        raise ClusterError("'%s' cannot be the name of a %s" % (
+            name, "module" if kind == "module" else "conda environment"))
+    if kind != "none" and not name:
+        raise ClusterError("Give what is loaded to make ACT available")
+    text["load_name"] = name
+
+    for key, what in (("partition", "The partitions"),
+                      ("gpu_partition", "The partitions for jobs with a GPU")):
+        if len(text[key]) > 200 or not _PARTITIONS.match(text[key]):
+            raise ClusterError("%s are names with commas in between, as in "
+                               "CLUSTER,CLUSTER-AMD" % what)
+    if not _GRES.match(text["gpu_gres"]) or len(text["gpu_gres"]) > 100:
+        raise ClusterError("What a job asks for to get a GPU looks like gpu:1")
+    if text["account"] and not _ACCOUNT.match(text["account"]):
+        raise ClusterError("'%s' cannot be the name of an account" % text["account"])
+    if text["launcher"] not in LAUNCHERS:
+        raise ClusterError("Parallel jobs are started with one of: %s" % ", ".join(LAUNCHERS))
+    poll = given.get("poll_seconds", default.poll_seconds)
+    if isinstance(poll, bool) or not isinstance(poll, int) \
+            or not POLL_RANGE[0] <= poll <= POLL_RANGE[1]:
+        raise ClusterError("The time between two questions for the state of a job is a whole "
+                           "number of seconds between %d and %d" % POLL_RANGE)
+    return ClusterSettings(poll_seconds=poll, **text)
+
+
+def load_lines(settings: ClusterSettings) -> List[str]:
+    """!
+    @brief The lines of a batch script that make ACT available.
+    @param settings The settings of the cluster.
+    @return The lines, none if the program is found as it is.
+    """
+    name = shlex.quote(settings.load_name)
+    if settings.load == "module":
+        return ["module load %s" % name]
+    if settings.load == "source":
+        return ["source %s" % name]
+    if settings.load == "conda":
+        # A batch job does not read the files that make conda known to a shell
+        return ['eval "$(conda shell.bash hook)"', "conda activate %s" % name]
+    return []
+
+
+## The file in the directory of a job in which the script leaves the exit
+## status of the program, and the file with what Slurm and the program print
+STATUS_FILE = "act-exit-status"
+OUTPUT_FILE = "slurm.out"
+
+
+def batch_script(settings: ClusterSettings, name: str, words: Sequence[str], *,
+                 tasks: int = 1, minutes: int = 60, gpu: bool = False) -> str:
+    """!
+    @brief The script that Slurm runs for a job. It is made from the
+    settings and from checked values only; every word of the command is
+    quoted for the shell.
+    @param settings The settings of the cluster.
+    @param name     The name of the job in the queue.
+    @param words    The command with its arguments, the program first. The
+    names of files are those in the directory of the job.
+    @param tasks    The number of processes.
+    @param minutes  The longest time the job may take.
+    @param gpu      Whether the job needs a GPU.
+    @return The text of the script.
+    @throws ClusterError for a name, a number of processes or a time that
+    is not possible, or an empty command.
+    """
+    if not isinstance(name, str) or not _JOB_NAME.match(name):
+        raise ClusterError("'%s' cannot be the name of a job" % (name,))
+    if isinstance(tasks, bool) or not isinstance(tasks, int) or not 1 <= tasks <= MAX_TASKS:
+        raise ClusterError("The number of processes is between 1 and %d" % MAX_TASKS)
+    if isinstance(minutes, bool) or not isinstance(minutes, int) \
+            or not 1 <= minutes <= MAX_MINUTES:
+        raise ClusterError("The time of a job is between 1 minute and %d days"
+                           % (MAX_MINUTES // 1440))
+    if not words or not all(isinstance(word, str) and word and "\n" not in word
+                            and "\0" not in word for word in words):
+        raise ClusterError("The job has no command")
+    lines = ["#!/bin/bash",
+             "#SBATCH --job-name=%s" % name,
+             "#SBATCH --partition=%s" % (settings.gpu_partition if gpu else settings.partition),
+             "#SBATCH --ntasks=%d" % tasks,
+             "#SBATCH --time=%d-%02d:%02d:00" % (minutes // 1440, minutes % 1440 // 60,
+                                                 minutes % 60),
+             "#SBATCH --output=%s" % OUTPUT_FILE]
+    if gpu:
+        lines.append("#SBATCH --gres=%s" % settings.gpu_gres)
+    if settings.account:
+        lines.append("#SBATCH --account=%s" % settings.account)
+    lines += ["", "# Made by the user interface of ACT. The exit status of the program is",
+              "# left in a file, so that the interface can tell how the job ended."]
+    lines += load_lines(settings)
+    command = remote_command(words)
+    if tasks > 1:
+        launcher = "srun" if settings.launcher == "srun" else "mpirun -n %d" % tasks
+        command = "%s %s" % (launcher, command)
+    lines += [command, "status=$?", "echo $status > %s" % STATUS_FILE, "exit $status", ""]
+    return "\n".join(lines)
 
 
 def default_config_file() -> Path:

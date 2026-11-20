@@ -23,6 +23,7 @@ Rules that hold for every request:
 """
 from __future__ import annotations
 
+import dataclasses
 import hmac
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -219,8 +220,12 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         """
         current = app.state.cluster
         return {"configured": current is not None,
-                "cluster": None if current is None else
-                {"server": current.server, "user": current.user, "workdir": current.workdir},
+                "cluster": None if current is None else dataclasses.asdict(current),
+                # What is proposed for the settings that the user need not give
+                "proposed": {key: value for key, value in dataclasses.asdict(
+                    cluster.ClusterSettings("", "", "")).items()
+                             if key not in cluster.REQUIRED},
+                "load_kinds": list(cluster.LOAD_KINDS), "launchers": list(cluster.LAUNCHERS),
                 "file": str(settings.config_file) if settings.config_file else "",
                 "problem": app.state.cluster_error}
 
