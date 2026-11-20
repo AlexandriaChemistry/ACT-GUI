@@ -242,6 +242,30 @@ class PageTest(unittest.TestCase):
         self.shot("04-modes")
         # The spectrum on paper
         self.saved_pdf("ir-pdf", "nma-ir.pdf")
+        # The wavenumbers from high to low, on the screen and on paper
+
+        def tick(label):
+            for text in self.browser.find_elements(By.CSS_SELECTOR, '#irplot svg text[text-anchor="middle"]'):
+                if text.text == label:
+                    return float(text.get_attribute("x"))
+            self.fail("The spectrum has no tick %s" % label)
+            return 0.0
+        self.assertLess(tick("0"), tick("3000"))
+        flip = self.browser.find_element(By.ID, "ir-flip")
+        self.assertEqual("false", flip.get_attribute("aria-pressed"))
+        flip.click()
+        self.assertEqual("true", flip.get_attribute("aria-pressed"))
+        self.assertGreater(tick("0"), tick("3000"))
+        # The lines under the spectrum still select a mode
+        self.click("#modetable tr.pick td")
+        self.assertRegex(self.text("#scene-title"), r"^Vibration at \d+ cm⁻¹$")
+        self.shot("04b-modes-reversed")
+        self.saved_pdf("ir-pdf", "nma-ir-reversed.pdf")
+        # The choice is remembered when the page is opened again
+        self.assertEqual("1", self.browser.execute_script(
+            "return localStorage.getItem('act-spectrum-reverse')"))
+        flip.click()
+        self.assertLess(tick("0"), tick("3000"))
 
         # Simulate
         self.click('#tasks button[data-tab="simulate"]')

@@ -370,12 +370,12 @@ class ApiTest(unittest.TestCase):
             result.files.update({"ir": [xvg], "e": [xvg], "openmm": [xml]})
             return result
 
-        def fake(xvg, pdf, series=()):
-            calls.append((Path(xvg).name, Path(pdf).name, list(series)))
+        def fake(xvg, pdf, series=(), reverse_x=False):
+            calls.append((Path(xvg).name, Path(pdf).name, list(series)) + ((True,) if reverse_x else ()))
             Path(pdf).write_bytes(b"%PDF-1.4 fake")
             return Path(pdf)
 
-        def broken(xvg, pdf, series=()):
+        def broken(xvg, pdf, series=(), reverse_x=False):
             raise PlotError("matplotlib is unhappy")
 
         chosen = {"fake": fake, "broken": broken}.get(plotter)
@@ -427,6 +427,13 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(200, answer.status_code)
         self.assertIn("simulate-e-TEMPERATURE.pdf", answer.headers["content-disposition"])
         self.assertEqual(("data.xvg", "plot-e-TEMPERATURE.pdf", ["TEMPERATURE"]), calls[-1])
+        # With the x-axis reversed, which is another file
+        answer = client.get(url, headers=self.headers, params={"reverse": "true"})
+        self.assertEqual(200, answer.status_code)
+        self.assertIn("simulate-e-reversed.pdf", answer.headers["content-disposition"])
+        self.assertEqual(("data.xvg", "plot-e-reversed.pdf", [], True), calls[-1])
+        self.assertEqual(422, client.get(url, headers=self.headers,
+                                         params={"reverse": "sideways"}).status_code)
         # The cookie is enough to fetch a plot, nothing at all is not
         self.assertEqual(401, client.get(url).status_code)
 

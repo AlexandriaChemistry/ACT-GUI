@@ -25,7 +25,8 @@ In development. What is there:
   the energies plotted while the simulation runs and the trajectory
   animated afterwards.
 
-The spectrum and the energies can be saved as PDF files, which
+The wavenumber axis of the spectrum can be reversed, to run from high to
+low as in measured spectra. The spectrum and the energies can be saved as PDF files, which
 [plotXVG](https://github.com/AlexandriaChemistry/plotXVG) makes on the
 server from the xvg files of the program.
 

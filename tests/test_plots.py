@@ -118,6 +118,39 @@ class PlotTest(unittest.TestCase):
         words = pdf.read_text().splitlines()[1].split()
         self.assertEqual("TEMPERATURE", words[words.index("-coly") + 1])
 
+    def test_x_range(self):
+        """!
+        @brief The smallest and largest x of the data are found.
+        """
+        self.assertEqual((0.0, 0.003), plots.x_range(self.xvg))
+        empty = self.dir / "empty.xvg"
+        empty.write_text('@    title "Nothing"\n')
+        with self.assertRaises(plots.PlotError):
+            plots.x_range(empty)
+
+    def test_reversed_axis(self):
+        """!
+        @brief A reversed x-axis is asked for with a minimum that is larger
+        than the maximum, both from the data, and only then.
+        """
+        pdf = self.dir / "rev.pdf"
+        plots.make_pdf(self.xvg, pdf, reverse_x=True, program=self.program(FAKE_PLOTTER))
+        words = pdf.read_text().splitlines()[1].split()
+        low, high = float(words[words.index("-xmin") + 1]), float(words[words.index("-xmax") + 1])
+        self.assertEqual(0.003, low)
+        self.assertLess(high, low)
+        # plotXVG takes zero for "not given"
+        self.assertNotEqual(0.0, high)
+        self.assertAlmostEqual(0.0, high, places=6)
+        spectrum = self.dir / "ir.xvg"
+        spectrum.write_text("@ title \"IR\"\n-62 0.1\n100 0.5\n3300 0.2\n&\n")
+        plots.make_pdf(spectrum, pdf, reverse_x=True, program=self.program(FAKE_PLOTTER))
+        words = pdf.read_text().splitlines()[1].split()
+        self.assertEqual(["3300", "-62"], [words[words.index("-xmin") + 1],
+                                           words[words.index("-xmax") + 1]])
+        plots.make_pdf(self.xvg, pdf, program=self.program(FAKE_PLOTTER))
+        self.assertNotIn("-xmin", pdf.read_text())
+
     def test_series_that_are_refused(self):
         """!
         @brief A series must be in the file: nothing else reaches the
@@ -167,9 +200,9 @@ class PlotTest(unittest.TestCase):
         """!
         @brief plotXVG makes a PDF file of the energies and of one series.
         """
-        for series in ([], ["TEMPERATURE"]):
-            pdf = self.dir / ("real%d.pdf" % len(series))
-            plots.make_pdf(self.xvg, pdf, series=series)
+        for series, reverse in (([], False), (["TEMPERATURE"], False), (["EPOT"], True)):
+            pdf = self.dir / ("real%d%d.pdf" % (len(series), reverse))
+            plots.make_pdf(self.xvg, pdf, series=series, reverse_x=reverse)
             self.assertTrue(pdf.read_bytes().startswith(b"%PDF"))
             self.assertGreater(pdf.stat().st_size, 2000)
 

@@ -37,7 +37,8 @@ const state = {
   min: null,            // result of the minimization
   nma: null,            // result of the normal mode analysis
   sim: { points: [], series: "EPOT", job: null, pdb: null, nsteps: 0 },
-  ui: { style: "ball", colour: "charge", labels: true, tab: "charges", focus: -1, ghost: true, mode: 0 },
+  ui: { style: "ball", colour: "charge", labels: true, tab: "charges", focus: -1, ghost: true, mode: 0,
+        reverse: false },   // reverse: wavenumbers from high to low in the spectrum
 };
 
 /* ---------- messages ---------- */
@@ -146,9 +147,13 @@ async function saveFile(button, path, params, busy, fallback) {
  * @param {string} jobId   The job that has the data.
  * @param {string} option  The option of the command that wrote the data.
  * @param {string} series  The series to plot, all if empty.
+ * @param {boolean} reverse Whether the x-axis runs from large to small values.
  */
-function savePdf(button, jobId, option, series = "") {
-  if (jobId) saveFile(button, `/jobs/${jobId}/plots/${option}`, series ? { series } : {}, "Making PDF…", option + ".pdf");
+function savePdf(button, jobId, option, series = "", reverse = false) {
+  const params = {};
+  if (series) params.series = series;
+  if (reverse) params.reverse = "true";
+  if (jobId) saveFile(button, `/jobs/${jobId}/plots/${option}`, params, "Making PDF…", option + ".pdf");
 }
 
 /* ---------- tabs and buttons ---------- */
@@ -572,10 +577,11 @@ function modesPanel() {
   const r = state.nma;
   if (!r) return;
   const freq = r.modes.map(m => m.frequency.value), inten = r.modes.map(m => m.intensity.value);
-  const imax = Math.max(...inten, 1e-12), spec = state.spectrum || [];
-  const smax = Math.max(...spec.map(p => p[1]), 1e-12);
   const xmax = Math.ceil((Math.max(...freq, 1000) + 200) / 200) * 200;
-  plot("irplot", { label: "Infrared spectrum", xlim: [0, xmax], ylim: [0, 1.08], xlabel: "Wavenumber (cm⁻¹)",
+  // The part of the spectrum that is inside the axis
+  const imax = Math.max(...inten, 1e-12), spec = (state.spectrum || []).filter(p => p[0] >= 0 && p[0] <= xmax);
+  const smax = Math.max(...spec.map(p => p[1]), 1e-12);
+  plot("irplot", { label: "Infrared spectrum", xlim: state.ui.reverse ? [xmax, 0] : [0, xmax], ylim: [0, 1.08], xlabel: "Wavenumber (cm⁻¹)",
     ylabel: "Relative intensity", height: 230, aspect: 0.5, yfmt: v => v.toFixed(1),
     series: [{ type: "line", x: spec.map(p => p[0]), y: spec.map(p => p[1] / smax), fill: true },
              { type: "sticks", x: freq, selected: state.ui.mode }], onPick: pickMode });
@@ -724,7 +730,23 @@ $("#run-nma").onclick = normalModes;
 $("#run-sim").onclick = simulate;
 $("#run-omm").onclick = openmmPackage;
 // The plot on paper has the series that is on the screen
-$("#ir-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.nma, "ir");
+$("#ir-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.nma, "ir", "", state.ui.reverse);
+
+/**
+ * Set the direction of the wavenumber axis of the spectrum, on the screen
+ * and in the PDF file, and remember it in this browser.
+ * @param {boolean} reverse Whether the wavenumbers run from high to low.
+ */
+function reverseSpectrum(reverse) {
+  state.ui.reverse = reverse;
+  $("#ir-flip").setAttribute("aria-pressed", reverse);
+  try { localStorage.setItem("act-spectrum-reverse", reverse ? "1" : "0"); } catch (e) { /* no storage, no memory */ }
+  modesPanel();
+}
+$("#ir-flip").onclick = () => reverseSpectrum(!state.ui.reverse);
+try {
+  if (localStorage.getItem("act-spectrum-reverse") === "1") reverseSpectrum(true);
+} catch (e) { /* no storage */ }
 $("#e-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.sim, "e",
   state.sim.series === "T" ? "TEMPERATURE" : state.sim.series);
 

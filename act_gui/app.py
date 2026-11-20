@@ -320,7 +320,8 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
                             filename="%s-%s%s" % (job.task, option, path.suffix))
 
     @app.get("/api/jobs/{job_id}/plots/{option}")
-    def job_plot(job_id: str, option: str, series: str = "") -> Response:
+    def job_plot(job_id: str, option: str, series: str = "",
+                 reverse: bool = False) -> Response:
         """!
         @brief A plot of an output file of a calculation, as a PDF file
         made by plotXVG. Not an async function, so that the server does
@@ -328,8 +329,9 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         @param job_id The identifier.
         @param option The option of the command that wrote the data. Only
         the plots that the task lists can be made.
-        @param series The names of the series to plot, with commas between
+        @param series  The names of the series to plot, with commas between
         them; all series if empty.
+        @param reverse Whether the x-axis runs from large to small values.
         @return The PDF file.
         """
         job = find_job(job_id)
@@ -342,14 +344,14 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             names = plots.check_series(source, [name for name in series.split(",") if name])
         except plots.PlotError as exc:
             raise fail(400, str(exc)) from exc
-        label = "-".join([option] + names)
+        label = "-".join([option] + names + (["reversed"] if reverse else []))
         target = source.parent / ("plot-%s.pdf" % label)
         if not target.is_file():
             if not can_plot:
                 raise fail(503, "plotXVG is not installed on the server, so plots cannot "
                            "be saved as PDF")
             try:
-                plotter(source, target, series=names)
+                plotter(source, target, series=names, reverse_x=reverse)
             except plots.PlotError as exc:
                 raise fail(500, str(exc)) from exc
         return FileResponse(target, media_type="application/pdf",

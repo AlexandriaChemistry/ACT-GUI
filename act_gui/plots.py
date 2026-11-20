@@ -30,7 +30,7 @@ import sys
 import threading
 import uuid
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 
 class PlotError(RuntimeError):
@@ -79,6 +79,29 @@ def legends(xvg: Path) -> List[str]:
     return names
 
 
+def x_range(xvg: Path) -> Tuple[float, float]:
+    """!
+    @brief The smallest and the largest x in an xvg file.
+    @param xvg The file.
+    @return The two numbers.
+    @throws PlotError if the file has no data.
+    """
+    low, high = float("inf"), float("-inf")
+    with open(xvg, "r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if line.startswith(("@", "#", "&")):
+                continue
+            words = line.split()
+            try:
+                value = float(words[0])
+            except (IndexError, ValueError):
+                continue
+            low, high = min(low, value), max(high, value)
+    if low > high:
+        raise PlotError("There is no data to plot")
+    return low, high
+
+
 def check_series(xvg: Path, series: Sequence[str]) -> List[str]:
     """!
     @brief Check the series that a request asks for.
@@ -99,13 +122,15 @@ def check_series(xvg: Path, series: Sequence[str]) -> List[str]:
     return chosen
 
 
-def make_pdf(xvg: Path, pdf: Path, series: Sequence[str] = (), timeout: float = 60.0,
-             program: Optional[Sequence[str]] = None) -> Path:
+def make_pdf(xvg: Path, pdf: Path, series: Sequence[str] = (), reverse_x: bool = False,
+             timeout: float = 60.0, program: Optional[Sequence[str]] = None) -> Path:
     """!
     @brief Make a PDF file of an xvg file.
     @param xvg     The xvg file.
     @param pdf     Where the PDF file goes. Its directory is made if needed.
     @param series  The names of the series to plot, all if empty.
+    @param reverse_x Whether the x-axis runs from large to small values, as
+    spectroscopists draw wavenumbers.
     @param timeout Seconds after which the plotter is stopped.
     @param program The words that start the plotter, plotXVG with the
     Python that runs this server if None.
@@ -131,6 +156,13 @@ def make_pdf(xvg: Path, pdf: Path, series: Sequence[str] = (), timeout: float = 
                                "-ls", "solid"]
     if chosen:
         command += ["-coly"] + chosen
+    if reverse_x:
+        # plotXVG draws the axis from -xmin to -xmax, also when the first is
+        # the larger one. It takes zero for "not given", so a limit at zero
+        # is moved by less than can be seen.
+        low, high = x_range(xvg)
+        tiny = 1e-9 * max(abs(high), abs(low), 1.0)
+        command += ["-xmin", "%.10g" % (high or tiny), "-xmax", "%.10g" % (low or -tiny)]
     # Without a display
     environment = dict(os.environ, MPLBACKEND="Agg")
     try:

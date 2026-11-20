@@ -93,6 +93,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn.small { height: 30px; padding: 0 10px; font-size: 13px; }
+.btn.toggle[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--surface); }
 .seg button { appearance: none; border: 0; background: none; color: var(--muted); font: 500 13px var(--font); padding: 6px 11px; cursor: pointer; transition: background .15s, color .15s; }
 .seg button + button { border-left: 1px solid var(--line); }

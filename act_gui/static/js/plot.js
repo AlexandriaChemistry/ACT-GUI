@@ -43,7 +43,9 @@ const plots = new Map();
  * size of the page changes.
  * @param {string} target The id of the element to draw in.
  * @param {object} cfg    label, xlim, ylim, xlabel, ylabel, series and
- *                        optionally height, aspect, yfmt and onPick.
+ *                        optionally height, aspect, yfmt and onPick. With
+ *                        xlim from a large to a small value the x-axis
+ *                        runs from right to left.
  */
 export function plot(target, cfg) { plots.set(target, cfg); drawPlot(target, cfg); }
 
@@ -91,7 +93,8 @@ function drawPlot(target, cfg) {
     s += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="${line}" stroke-width="1"/>`;
     s += `<text x="${m.l - 8}" y="${Y(v) + 4}" text-anchor="end" fill="${muted}">${minus(cfg.yfmt ? cfg.yfmt(v) : v)}</text>`;
   }
-  for (const v of ticks(x0, x1, W < 420 ? 4 : 6)) {
+  const xlo = Math.min(x0, x1), xhi = Math.max(x0, x1);
+  for (const v of ticks(xlo, xhi, W < 420 ? 4 : 6)) {
     s += `<line x1="${X(v)}" x2="${X(v)}" y1="${H - m.b}" y2="${H - m.b + 5}" stroke="${muted}"/>`;
     s += `<text x="${X(v)}" y="${H - m.b + 18}" text-anchor="middle" fill="${muted}">${minus(v)}</text>`;
   }
@@ -107,7 +110,7 @@ function drawPlot(target, cfg) {
       if (p.endpoint) { const i = p.x.length - 1; s += `<circle cx="${X(p.x[i])}" cy="${Y(p.y[i])}" r="3.5" fill="${col}"/>`; }
     } else if (p.type === "sticks") {
       p.x.forEach((v, i) => {
-        if (v < x0 || v > x1) return;
+        if (v < xlo || v > xhi) return;
         const on = i === p.selected;
         s += `<line data-i="${i}" class="pickable" x1="${X(v)}" x2="${X(v)}" y1="${H - m.b - 1}" y2="${H - m.b - (on ? 26 : 12)}" stroke="${on ? col : muted}" stroke-width="${on ? 3 : 2}"/>`;
         // A wider line that cannot be seen, to make the stick easier to hit
