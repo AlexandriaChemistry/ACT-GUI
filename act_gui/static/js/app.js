@@ -14,24 +14,20 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
+import { $, $$, alertBox, call, fmt, moveInk, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
 import { css, esc, limits, plot, redrawPlots } from "./plot.js";
+import { startForceFields } from "./forcefield.js";
 
 /* global $3Dmol */
 
-const $ = (s, r = document) => r.querySelector(s);
-const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-/** A number with a real minus sign. */
-const fmt = (x, d = 2) => (x < 0 ? "−" : "") + Math.abs(x).toFixed(d);
 /** Coordinates in the files of ACT are in nm, the viewer works in Å. */
 const NM = 10;
 
 /** What the page knows. */
 const state = {
-  token: "",            // for requests that change something
-  pdf: false,           // whether the server can make PDF files of plots
   jobs: { nma: null, sim: null, openmm: null },  // the finished jobs whose files can be saved
   input: null,          // { smiles } or { file, label }
-  forcefield: {},       // {} for the default or { file, label }
+  forcefield: {},       // {} for the default or { ref, label }, ref as the server takes it
   mol: null,            // the molecule that was loaded, see moleculeFrom()
   xyz: null,            // the coordinates shown in the charges tab
   min: null,            // result of the minimization
@@ -41,104 +37,20 @@ const state = {
         reverse: false },   // reverse: wavenumbers from high to low in the spectrum
 };
 
-/* ---------- messages ---------- */
-
-let toastTimer;
-/**
- * Show a short message at the bottom of the page.
- * @param {string} msg The message.
- */
-function toast(msg) {
-  const t = $("#toast");
-  t.textContent = msg;
-  t.classList.add("on");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("on"), 3600);
-}
-
-/**
- * Show an error above the workspace, or remove it.
- * @param {string} msg The message, empty to remove it.
- */
-function alertBox(msg) {
-  const a = $("#alert");
-  a.textContent = msg || "";
-  a.hidden = !msg;
-}
-
 /* ---------- the server ---------- */
 
 /**
- * Send a request to the server.
- * @param {string} path  The path below /api.
- * @param {object} opts  method, json (an object to send), body (a file), params.
- * @returns {Promise<object>} The answer.
- * @throws {Error} With the message of the server if it refuses.
- */
-async function call(path, { method = "GET", json, body, params } = {}) {
-  const url = new URL("/api" + path, location.origin);
-  for (const k in params || {}) url.searchParams.set(k, params[k]);
-  const headers = { "X-ACT-Token": state.token };
-  if (json !== undefined) { headers["Content-Type"] = "application/json"; body = JSON.stringify(json); }
-  const answer = await fetch(url, { method, headers, body, credentials: "same-origin" });
-  if (!answer.ok) {
-    let detail = "The server answered with status " + answer.status;
-    try { detail = (await answer.json()).detail || detail; } catch (e) { /* not JSON */ }
-    throw new Error(detail);
-  }
-  return answer;
-}
-
-/**
- * Start a calculation and wait for its result.
+ * Start a calculation on the molecule and wait for its result.
  * @param {string} task       charges, minimize, nma or simulate.
  * @param {object} options    The options of the task.
  * @param {function} onUpdate Called with the job each time it is asked for.
  * @returns {Promise<object>} The job when it has finished.
  * @throws {Error} If the calculation failed or was stopped.
  */
-async function runJob(task, options = {}, onUpdate = null) {
+function runJob(task, options = {}, onUpdate = null) {
   const molecule = state.input.smiles ? { smiles: state.input.smiles } : { file: state.input.file };
-  const forcefield = state.forcefield.file ? { file: state.forcefield.file } : {};
-  let job = await (await call("/jobs", { method: "POST", json: { task, molecule, forcefield, options } })).json();
-  let seen = 0;
-  for (;;) {
-    if (onUpdate) onUpdate(job);
-    seen += job.progress.length;
-    if (job.status === "finished") return job;
-    if (job.status === "failed") throw new Error(job.error || "The calculation failed");
-    if (job.status === "cancelled") throw new Error("The calculation was stopped");
-    await new Promise(r => setTimeout(r, 250));
-    job = await (await call("/jobs/" + job.id, { params: { progress_from: seen } })).json();
-  }
-}
-
-/**
- * Fetch a file that the server makes and hand it to the browser to save.
- * @param {Element} button  The button that was pressed.
- * @param {string} path     The path below /api.
- * @param {object} params   The parameters of the request.
- * @param {string} busy     The text of the button while the file is made.
- * @param {string} fallback The name of the file if the server gives none.
- * @returns {Promise<boolean>} Whether the file was saved.
- */
-async function saveFile(button, path, params, busy, fallback) {
-  const label = button.textContent;
-  button.disabled = true; button.textContent = busy;
-  try {
-    const answer = await call(path, { params });
-    const named = /filename="?([^";]+)"?/.exec(answer.headers.get("content-disposition") || "");
-    const name = named ? named[1] : fallback;
-    const url = URL.createObjectURL(await answer.blob()), link = document.createElement("a");
-    link.href = url; link.download = name;
-    document.body.append(link); link.click(); link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
-    toast("Saved " + name);
-    return true;
-  } catch (e) {
-    alertBox("The file could not be saved. " + e.message);
-    return false;
-  } finally { button.disabled = false; button.textContent = label; }
+  const forcefield = state.forcefield.ref || {};
+  return runTask({ task, molecule, forcefield, options }, onUpdate);
 }
 
 /**
@@ -154,77 +66,6 @@ function savePdf(button, jobId, option, series = "", reverse = false) {
   if (series) params.series = series;
   if (reverse) params.reverse = "true";
   if (jobId) saveFile(button, `/jobs/${jobId}/plots/${option}`, params, "Making PDF…", option + ".pdf");
-}
-
-/* ---------- tabs and buttons ---------- */
-
-/**
- * Put the underline of a row of tabs under the selected tab.
- * @param {Element} nav The row of tabs.
- */
-function moveInk(nav) {
-  const b = $('button[aria-selected="true"]', nav), ink = $(".ink", nav);
-  if (!b || !ink || !b.offsetWidth) return;
-  if (!ink.dataset.placed) {
-    // The first time without motion
-    ink.style.transition = "none";
-    ink.dataset.placed = "1";
-    requestAnimationFrame(() => requestAnimationFrame(() => { ink.style.transition = ""; }));
-  }
-  ink.style.width = b.offsetWidth + "px";
-  ink.style.transform = `translateX(${b.offsetLeft}px)`;
-}
-
-/**
- * Make a row of tabs work.
- * @param {Element} nav        The row of tabs.
- * @param {function} onSelect  Called with the name of the selected tab.
- */
-function tabs(nav, onSelect) {
-  nav.addEventListener("click", e => {
-    const b = e.target.closest("button");
-    if (!b) return;
-    $$("button", nav).forEach(x => x.setAttribute("aria-selected", x === b));
-    moveInk(nav);
-    onSelect(b.dataset.tab || b.dataset.view);
-  });
-}
-
-/**
- * Make a group of buttons work of which one is pressed.
- * @param {Element} root     The group.
- * @param {function} onPick  Called with the value of the pressed button.
- */
-function seg(root, onPick) {
-  root.addEventListener("click", e => {
-    const b = e.target.closest("button");
-    if (!b) return;
-    $$("button", root).forEach(x => x.setAttribute("aria-pressed", x === b));
-    onPick(b.dataset.v);
-  });
-}
-
-/**
- * Show one of a set of elements.
- * @param {string[]} ids The ids of the elements.
- * @param {string} on    The id of the one to show.
- */
-function showOnly(ids, on) {
-  ids.forEach(i => { const p = document.getElementById(i); if (p) p.hidden = i !== on; });
-  requestAnimationFrame(() => { redrawPlots(); $$(".tabs").forEach(moveInk); });
-}
-
-/**
- * Show the state of a calculation in a pill.
- * @param {string} id    The id of the pill.
- * @param {string} text  The text, empty to hide the pill.
- * @param {string} kind  good, warn or bad.
- */
-function pill(id, text, kind = "") {
-  const p = document.getElementById(id);
-  p.hidden = !text;
-  p.textContent = text;
-  p.className = "pill" + (kind ? " " + kind : "");
 }
 
 /* ---------- the molecule ---------- */
@@ -404,16 +245,6 @@ function scene() {
 
 /* ---------- loading a molecule ---------- */
 
-/**
- * Send a file to the server.
- * @param {File} file   The file.
- * @param {string} kind molecule or forcefield.
- * @returns {Promise<object>} The identifier and the label of the file.
- */
-async function upload(file, kind) {
-  return (await call("/uploads", { method: "POST", body: file, params: { kind, name: file.name } })).json();
-}
-
 /** Fill the line of facts about the molecule. */
 function chips() {
   const m = state.mol, host = $("#molchips");
@@ -482,7 +313,7 @@ async function loadMolecule() {
     }
     if (state.pendingForcefield) {
       const up = await upload(state.pendingForcefield, "forcefield");
-      state.forcefield = { file: up.id, label: up.label };
+      state.forcefield = { ref: { file: up.id }, label: up.label };
       state.pendingForcefield = null;
     }
     const job = await runJob("charges");
@@ -604,7 +435,7 @@ async function normalModes() {
     const job = await runJob("nma");
     state.nma = job.result;
     state.spectrum = parseXvg(await (await call(`/jobs/${job.id}/files/ir`)).text());
-    state.jobs.nma = job.id; $("#ir-pdf").hidden = !state.pdf;
+    state.jobs.nma = job.id; $("#ir-pdf").hidden = !session.pdf;
     const inten = state.nma.modes.map(m => m.intensity.value);
     state.ui.mode = inten.indexOf(Math.max(...inten));
     pill("nma-pill", `${state.nma.modes.length} modes`, "good");
@@ -658,7 +489,7 @@ async function simulate() {
     });
     $("#simbar").style.width = "100%";
     state.sim.pdb = await (await call(`/jobs/${job.id}/files/o`)).text();
-    state.jobs.sim = job.id; $("#e-pdf").hidden = !state.pdf;
+    state.jobs.sim = job.id; $("#e-pdf").hidden = !session.pdf;
     scene();
   } catch (e) {
     if (e.message !== "The calculation was stopped") alertBox("The simulation failed. " + e.message);
@@ -715,9 +546,22 @@ $("#molfile").onchange = e => {
   loadMolecule();
 };
 $("#ffsel").onchange = e => {
-  if (e.target.value === "upload") $("#fffile").click();
-  else { state.forcefield = {}; state.pendingForcefield = null; }
+  if (e.target.value === "upload") { $("#fffile").click(); return; }
+  state.pendingForcefield = null;
+  // The default, or the one that was made or opened in the force field workspace
+  state.forcefield = e.target.value === "workspace" && session.forcefield
+    ? { ref: session.forcefield.ref, label: session.forcefield.label } : {};
 };
+// The force field of the force field workspace can be used for molecules
+document.addEventListener("act-forcefield", () => {
+  const option = $('#ffsel option[value="workspace"]'), current = session.forcefield;
+  option.hidden = option.disabled = !current;
+  if (current) option.textContent = "From the force field tab: " + current.label;
+  if ($("#ffsel").value === "workspace") {
+    if (current) state.forcefield = { ref: current.ref, label: current.label };
+    else { $("#ffsel").value = "default"; state.forcefield = {}; }
+  }
+});
 $("#fffile").onchange = e => {
   const file = e.target.files[0];
   if (!file) { $("#ffsel").value = "default"; return; }
@@ -761,14 +605,15 @@ if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEven
 async function start() {
   $$(".tabs").forEach(moveInk);
   try {
-    const session = await (await fetch("/api/session", { credentials: "same-origin" })).json();
-    if (!session.token) throw new Error(session.detail || "The server does not know this browser.");
-    state.token = session.token;
-    state.defaultForcefield = session.default_forcefield;
-    state.pdf = !!session.pdf;
-    $('#ffsel option[value="default"]').textContent = session.default_forcefield;
-    $("#smiles").maxLength = session.max_smiles_length;
-    $("#status-text").textContent = (session.mode === "desktop" ? "Desktop mode" : "Server") + " · version " + session.version;
+    const told = await (await fetch("/api/session", { credentials: "same-origin" })).json();
+    if (!told.token) throw new Error(told.detail || "The server does not know this browser.");
+    session.token = told.token;
+    state.defaultForcefield = told.default_forcefield;
+    session.pdf = !!told.pdf;
+    $('#ffsel option[value="default"]').textContent = told.default_forcefield;
+    $("#smiles").maxLength = told.max_smiles_length;
+    $("#status-text").textContent = (told.mode === "desktop" ? "Desktop mode" : "Server") + " · version " + told.version;
+    startForceFields(told);
     // Open a molecule that is named in the address, as in #smiles=CCO
     const wanted = new URLSearchParams(location.hash.slice(1)).get("smiles");
     if (wanted) { $("#smiles").value = wanted; }

@@ -27,7 +27,7 @@ try:
     from selenium import webdriver
     from selenium.webdriver.common.by import By
     from selenium.webdriver.firefox.options import Options
-    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support.ui import Select, WebDriverWait
     HAVE_SELENIUM = True
 except ImportError:
     HAVE_SELENIUM = False
@@ -36,6 +36,8 @@ except ImportError:
 ALEXANDRIA = os.environ.get("ACT_ALEXANDRIA", "")
 ## Where to save pictures of the page, if anywhere
 SHOTS = os.environ.get("ACT_GUI_SHOTS", "")
+## The directory src/act/testdata of the source of ACT, if it is given
+TESTDATA = os.environ.get("ACT_TESTDATA", "")
 
 
 @unittest.skipUnless(HAVE_SELENIUM and ALEXANDRIA, "selenium or ACT_ALEXANDRIA is missing")
@@ -345,6 +347,249 @@ class PageTest(unittest.TestCase):
         blocked = self.browser.execute_script(
             "return window.__cspViolations ? window.__cspViolations.length : 0")
         self.assertEqual(0, blocked)
+
+    # --- the force field workspace ---
+
+    def open_force_fields(self):
+        """!
+        @brief Open the page and go to the force field workspace.
+        """
+        self.open_page()
+        self.click('#nav button[data-view="force-field"]')
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#g-types tbody tr")) > 50)
+        self.assertEqual("", self.errors())
+
+    def saved_file(self, selector, name, start):
+        """!
+        @brief Press a button that saves a file and check the file.
+        @param selector The CSS selector of the button.
+        @param name     The name the file should get.
+        @param start    What the file starts with.
+        @return The text of the file.
+        """
+        target = self.downloads / name
+        if target.exists():
+            target.unlink()
+        self.click(selector)
+        self.wait(lambda b: target.is_file() and target.stat().st_size > 0
+                  and not list(self.downloads.glob("*.part")))
+        text = target.read_text(errors="replace")
+        self.assertTrue(text.startswith(start), text[:80])
+        self.assertEqual("", self.errors())
+        return text
+
+    def parameter_rows(self):
+        """!
+        @brief The table of parameters as it is on the page.
+        @return For each row the texts of its cells.
+        """
+        return self.browser.execute_script(
+            "return [...document.querySelectorAll('#p-table tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+
+    def show_parameters(self, interaction, find):
+        """!
+        @brief Choose what the table of parameters shows.
+        @param interaction The interaction.
+        @param find        The text that the types must contain.
+        """
+        Select(self.browser.find_element(By.ID, "p-filter")).select_by_value(interaction)
+        box = self.browser.find_element(By.ID, "p-search")
+        box.clear()
+        box.send_keys(find)
+
+    def test_5_generate_a_force_field(self):
+        """!
+        @brief A force field is made from choices in the form, saved, and
+        one of its parameters is changed.
+        """
+        self.open_force_fields()
+        self.assertTrue(self.browser.find_element(By.ID, "fftab-gen").is_displayed())
+        for other in ("fftab-geom", "fftab-edit"):
+            self.assertFalse(self.browser.find_element(By.ID, other).is_displayed(), other)
+        selected = self.text("#g-ntypes")
+        self.assertRegex(selected, r"^\d+ of \d+ selected$")
+        self.shot("10-ff-start")
+        # Without atom types there is nothing to make
+        self.click("#g-none")
+        self.assertTrue(self.text("#g-ntypes").startswith("0 of"))
+        self.assertFalse(self.browser.find_element(By.ID, "run-gen").is_enabled())
+        for name in ("hc", "c3", "o1", "cl"):
+            self.click('#g-types input[data-name="%s"][data-key="on"]' % name)
+        self.assertTrue(self.text("#g-ntypes").startswith("4 of"))
+        # Carbon gets a shell; the boxes of types that are not selected are off
+        self.click('#g-types input[data-name="c3"][data-key="shell"]')
+        self.assertFalse(self.browser.find_element(
+            By.CSS_SELECTOR, '#g-types input[data-name="hw"][data-key="shell"]').is_enabled())
+        # Another potential brings its own combination rules
+        Select(self.browser.find_element(By.ID, "g-vdw")).select_by_value("LJ14_7")
+        self.assertIn("Halgren", self.text("#g-vdwhelp"))
+        rules = self.browser.execute_script(
+            "return [...document.querySelectorAll('#g-vdwrules select')]"
+            ".map(s => s.dataset.param + ':' + s.value)")
+        self.assertEqual(["sigma:Volumetric", "epsilon:Geometric", "gamma:Arithmetic",
+                          "delta:Arithmetic"], rules)
+        self.browser.execute_script(
+            "const s = document.querySelector('#g-vdwrules select[data-param=\"delta\"]');"
+            "s.value = 'Geometric';")
+        # The charge model with a second charge on each atom ticks those boxes
+        self.click('#g-qmodel button[data-v="P+G"]')
+        self.assertTrue(self.browser.find_element(
+            By.CSS_SELECTOR, '#g-types input[data-name="cl"][data-key="vsite"]').is_selected())
+        self.click('#g-vsites input[data-name="vsite2_halogen_sigma_holes"]')
+        self.shot("11-ff-choices")
+        self.click("#run-gen")
+        self.wait(lambda b: b.find_element(By.ID, "gen-pill").text == "Done")
+        self.assertEqual("", self.errors())
+        chips = self.text("#ffchips")
+        self.assertIn("New force field", chips)
+        self.assertIn("polarizable", chips)
+        self.assertNotIn("not polarizable", chips)
+        made = self.text("#g-inter")
+        self.assertIn("LJ14_7", made)
+        self.assertIn("delta: Geometric", made)
+        self.assertIn("VSITE2", made)
+        self.assertIn("shell types 1", self.text("#g-facts"))
+        self.browser.execute_script("document.getElementById('g-result').scrollIntoView()")
+        self.shot("12-ff-generated")
+        # The files
+        saved = self.saved_file("#ff-save", "forcefield.xml", "<?xml")
+        self.assertIn("<alexandria_chemistry>", saved)
+        table = self.saved_file("#g-save-f", "atomtypes.csv", "#atomtype|")
+        self.assertEqual(["v2f1", "v2cl1", "v2br1", "v2i1", "hc", "c3", "c3_s", "o1", "cl"],
+                         [line.split("|")[0] for line in table.splitlines()[1:]])
+        self.saved_file("#g-save-vs", "vsites.json", "{")
+
+        # Its parameters, and a change of one of them
+        self.click('#fftabs button[data-tab="edit"]')
+        self.assertTrue(self.browser.find_element(By.ID, "fftab-edit").is_displayed())
+        self.assertEqual("Valid", self.text("#v-pill"))
+        self.assertIn("No problems found", self.text("#v-list"))
+        self.show_parameters("ELECTRONEGATIVITYEQUALIZATION", "hc")
+        rows = self.parameter_rows()
+        self.assertEqual(["hc_z", "chi"], rows[0][:2])
+        self.assertEqual(("4", "eV/e", "4", "12"), tuple(rows[0][2:6]))
+        self.assertEqual("1 type", self.text("#p-count"))
+        self.assertFalse(self.browser.find_element(By.ID, "p-edit").is_displayed())
+        self.click("#p-table tbody tr.pick td")
+        self.assertTrue(self.browser.find_element(By.ID, "p-edit").is_displayed())
+        self.assertIn("hc_z", self.text("#p-what"))
+        # Applying without a change does nothing
+        self.click("#p-apply")
+        self.wait(lambda b: "Nothing was changed" in b.find_element(By.ID, "toast").text)
+        value = self.browser.find_element(By.ID, "p-val")
+        value.clear()
+        value.send_keys("6.25")
+        self.shot("13-ff-edit")
+        self.click("#p-apply")
+        self.wait(lambda b: "(1 change)" in b.find_element(By.ID, "ffchips").text)
+        self.assertEqual("", self.errors())
+        self.assertEqual("6.25", self.parameter_rows()[0][2])
+        self.assertFalse(self.browser.find_element(By.ID, "p-edit").is_displayed())
+        self.assertIn("6.25", self.saved_file("#ff-save", "forcefield.xml", "<?xml"))
+        # The particle types can be looked at, not changed
+        self.show_parameters("@particles", "c3_s")
+        rows = self.parameter_rows()
+        self.assertEqual("c3_s", rows[0][0])
+        self.assertFalse(self.browser.find_elements(By.CSS_SELECTOR, "#p-table tr.pick"))
+        self.show_parameters("@particles", "no such type")
+        self.assertIn("No type", self.text("#p-empty"))
+
+    def test_6_change_a_force_field_and_use_it(self):
+        """!
+        @brief The default force field is opened, one parameter is fixed,
+        and the molecule workspace computes with the result.
+        """
+        self.open_force_fields()
+        self.click("#ff-default")
+        self.wait(lambda b: "particle types" in b.find_element(By.ID, "ffchips").text)
+        self.assertEqual("", self.errors())
+        # The default cannot be saved: the user did not change it
+        self.assertFalse(self.browser.find_element(By.ID, "ff-save").is_displayed())
+        self.click('#fftabs button[data-tab="edit"]')
+        self.show_parameters("VANDERWAALS", "")
+        rows = self.parameter_rows()
+        self.assertGreater(len(rows), 10)
+        target = [row for row in rows if row[7] == "Bounded"][0]
+        index = rows.index(target)
+        self.browser.execute_script(
+            "document.querySelectorAll('#p-table tbody tr')[arguments[0]].click()", index)
+        Select(self.browser.find_element(By.ID, "p-mut")).select_by_value("Fixed")
+        self.click("#p-apply")
+        self.wait(lambda b: "(1 change)" in b.find_element(By.ID, "ffchips").text)
+        self.assertEqual("", self.errors())
+        self.assertEqual("Fixed", self.parameter_rows()[index][7])
+        self.assertTrue(self.browser.find_element(By.ID, "ff-save").is_displayed())
+        self.shot("14-ff-default-changed")
+        # In the molecule workspace
+        self.click('#nav button[data-view="molecule"]')
+        choice = self.browser.find_element(By.CSS_SELECTOR, '#ffsel option[value="workspace"]')
+        self.assertIn("(1 change)", choice.text)
+        Select(self.browser.find_element(By.ID, "ffsel")).select_by_value("workspace")
+        self.click("#load")
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#qtable tr.pick")) == 10)
+        self.assertEqual("", self.errors())
+        self.assertIn("(1 change)", self.text("#molchips"))
+        self.click('#tasks button[data-tab="minimize"]')
+        self.click("#run-min")
+        self.wait(lambda b: b.find_element(By.ID, "min-pill").text == "Converged")
+        self.assertEqual("", self.errors())
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_7_geometry_from_a_molprop_file(self):
+        """!
+        @brief A force field file is opened and gets its bonds from the
+        compounds of a molprop file. A force field with other atom types
+        than the compounds is left as it is, with a message.
+        """
+        data = Path(TESTDATA)
+        self.open_force_fields()
+        self.click('#fftabs button[data-tab="geom"]')
+        run = self.browser.find_element(By.ID, "run-geo")
+        self.assertFalse(run.is_enabled())
+        self.browser.find_element(By.ID, "ff-openfile").send_keys(
+            str(data / "forcefields" / "ACS-g1.xml"))
+        self.wait(lambda b: "ACS-g1.xml" in b.find_element(By.ID, "ffchips").text)
+        self.assertFalse(run.is_enabled())
+        self.browser.find_element(By.ID, "mp-file").send_keys(str(data / "molprop" / "molprop.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "mp-name").text == "molprop.xml")
+        self.assertEqual("", self.errors())
+        self.assertTrue(run.is_enabled())
+        run.click()
+        self.wait(lambda b: b.find_element(By.ID, "geo-pill").text == "Done")
+        self.assertEqual("", self.errors())
+        self.assertEqual("3", self.text("#geo-ncomp"))
+        self.assertIn("BONDS", self.text("#geo-table"))
+        self.assertIn("(1 change)", self.text("#ffchips"))
+        self.shot("15-ff-geometry")
+        # The bond lengths are those of the compounds, and with SQE the
+        # electronegativity of hydrogen is fixed
+        self.click('#fftabs button[data-tab="edit"]')
+        self.show_parameters("BONDS", "c3_b~h_b")
+        length = [row for row in self.parameter_rows() if row[1] == "bondlength"][0]
+        self.assertAlmostEqual(109.4, float(length[2]), delta=0.1)
+        self.assertEqual("24", length[8])
+        self.show_parameters("ELECTRONEGATIVITYEQUALIZATION", "h_z")
+        chi = [row for row in self.parameter_rows() if row[1] == "chi"][0]
+        self.assertEqual("Fixed", chi[7])
+        self.shot("16-ff-parameters")
+        # A new force field has the atom types of the generator, which the
+        # compounds of this file do not have
+        self.click('#fftabs button[data-tab="gen"]')
+        self.click("#run-gen")
+        self.wait(lambda b: b.find_element(By.ID, "gen-pill").text == "Done")
+        self.click('#fftabs button[data-tab="geom"]')
+        self.click('#geo-qalg button[data-v="EEM"]')
+        run.click()
+        self.wait(lambda b: b.find_element(By.ID, "geo-pill").text == "No compound could be used")
+        self.assertIn("None of the compounds", self.errors())
+        self.assertEqual("0", self.text("#geo-ncomp"))
+        self.assertIn("New force field", self.text("#ffchips"))
+        self.assertNotIn("change", self.text("#ffchips"))
+        log = self.downloads / "geometry_ff-g.log"
+        self.click("#geo-log")
+        self.wait(lambda b: log.is_file() and log.stat().st_size > 0)
+        self.assertIn("Cannot find atomtype", log.read_text(errors="replace"))
 
 
 if __name__ == "__main__":

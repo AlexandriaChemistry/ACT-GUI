@@ -20,11 +20,27 @@ write a file it chooses, or switch on an option that is not listed.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from . import ffgen
+from .jobs import InputFile
 from .settings import Settings
 from .uploads import UploadStore
+
+## What the task needs: a molecule, a force field, a molprop file, or the
+## choices from which a force field is made
+MOLECULE, FORCEFIELD, MOLPROP, GENERATOR = "molecule", "forcefield", "molprop", "generator"
+
+## What the name of a parameter looks like, such as chi or bondlength
+_PARAMETER_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}$")
+## What the identifier of a particle type or an interaction looks like,
+## such as h_z, Na+ or c3_b~h_b. No spaces: those separate identifiers.
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_+~=#:.*-]{0,79}$")
+## The largest number of identifiers in one change of a force field
+MAX_IDENTIFIERS = 200
 
 
 class RequestError(ValueError):
@@ -59,6 +75,25 @@ class Task:
     plots: Tuple[str, ...] = ()
     ## Whether the output files are offered as an archive for OpenMM
     package: bool = False
+    ## What the request must give: molecule, forcefield, molprop, generator
+    needs: Tuple[str, ...] = (MOLECULE, FORCEFIELD)
+    ## The option of the force field file that the task writes, which
+    ## later tasks can use, None if it writes none
+    forcefield: Optional[str] = None
+    ## The workspace of the interface that the task belongs to
+    workspace: str = "molecule"
+
+
+@dataclass(frozen=True)
+class Prepared:
+    """!
+    @brief What a request becomes: the options of the command and the
+    files that the server makes for it.
+    """
+    ## The keyword arguments for act.run(), without those of the run itself
+    options: Dict[str, Any]
+    ## Input files to write in the directory of the job, by option name
+    inputs: Dict[str, Sequence[InputFile]] = field(default_factory=dict)
 
 
 ## The options to choose how the charges are made, the same for all tasks
@@ -100,65 +135,210 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          outputs={"openmm": "openmm.xml", "c": "conf.pdb"},
          downloads=("openmm", "c", "g"),
          package=True),
+    # --- the force field workspace ---
+    Task(name="gen_ff", command="gen_ff",
+         title="Generate a force field",
+         fixed={"json": True},
+         outputs={"o": "forcefield.xml"},
+         downloads=("o", "f", "vs"),
+         needs=(GENERATOR,), forcefield="o", workspace="forcefield"),
+    Task(name="geometry_ff", command="geometry_ff",
+         title="Bonds, angles and dihedrals from a molprop file",
+         options=("gen_bcc", "bfactor", "afactor", "factor"),
+         fixed={"json": True},
+         outputs={"o": "forcefield.xml"},
+         downloads=("o", "g"),
+         needs=(FORCEFIELD, MOLPROP), forcefield="o", workspace="forcefield"),
+    Task(name="ff_describe", command="edit_ff",
+         title="Read and check a force field",
+         fixed={"json": True},
+         needs=(FORCEFIELD,), workspace="forcefield"),
+    Task(name="ff_edit", command="edit_ff",
+         title="Change parameters of a force field",
+         options=("p", "a", "val", "min", "max", "mut", "nonneg", "force"),
+         fixed={"json": True},
+         outputs={"o": "forcefield.xml"},
+         downloads=("o",),
+         needs=(FORCEFIELD,), forcefield="o", workspace="forcefield"),
+    Task(name="ff_repair", command="edit_ff",
+         title="Write a force field without the problems that can be repaired",
+         fixed={"json": True, "validate": True},
+         outputs={"o": "forcefield.xml"},
+         downloads=("o",),
+         needs=(FORCEFIELD,), forcefield="o", workspace="forcefield"),
 )}
+
+## The values that the option mut of edit_ff takes
+_MUTABILITIES = ("Fixed", "Bounded")
+
+
+def _identifiers(value: Any) -> str:
+    """!
+    @brief Check the particle types or interactions of which a parameter is
+    changed.
+    @param value One identifier or a list of them.
+    @return The identifiers as edit_ff takes them, with spaces in between.
+    @throws RequestError if one does not look like an identifier.
+    """
+    names: List[Any] = list(value) if isinstance(value, (list, tuple)) else [value]
+    if not names or len(names) > MAX_IDENTIFIERS:
+        raise RequestError("Give between 1 and %d identifiers" % MAX_IDENTIFIERS)
+    for name in names:
+        if not isinstance(name, str) or not _IDENTIFIER.match(name):
+            raise RequestError("'%s' is not the identifier of a particle type or an "
+                               "interaction" % (name,))
+    return " ".join(names)
+
+
+def _edit_options(given: Dict[str, Any]) -> Dict[str, Any]:
+    """!
+    @brief Check the options of a change of a force field.
+    @param given The options of the request that the task lists.
+    @return The options for edit_ff.
+    @throws RequestError if the change is not clear or not accepted.
+    """
+    options = dict(given)
+    name = options.get("p")
+    if not isinstance(name, str) or not _PARAMETER_NAME.match(name):
+        raise RequestError("Give the name of the parameter to change")
+    if "a" not in options:
+        # Without it edit_ff changes the parameter for every type
+        raise RequestError("Give the particle type or interaction to change")
+    options["a"] = _identifiers(options["a"])
+    for number in ("val", "min", "max"):
+        value = options.get(number)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                  or value != value or abs(value) == float("inf")):
+            raise RequestError("Option '%s' must be a number" % number)
+    if "mut" in options and options["mut"] not in _MUTABILITIES:
+        raise RequestError("The mutability must be %s" % " or ".join(_MUTABILITIES))
+    if "nonneg" in options and options["nonneg"] not in ("yes", "no"):
+        raise RequestError("Option 'nonneg' must be yes or no")
+    if "force" in options and not isinstance(options["force"], bool):
+        raise RequestError("Option 'force' must be true or false")
+    if not any(key in options for key in ("val", "min", "max", "mut", "nonneg")):
+        raise RequestError("Give what to change: the value, a bound or the mutability")
+    return options
+
+
+def _forcefield(reference: Any, settings: Settings, uploads: UploadStore,
+                written: Optional[Callable[[str], Optional[Path]]],
+                default: bool) -> Path:
+    """!
+    @brief Find the force field that a request names.
+    @param reference The object "forcefield" of the request: "file" with
+    the identifier of an upload, "job" with the identifier of a job that
+    wrote a force field, "default" that is true for the default force
+    field, or none of these where the default may be used without asking.
+    @param settings  The settings, for the default force field.
+    @param uploads   The uploaded files.
+    @param written   The function that gives the force field a job wrote.
+    @param default   Whether the default force field may be used.
+    @return The path of the file.
+    @throws RequestError if there is no such force field.
+    """
+    reference = reference or {}
+    if not isinstance(reference, Mapping):
+        raise RequestError("The force field must be an object")
+    file_id = reference.get("file")
+    job_id = reference.get("job")
+    if file_id is not None and job_id is not None:
+        raise RequestError("Give one force field, not two")
+    if file_id is not None:
+        upload = uploads.get(file_id)
+        if upload is None or upload.kind != "forcefield":
+            raise RequestError("The force field file is not known, upload it again")
+        return uploads.path(upload)
+    if job_id is not None:
+        path = written(job_id) if written is not None and isinstance(job_id, str) else None
+        if path is None:
+            raise RequestError("That force field is not there any more, make it again")
+        return path
+    if not default and reference.get("default") is not True:
+        raise RequestError("The request has no force field")
+    return settings.default_forcefield
 
 
 def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
-                  uploads: UploadStore) -> Dict[str, Any]:
+                  uploads: UploadStore,
+                  written: Optional[Callable[[str], Optional[Path]]] = None) -> Prepared:
     """!
     @brief Turn a request from the browser into the options of a command.
     @param task     The task.
-    @param request  The request: "molecule" with either "smiles" or "file",
-    optionally "forcefield" with "file", and "options".
+    @param request  The request. What it must have depends on the task:
+    "molecule" with either "smiles" or "file", "forcefield" with "file" or
+    "job", "molprop" with "file", "generator" with the choices for a new
+    force field, and "options".
     @param settings The settings, for the limits and the default force field.
     @param uploads  The uploaded files.
+    @param written  The function that gives the force field that a job
+    wrote, by the identifier of the job, or None if there is none.
     @return The keyword arguments for act.run(), without the arguments of
-    the run itself. The types of the values are checked later by act.
+    the run itself, and the input files that the server makes. The types of
+    the values are checked later by act.
     @throws RequestError if the request is not accepted.
     """
     if not isinstance(request, Mapping):
         raise RequestError("The request must be an object")
     options: Dict[str, Any] = {}
+    inputs: Dict[str, Sequence[InputFile]] = {}
 
-    # The molecule: a SMILES string or an uploaded file
-    molecule = request.get("molecule")
-    if not isinstance(molecule, Mapping):
-        raise RequestError("The request has no molecule")
-    smiles = molecule.get("smiles")
-    file_id = molecule.get("file")
-    if (smiles is None) == (file_id is None):
-        raise RequestError("Give a SMILES string or a molecule file, not both")
-    if smiles is not None:
-        if not isinstance(smiles, str) or not smiles.strip():
-            raise RequestError("The SMILES string is empty")
-        if len(smiles) > settings.max_smiles_length:
-            raise RequestError("The SMILES string is longer than %d characters"
-                               % settings.max_smiles_length)
-        options["smiles"] = smiles.strip()
-    else:
-        upload = uploads.get(file_id)
-        if upload is None or upload.kind != "molecule":
-            raise RequestError("The molecule file is not known, upload it again")
-        options["f"] = uploads.path(upload)
+    if MOLECULE in task.needs:
+        # The molecule: a SMILES string or an uploaded file
+        molecule = request.get("molecule")
+        if not isinstance(molecule, Mapping):
+            raise RequestError("The request has no molecule")
+        smiles = molecule.get("smiles")
+        file_id = molecule.get("file")
+        if (smiles is None) == (file_id is None):
+            raise RequestError("Give a SMILES string or a molecule file, not both")
+        if smiles is not None:
+            if not isinstance(smiles, str) or not smiles.strip():
+                raise RequestError("The SMILES string is empty")
+            if len(smiles) > settings.max_smiles_length:
+                raise RequestError("The SMILES string is longer than %d characters"
+                                   % settings.max_smiles_length)
+            options["smiles"] = smiles.strip()
+        else:
+            upload = uploads.get(file_id)
+            if upload is None or upload.kind != "molecule":
+                raise RequestError("The molecule file is not known, upload it again")
+            options["f"] = uploads.path(upload)
 
-    # The force field: an uploaded file or the default
-    forcefield = request.get("forcefield") or {}
-    if not isinstance(forcefield, Mapping):
-        raise RequestError("The force field must be an object")
-    ff_id = forcefield.get("file")
-    if ff_id is None:
-        options["ff"] = settings.default_forcefield
-    else:
-        upload = uploads.get(ff_id)
-        if upload is None or upload.kind != "forcefield":
-            raise RequestError("The force field file is not known, upload it again")
-        options["ff"] = uploads.path(upload)
+    if FORCEFIELD in task.needs:
+        # An uploaded file, one that a job wrote or, for a calculation on a
+        # molecule, the default
+        options["ff"] = _forcefield(request.get("forcefield"), settings, uploads, written,
+                                    default=MOLECULE in task.needs)
+
+    if MOLPROP in task.needs:
+        molprop = request.get("molprop")
+        if not isinstance(molprop, Mapping):
+            raise RequestError("The request has no molprop file")
+        upload = uploads.get(molprop.get("file"))
+        if upload is None or upload.kind != "molprop":
+            raise RequestError("The molprop file is not known, upload it again")
+        options["mp"] = [uploads.path(upload)]
+
+    if GENERATOR in task.needs:
+        # The choices become the files and the options of gen_ff
+        try:
+            atom_types = ffgen.read_atom_types()
+            made = ffgen.build(ffgen.parse_choices(request.get("generator"), atom_types),
+                               atom_types)
+        except ffgen.GeneratorError as exc:
+            raise RequestError(str(exc)) from exc
+        options.update(made.options)
+        inputs["f"] = [InputFile("atomtypes.csv", made.atomtypes)]
+        if made.vsites is not None:
+            inputs["vs"] = [InputFile("vsites.json", made.vsites)]
 
     # Only the options of the task, within the limits
     given = request.get("options") or {}
     if not isinstance(given, Mapping):
         raise RequestError("The options must be an object")
     limits = settings.limits.get(task.name, {})
+    chosen: Dict[str, Any] = {}
     for name, value in given.items():
         if name not in task.options:
             raise RequestError("The task %s has no option '%s'" % (task.name, name))
@@ -170,9 +350,12 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
                 raise RequestError("Option '%s' must be a number" % name)
             if not low <= value <= high:
                 raise RequestError("Option '%s' must be between %g and %g" % (name, low, high))
-        options[name] = value
+        chosen[name] = value
+    if task.name == "ff_edit":
+        chosen = _edit_options(chosen)
+    options.update(chosen)
     options.update(task.fixed)
-    return options
+    return Prepared(options=options, inputs=inputs)
 
 
 def find_task(name: Any) -> Task:
@@ -208,4 +391,5 @@ def describe_task(task: Task, command_info: Optional[Any]) -> Dict[str, Any]:
     return {"name": task.name, "title": task.title, "command": task.command,
             "progress": task.progress, "downloads": list(task.downloads),
             "plots": list(task.plots), "package": task.package,
+            "needs": list(task.needs), "workspace": task.workspace,
             "options": described}

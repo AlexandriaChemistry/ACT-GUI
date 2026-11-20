@@ -36,15 +36,35 @@ that `alexandria gentop -openmm` writes, the settings of the simulation, a
 script that runs it with `ActOpenMMSim` of ACT-utilities, and a text that
 says what is what.
 
-Not there yet: the force field and molprop workspaces, and the server for
-several users.
+The force field workspace has one force field at a time, which is made
+there or opened from a file:
+
+- *Generate* makes a new force field with `alexandria gen_ff` from a few
+  choices: the charge model, the potentials with their combination rules,
+  the atom types and which of them get a shell or a second charge, and
+  predefined virtual sites. It does what the program `actgui` of
+  ACT-utilities did. The table of atom types and the virtual sites that
+  `gen_ff` got can be saved as well.
+- *Geometry* takes the bond lengths, angles and dihedral angles from the
+  compounds of a molprop file with `alexandria geometry_ff`.
+- *Edit and validate* lists the parameters with their value, bounds and
+  mutability, changes them with `alexandria edit_ff`, and shows the
+  problems that `edit_ff -validate` finds, with a button to write the force
+  field without those that writing removes.
+
+Every step writes a new file on the server, which can be saved and which
+the molecule workspace can use for its calculations.
+
+Not there yet: virtual sites by point and click, the comparison of two
+force fields, the molprop workspace, and the server for several users.
 
 The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 `act_gui/static/vendor/`) to show molecules.
 
 ## Requirements
 
-- ACT with the Python package `act` (branch `python-api` of ACT for now) and
+- ACT with the Python package `act` (the main branch of ACT; the force
+  field workspace needs the branch `python-api-2` until that is merged) and
   the `alexandria` program in the `PATH`, or its path in the environment
   variable `ACT_ALEXANDRIA`;
 - Python 3.9 or newer with `fastapi` and `uvicorn`;
@@ -70,7 +90,16 @@ program, and `tests/test_openmm_package.py` runs ten steps of the archive
 for OpenMM when OpenMM and ACT-utilities are installed. The tests in
 `tests/e2e` drive the page in Firefox without a window, through selenium,
 with the real program; with `ACT_GUI_SHOTS` set to a directory they save
-pictures of the page there.
+pictures of the page there. With `ACT_TESTDATA` set to the directory
+`src/act/testdata` of the source of ACT, the tests that need a molprop file
+run as well.
+
+## The atom types and virtual sites of the generator
+
+`act_gui/data/generator/` has the atom types that a new force field can be
+made of (`atomtypes_gui.csv`) and the predefined virtual sites, copied from
+the directory `share` of ACT-utilities. They move here for good when
+`actgui` is removed from ACT-utilities.
 
 ## The default force field
 

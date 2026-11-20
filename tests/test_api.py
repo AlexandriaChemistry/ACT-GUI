@@ -22,7 +22,7 @@ from act_gui.app import TOKEN_COOKIE, TOKEN_HEADER, create_app
 from act_gui.plots import PlotError
 from act_gui.settings import Settings
 from tests.test_jobs import FakeRun
-from tests.test_uploads import FF, SDF
+from tests.test_uploads import FF, MP, SDF
 
 
 def fake_program_info():
@@ -191,7 +191,12 @@ class ApiTest(unittest.TestCase):
         self.assertIn("ACS-pg1", session["default_forcefield"])
         tasks = self.client.get("/api/tasks", headers=self.headers).json()["tasks"]
         names = [task["name"] for task in tasks]
-        self.assertEqual(["charges", "minimize", "nma", "simulate", "openmm"], names)
+        self.assertEqual(["charges", "minimize", "nma", "simulate", "openmm", "gen_ff",
+                          "geometry_ff", "ff_describe", "ff_edit", "ff_repair"], names)
+        self.assertEqual(["molecule"] * 5 + ["forcefield"] * 5,
+                         [task["workspace"] for task in tasks])
+        self.assertEqual(["generator"], tasks[5]["needs"])
+        self.assertEqual(["forcefield", "molprop"], tasks[6]["needs"])
         minimize = tasks[1]
         minalg = [o for o in minimize["options"] if o["name"] == "minalg"][0]
         self.assertEqual("enum", minalg["type"])
@@ -290,6 +295,317 @@ class ApiTest(unittest.TestCase):
         answer = self.client.post("/api/jobs", headers=self.headers, content=b"{not json")
         self.assertEqual(400, answer.status_code)
         self.assertEqual([], self.run.calls)
+
+    # --- the force field workspace ---
+
+    def test_generator_description(self):
+        """!
+        @brief The page learns what a force field can be made from.
+        """
+        self.assertEqual(401, self.client.get("/api/generator").status_code)
+        described = self.client.get("/api/generator", headers=self.headers).json()
+        self.assertGreater(len(described["atomtypes"]), 50)
+        self.assertEqual("WANG_BUCKINGHAM", described["vdw"]["default"])
+        self.assertIn("Geometric", described["rules"])
+        self.assertEqual(7, len(described["vsites"]))
+
+    def generate(self, **generator):
+        """!
+        @brief Start a job that makes a force field and wait for it.
+        @param generator The choices, two atom types unless given.
+        @return The job.
+        """
+        generator.setdefault("atomtypes", [{"name": "hc"}, {"name": "c3", "shell": True}])
+        answer = self.client.post("/api/jobs", headers=self.headers,
+                                  json={"task": "gen_ff", "generator": generator})
+        self.assertEqual(200, answer.status_code, answer.text)
+        return self.wait(answer.json()["id"])
+
+    def test_generate_force_field(self):
+        """!
+        @brief The choices become the files and the options of gen_ff, in
+        the directory of the job, and the files can be fetched.
+        """
+        job = self.generate(vdw={"potential": "LJ12_6"},
+                            vsites={"files": ["vsite4_amine"]})
+        self.assertEqual("finished", job["status"])
+        call = self.run.calls[0]
+        self.assertEqual("gen_ff", call["command"])
+        options = call["options"]
+        self.assertEqual(call["workdir"] / "atomtypes.csv", options["f"])
+        self.assertEqual([call["workdir"] / "vsites.json"], options["vs"])
+        self.assertEqual(call["workdir"] / "forcefield.xml", options["o"])
+        self.assertEqual(("LJ12_6", "GAUSSIAN", True),
+                         (options["vdwfn"], options["qdist"], options["json"]))
+        # No molecule and no force field are given to gen_ff
+        for absent in ("ff", "smiles", "mp"):
+            self.assertNotIn(absent, options)
+        table = options["f"].read_text().splitlines()
+        self.assertTrue(table[0].startswith("#atomtype|"))
+        self.assertEqual(["v4n", "hc", "c3", "c3_s"], [line.split("|")[0] for line in table[1:]])
+        self.assertEqual(["c", "f", "o", "vs"], sorted(job["files"]))
+        for option, start in (("o", "<alexandria"), ("f", "#atomtype"), ("vs", "{")):
+            got = self.client.get("/api/jobs/%s/files/%s" % (job["id"], option),
+                                  headers=self.headers)
+            self.assertEqual(200, got.status_code, option)
+            self.assertTrue(got.text.startswith(start), option)
+        # The files have the names the server gave them
+        names = {option: self.client.get("/api/jobs/%s/files/%s" % (job["id"], option),
+                                         headers=self.headers).headers["content-disposition"]
+                 for option in ("o", "f", "vs")}
+        self.assertIn('"forcefield.xml"', names["o"])
+        self.assertIn('"atomtypes.csv"', names["f"])
+        self.assertIn('"vsites.json"', names["vs"])
+
+    def test_generator_choices_that_are_refused(self):
+        """!
+        @brief Choices that are not in the lists are refused, and nothing
+        is run or written.
+        """
+        hc = [{"name": "hc"}]
+        wrong = [
+            {"task": "gen_ff"},
+            {"task": "gen_ff", "generator": {}},
+            {"task": "gen_ff", "generator": {"atomtypes": [{"name": "xx"}]}},
+            {"task": "gen_ff", "generator": {"atomtypes": hc, "vdw": {"potential": "-h"}}},
+            {"task": "gen_ff", "generator": {"atomtypes": hc,
+                                             "vsites": {"files": ["/etc/passwd"]}}},
+            # gen_ff takes no options from the request, only choices
+            {"task": "gen_ff", "generator": {"atomtypes": hc}, "options": {"o": "/tmp/x.xml"}},
+            {"task": "gen_ff", "generator": {"atomtypes": hc}, "options": {"f": "/etc/passwd"}},
+            {"task": "gen_ff", "generator": {"atomtypes": hc}, "options": {"cr": "x"}},
+        ]
+        for body in wrong:
+            answer = self.client.post("/api/jobs", headers=self.headers, json=body)
+            self.assertEqual(400, answer.status_code, body)
+            self.assertTrue(answer.json()["detail"])
+        self.assertEqual([], self.run.calls)
+        self.assertEqual([], list(self.settings.jobs_dir.glob("*")))
+
+    def test_force_field_of_a_job_is_used_by_the_next(self):
+        """!
+        @brief A force field that a job wrote is the input of a later job,
+        in the force field workspace and for a molecule.
+        """
+        made = self.generate()
+        written = self.run.calls[0]["options"]["o"]
+        for body in ({"task": "ff_describe"},
+                     {"task": "ff_repair"},
+                     {"task": "minimize", "molecule": {"smiles": "CC"}},
+                     {"task": "ff_edit", "options": {"p": "chi", "a": "hc_z", "val": 5.5}}):
+            body["forcefield"] = {"job": made["id"]}
+            answer = self.client.post("/api/jobs", headers=self.headers, json=body)
+            self.assertEqual(200, answer.status_code, answer.text)
+            self.wait(answer.json()["id"])
+            call = self.run.calls[-1]
+            self.assertEqual(written, call["options"]["ff"], body["task"])
+            self.assertIs(True, call["options"]["json"])
+        self.assertEqual(["gen_ff", "edit_ff", "edit_ff", "minimize", "edit_ff"],
+                         [call["command"] for call in self.run.calls])
+        # Describing writes no file, repairing and editing do
+        self.assertNotIn("o", self.run.calls[1]["options"])
+        self.assertIs(True, self.run.calls[2]["options"]["validate"])
+        self.assertEqual(self.run.calls[2]["workdir"] / "forcefield.xml",
+                         self.run.calls[2]["options"]["o"])
+        # The force field of the edit can be used in turn
+        edited = self.client.get("/api/jobs", headers=self.headers).json()["jobs"][0]
+        self.assertEqual("ff_edit", edited["task"])
+        answer = self.client.post("/api/jobs", headers=self.headers, json={
+            "task": "ff_describe", "forcefield": {"job": edited["id"]}})
+        self.assertEqual(200, answer.status_code, answer.text)
+        self.wait(answer.json()["id"])
+        self.assertEqual(self.run.calls[-2]["options"]["o"], self.run.calls[-1]["options"]["ff"])
+
+    def test_force_fields_that_are_refused(self):
+        """!
+        @brief A force field of a job must be one that a finished job of a
+        task that writes force fields made; the tasks of the force field
+        workspace do not fall back on the default.
+        """
+        made = self.generate()
+        minimized = self.client.post("/api/jobs", headers=self.headers, json={
+            "task": "minimize", "molecule": {"smiles": "CC"}}).json()
+        self.wait(minimized["id"])
+        uploaded = self.upload("my.xml", "forcefield", FF).json()["id"]
+        ncalls = len(self.run.calls)
+        wrong = [
+            {"task": "ff_describe"},
+            {"task": "ff_describe", "forcefield": {}},
+            {"task": "ff_describe", "forcefield": {"job": "nosuchjob"}},
+            {"task": "ff_describe", "forcefield": {"job": "../" + made["id"]}},
+            {"task": "ff_describe", "forcefield": {"job": 7}},
+            # A job that wrote no force field
+            {"task": "ff_describe", "forcefield": {"job": minimized["id"]}},
+            {"task": "ff_describe", "forcefield": {"job": made["id"], "file": uploaded}},
+            {"task": "ff_describe", "forcefield": "default"},
+            {"task": "ff_describe", "forcefield": {"default": "yes"}},
+            {"task": "minimize", "molecule": {"smiles": "CC"},
+             "forcefield": {"job": minimized["id"]}},
+            {"task": "ff_describe", "forcefield": {"file": uploaded}, "options": {"o": "x.xml"}},
+            {"task": "ff_repair", "forcefield": {"file": uploaded},
+             "options": {"validate": False}},
+        ]
+        for body in wrong:
+            answer = self.client.post("/api/jobs", headers=self.headers, json=body)
+            self.assertEqual(400, answer.status_code, body)
+        self.assertEqual(ncalls, len(self.run.calls))
+        # An uploaded force field is fine, and so is the default when it is asked for
+        answer = self.client.post("/api/jobs", headers=self.headers, json={
+            "task": "ff_describe", "forcefield": {"file": uploaded}})
+        self.assertEqual(200, answer.status_code)
+        self.wait(answer.json()["id"])
+        answer = self.client.post("/api/jobs", headers=self.headers, json={
+            "task": "ff_describe", "forcefield": {"default": True}})
+        self.assertEqual(200, answer.status_code)
+        self.wait(answer.json()["id"])
+        self.assertEqual(self.settings.default_forcefield, self.run.calls[-1]["options"]["ff"])
+
+    def test_force_field_of_a_job_that_is_not_done(self):
+        """!
+        @brief The force field of a job that still runs, or that wrote
+        none, cannot be used.
+        """
+        blocked = []
+        original = self.run.__class__.__call__
+
+        def slow(run, command, **kwargs):
+            if command == "gen_ff":
+                kwargs["behaviour"] = blocked and "unchanged" or "block"
+                blocked.append(command)
+            return original(run, command, **kwargs)
+        self.run.__class__.__call__ = slow
+        try:
+            body = {"task": "gen_ff", "generator": {"atomtypes": [{"name": "hc"}]}}
+            running = self.client.post("/api/jobs", headers=self.headers, json=body).json()
+            self.wait(running["id"], ("running",))
+            use = {"task": "ff_describe", "forcefield": {"job": running["id"]}}
+            self.assertEqual(400, self.client.post("/api/jobs", headers=self.headers,
+                                                   json=use).status_code)
+            self.run.release.set()
+            self.wait(running["id"])
+            self.assertEqual(200, self.client.post("/api/jobs", headers=self.headers,
+                                                   json=use).status_code)
+            # A job that finished without writing the file
+            empty = self.client.post("/api/jobs", headers=self.headers, json=body).json()
+            self.assertNotIn("o", self.wait(empty["id"])["files"])
+            use["forcefield"]["job"] = empty["id"]
+            answer = self.client.post("/api/jobs", headers=self.headers, json=use)
+            self.assertEqual(400, answer.status_code)
+            self.assertIn("make it again", answer.json()["detail"])
+        finally:
+            self.run.__class__.__call__ = original
+
+    def test_edit_force_field(self):
+        """!
+        @brief A change names a parameter and the types it is changed for.
+        Several types are given to edit_ff as one argument.
+        """
+        uploaded = {"file": self.upload("my.xml", "forcefield", FF).json()["id"]}
+        answer = self.client.post("/api/jobs", headers=self.headers, json={
+            "task": "ff_edit", "forcefield": uploaded,
+            "options": {"p": "bondlength", "a": ["c3_b~h_b", "c3_b=o_b", "Na+", "Cl-"],
+                        "val": 0, "min": -1.5, "max": 2, "mut": "Fixed", "nonneg": "no",
+                        "force": True}})
+        self.assertEqual(200, answer.status_code, answer.text)
+        self.wait(answer.json()["id"])
+        options = self.run.calls[0]["options"]
+        self.assertEqual("c3_b~h_b c3_b=o_b Na+ Cl-", options["a"])
+        self.assertEqual(("bondlength", 0, -1.5, 2, "Fixed", "no", True),
+                         tuple(options[k] for k in ("p", "val", "min", "max", "mut", "nonneg",
+                                                    "force")))
+        self.assertEqual(self.run.calls[0]["workdir"] / "forcefield.xml", options["o"])
+        ncalls = len(self.run.calls)
+        wrong = [
+            {},
+            {"p": "chi"},
+            {"a": "h_z", "val": 1},
+            {"p": "chi", "a": "h_z"},
+            {"p": "chi", "val": 1},
+            {"p": "-del", "a": "h_z", "val": 1},
+            {"p": "chi zeta", "a": "h_z", "val": 1},
+            {"p": "chi", "a": "-del", "val": 1},
+            {"p": "chi", "a": "h_z -del", "val": 1},
+            {"p": "chi", "a": ["h_z", "-force"], "val": 1},
+            {"p": "chi", "a": "h_z;rm", "val": 1},
+            {"p": "chi", "a": [], "val": 1},
+            {"p": "chi", "a": ["h_z"] * 201, "val": 1},
+            {"p": "chi", "a": 5, "val": 1},
+            {"p": "chi", "a": "h_z", "val": "1"},
+            {"p": "chi", "a": "h_z", "val": True},
+            {"p": "chi", "a": "h_z", "min": "low"},
+            {"p": "chi", "a": "h_z", "mut": "Free"},
+            {"p": "chi", "a": "h_z", "nonneg": "maybe"},
+            {"p": "chi", "a": "h_z", "val": 1, "force": "yes"},
+            # Options of edit_ff that the task does not offer
+            {"p": "chi", "a": "h_z", "val": 1, "del": True},
+            {"p": "chi", "a": "h_z", "val": 1, "ff2": "/etc/passwd"},
+            {"p": "chi", "a": "h_z", "val": 1, "o": "/tmp/x.xml"},
+            {"p": "chi", "a": "h_z", "val": 1, "dump": "/tmp/x.dat"},
+        ]
+        for options in wrong:
+            answer = self.client.post("/api/jobs", headers=self.headers, json={
+                "task": "ff_edit", "forcefield": uploaded, "options": options})
+            self.assertEqual(400, answer.status_code, options)
+        self.assertEqual(ncalls, len(self.run.calls))
+
+    def test_geometry(self):
+        """!
+        @brief geometry_ff gets a force field and an uploaded molprop file.
+        """
+        made = self.generate()
+        molprop = self.upload("mols.xml", "molprop", MP).json()["id"]
+        answer = self.client.post("/api/jobs", headers=self.headers, json={
+            "task": "geometry_ff", "forcefield": {"job": made["id"]},
+            "molprop": {"file": molprop},
+            "options": {"gen_bcc": False, "bfactor": 0.9, "afactor": 0.95, "factor": 0.5}})
+        self.assertEqual(200, answer.status_code, answer.text)
+        job = self.wait(answer.json()["id"])
+        call = self.run.calls[-1]
+        self.assertEqual("geometry_ff", call["command"])
+        options = call["options"]
+        self.assertEqual([self.settings.uploads_dir / (molprop + ".xml")], options["mp"])
+        self.assertEqual(self.run.calls[0]["options"]["o"], options["ff"])
+        self.assertEqual(call["workdir"] / "forcefield.xml", options["o"])
+        self.assertEqual((False, 0.9, 0.95, 0.5, True),
+                         tuple(options[k] for k in ("gen_bcc", "bfactor", "afactor", "factor",
+                                                    "json")))
+        # Its force field can be used in turn
+        answer = self.client.post("/api/jobs", headers=self.headers, json={
+            "task": "ff_describe", "forcefield": {"job": job["id"]}})
+        self.assertEqual(200, answer.status_code)
+        ncalls = len(self.run.calls)
+        forcefield = self.upload("my.xml", "forcefield", FF).json()["id"]
+        wrong = [
+            {"task": "geometry_ff", "forcefield": {"job": made["id"]}},
+            {"task": "geometry_ff", "molprop": {"file": molprop}},
+            {"task": "geometry_ff", "forcefield": {"job": made["id"]},
+             "molprop": {"file": forcefield}},
+            {"task": "geometry_ff", "forcefield": {"job": made["id"]},
+             "molprop": {"file": "../" + molprop}},
+            {"task": "geometry_ff", "forcefield": {"job": made["id"]}, "molprop": molprop},
+            {"task": "geometry_ff", "forcefield": {"job": made["id"]},
+             "molprop": {"file": molprop}, "options": {"bfactor": 5}},
+            {"task": "geometry_ff", "forcefield": {"job": made["id"]},
+             "molprop": {"file": molprop}, "options": {"histo": True}},
+            {"task": "geometry_ff", "forcefield": {"job": made["id"]},
+             "molprop": {"file": molprop}, "options": {"sel": "/etc/passwd"}},
+        ]
+        for body in wrong:
+            answer = self.client.post("/api/jobs", headers=self.headers, json=body)
+            self.assertEqual(400, answer.status_code, body)
+        self.wait(self.client.get("/api/jobs", headers=self.headers).json()["jobs"][0]["id"])
+        self.assertEqual(ncalls, len(self.run.calls))
+
+    def test_molprop_files_may_be_larger(self):
+        """!
+        @brief Molprop files have their own largest size.
+        """
+        large = MP + b"<!-- " + b"x" * 6000 + b" -->\n"
+        self.assertGreater(len(large), self.settings.max_upload_bytes)
+        self.assertEqual(200, self.upload("mols.xml", "molprop", large).status_code)
+        self.assertEqual(413, self.upload("big.xml", "forcefield", FF + large).status_code)
+        session = self.client.get("/api/session", headers=self.headers).json()
+        self.assertEqual(self.settings.max_molprop_bytes, session["max_molprop_bytes"])
 
     def test_failed_job_tells_why(self):
         """!

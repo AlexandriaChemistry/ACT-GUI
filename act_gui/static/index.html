@@ -29,7 +29,7 @@
         <button class="btn" id="upload" type="button">Upload molecule file…</button>
         <input class="visually-hidden" type="file" id="molfile" accept=".sdf,.pdb,.xyz" tabindex="-1" aria-hidden="true">
         <div class="field"><label for="ffsel">Force field</label>
-          <select id="ffsel"><option value="default">Default</option><option value="upload">Upload force field…</option></select></div>
+          <select id="ffsel"><option value="default">Default</option><option value="workspace" hidden disabled>From the force field tab</option><option value="upload">Upload force field…</option></select></div>
         <input class="visually-hidden" type="file" id="fffile" accept=".xml" tabindex="-1" aria-hidden="true">
         <button class="btn primary" id="load" type="button">Load molecule</button>
       </div>
@@ -131,9 +131,127 @@
     </div>
   </section>
 
+  <!-- ================= Force field ================= -->
   <section class="view" id="view-force-field" hidden>
-    <div class="card"><div class="body"><h2>Force field tools</h2>
-      <p class="muted">Generating, editing and validating force fields and making virtual site files is not available yet in this version.</p></div></div>
+    <div class="card">
+      <div class="bar">
+        <div class="field grow"><span class="lab">Force field in this workspace</span>
+          <div class="chips" id="ffchips"><span class="chip">None yet. Generate one, or open one to look at it or change it.</span></div></div>
+        <button class="btn" id="ff-open" type="button">Open force field file…</button>
+        <input class="visually-hidden" type="file" id="ff-openfile" accept=".xml" tabindex="-1" aria-hidden="true">
+        <button class="btn" id="ff-default" type="button">Open the default</button>
+        <button class="btn primary" id="ff-save" type="button" hidden>Save force field</button>
+      </div>
+    </div>
+    <nav class="tabs sub" id="fftabs" role="tablist" aria-label="Force field tools">
+      <button role="tab" data-tab="gen" aria-selected="true">Generate</button>
+      <button role="tab" data-tab="geom" aria-selected="false">Geometry</button>
+      <button role="tab" data-tab="edit" aria-selected="false">Edit and validate</button>
+      <span class="ink"></span>
+    </nav>
+
+    <div class="panel cols form-left" id="fftab-gen">
+      <div class="card"><div class="body">
+        <div class="group"><h3>Electrostatics</h3>
+          <div class="field"><span class="lab">Charge model</span><div class="seg" id="g-qmodel" role="group" aria-label="Charge model"></div></div>
+          <p class="muted fine" id="g-qhelp"></p>
+          <label class="check"><input type="checkbox" id="g-qsymm" checked> Same charge on equivalent atoms</label>
+          <div class="grid3">
+            <div class="field"><label for="g-epsr">Relative dielectric constant</label><input type="number" id="g-epsr" value="1" min="0.1" step="0.1"></div>
+            <div class="field"><label for="g-nexcl">Excluded bonds</label><input type="number" id="g-nexcl" value="2" min="0" max="3" step="1"></div>
+            <div class="field" id="g-rowfield" hidden><label for="g-row">Highest Slater row</label><input type="number" id="g-row" value="1" min="1" max="6" step="1"></div>
+          </div></div>
+        <div class="group"><h3>Van der Waals</h3>
+          <div class="field"><label for="g-vdw">Potential</label><select id="g-vdw"></select></div>
+          <p class="muted fine" id="g-vdwhelp"></p>
+          <div class="field"><span class="lab">Train the parameters of</span>
+            <div class="row"><label class="check"><input type="checkbox" id="g-vdw-heavy" checked> Atoms</label>
+              <label class="check"><input type="checkbox" id="g-vdw-h" checked> Hydrogen</label>
+              <label class="check"><input type="checkbox" id="g-vdw-vs"> Virtual sites</label>
+              <label class="check"><input type="checkbox" id="g-vdw-shell"> Shells</label></div></div>
+          <details class="more"><summary>Combination rules</summary><div class="grid2 mt8" id="g-vdwrules"></div></details></div>
+        <div class="group"><h3>Bonded interactions</h3>
+          <div class="grid2">
+            <div class="field"><label for="g-bonds">Bonds</label><select id="g-bonds"></select></div>
+            <div class="field"><label for="g-angles">Angles</label><select id="g-angles"></select></div>
+            <div class="field"><label for="g-dihedrals">Dihedrals</label><select id="g-dihedrals"></select></div>
+          </div></div>
+        <div class="group"><h3>Induction correction</h3>
+          <div class="field"><label for="g-ic">Potential</label><select id="g-ic"></select></div>
+          <div id="g-icmore" hidden><p class="muted fine" id="g-ichelp"></p>
+            <div class="field mt8"><span class="lab">Train the parameters of</span>
+              <div class="row"><label class="check"><input type="checkbox" id="g-ic-atom" checked> Atoms</label>
+                <label class="check"><input type="checkbox" id="g-ic-shell"> Shells</label></div></div>
+            <details class="more mt8"><summary>Combination rules</summary><div class="grid2 mt8" id="g-icrules"></div></details></div></div>
+        <div class="group"><h3>Virtual sites</h3>
+          <div class="checks" id="g-vsites"></div>
+          <label class="check"><input type="checkbox" id="g-exchange"> Exchange correction on σ-holes</label></div>
+        <div class="row"><button class="btn primary" id="run-gen" type="button" disabled>Generate force field</button>
+          <span class="pill" id="gen-pill" hidden></span></div>
+      </div></div>
+      <div class="stack">
+        <div class="card"><div class="head"><h2>Atom types</h2><span class="muted" id="g-ntypes"></span><span class="spacer"></span>
+            <button class="btn small" id="g-all" type="button">Select all</button><button class="btn small" id="g-none" type="button">Clear</button></div>
+          <div class="scroll flat maxh640"><table class="data" id="g-types"></table></div></div>
+        <div class="card" id="g-result" hidden><div class="head"><h2>The force field that was made</h2><span class="spacer"></span>
+            <button class="btn small" id="g-save-f" type="button">Save table of atom types</button>
+            <button class="btn small" id="g-save-vs" type="button" hidden>Save virtual sites</button></div>
+          <div class="body"><div class="chips" id="g-facts"></div>
+            <div class="xscroll"><table class="data" id="g-inter"></table></div>
+            <p class="muted fine">It is now the force field of this workspace. The bonds, angles and dihedrals have no parameters yet: take them from a molprop file under Geometry.</p></div></div>
+      </div>
+    </div>
+
+    <div class="panel cols form-left" id="fftab-geom" hidden>
+      <div class="card"><div class="body">
+        <p>Takes the bond lengths, angles and dihedral angles of the compounds in a molprop file, and puts their averages in the force field of this workspace as the starting values of its bonded parameters.</p>
+        <div class="row"><button class="btn" id="mp-open" type="button">Choose molprop file…</button>
+          <input class="visually-hidden" type="file" id="mp-file" accept=".xml" tabindex="-1" aria-hidden="true">
+          <span class="filename" id="mp-name"></span></div>
+        <div class="group"><h3>Charge algorithm</h3>
+          <div class="seg" id="geo-qalg" role="group" aria-label="Charge algorithm"><button aria-pressed="true" data-v="SQE" title="Split charge equilibration. Verstraelen et al., J. Chem. Phys. 131 (2009) 044127">SQE</button><button aria-pressed="false" data-v="EEM" title="Electronegativity equalization. Rappe &amp; Goddard, J. Phys. Chem. 95 (1991) 3358">EEM</button></div>
+          <p class="muted fine">With SQE each bond gets a correction of the electronegativity, and the electronegativity of atoms that make one bond (hydrogen and the halogens) is fixed, since the correction of that bond can change instead.</p></div>
+        <div class="group"><h3>Room for training</h3>
+          <p class="muted fine">The smallest value of a parameter is its value times the factor, the largest its value divided by it.</p>
+          <div class="grid3">
+            <div class="field"><label for="geo-bfactor">Bond lengths</label><input type="number" id="geo-bfactor" value="0.95" min="0.01" max="1" step="0.01"></div>
+            <div class="field"><label for="geo-afactor">Angles</label><input type="number" id="geo-afactor" value="0.95" min="0.01" max="1" step="0.01"></div>
+            <div class="field"><label for="geo-factor">Other parameters</label><input type="number" id="geo-factor" value="0.5" min="0.01" max="1" step="0.01"></div>
+          </div></div>
+        <div class="row"><button class="btn primary" id="run-geo" type="button" disabled>Extract geometries</button>
+          <span class="pill" id="geo-pill" hidden></span></div>
+      </div></div>
+      <div class="card"><div class="head"><h2>What was extracted</h2><span class="spacer"></span>
+          <button class="btn small" id="geo-log" type="button" hidden>Save log file</button></div>
+        <div class="body"><p class="empty" id="geo-empty">Nothing yet. Choose a molprop file with the compounds, with a force field in this workspace.</p>
+          <div class="stats" id="geo-stats" hidden><div class="stat"><span class="lab">Compounds used</span><span class="v" id="geo-ncomp">–</span></div></div>
+          <div class="xscroll"><table class="data" id="geo-table"></table></div></div></div>
+    </div>
+
+    <div class="panel cols side-right" id="fftab-edit" hidden>
+      <div class="card"><div class="head"><h2>Parameters</h2><span class="muted" id="p-count"></span><span class="spacer"></span>
+          <div class="field"><select id="p-filter" aria-label="Interaction"></select></div>
+          <div class="field"><input type="text" id="p-search" placeholder="Find type, e.g. c3" aria-label="Find a type" spellcheck="false" autocomplete="off"></div></div>
+        <div class="scroll flat maxh560"><table class="data" id="p-table"></table></div>
+        <p class="empty pad" id="p-empty">Open or generate a force field to see its parameters.</p></div>
+      <div class="stack">
+        <div class="card" id="p-edit" hidden><div class="head"><h2>Change a parameter</h2></div>
+          <div class="body"><div class="chips" id="p-what"></div>
+            <div class="grid2">
+              <div class="field"><label for="p-val">Value</label><input type="number" id="p-val" step="any"></div>
+              <div class="field"><label for="p-min">Minimum</label><input type="number" id="p-min" step="any"></div>
+              <div class="field"><label for="p-max">Maximum</label><input type="number" id="p-max" step="any"></div>
+              <div class="field"><label for="p-mut">Training may change it</label><select id="p-mut"><option value="Bounded">Bounded: within the bounds</option><option value="Fixed">Fixed: not at all</option></select></div>
+            </div>
+            <p class="muted fine" id="p-note"></p>
+            <div class="row"><button class="btn primary" id="p-apply" type="button">Apply</button><button class="btn" id="p-cancel" type="button">Cancel</button>
+              <span class="pill" id="p-pill" hidden></span></div></div></div>
+        <div class="card"><div class="head"><h2>Validation</h2><span class="spacer"></span><span class="pill" id="v-pill" hidden></span></div>
+          <div class="body"><ul class="list" id="v-list"></ul>
+            <p class="muted fine" id="v-note">The parameters are checked each time the force field is read: values within their bounds, a minimum that is not larger than the maximum, no negative value where that is not allowed, and each parameter defined once.</p>
+            <div class="row"><button class="btn" id="v-repair" type="button" hidden>Write corrected force field</button></div></div></div>
+      </div>
+    </div>
   </section>
 
   <section class="view" id="view-molprop" hidden>

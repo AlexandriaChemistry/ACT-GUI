@@ -24,7 +24,7 @@ import re
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Mapping, Optional
 
 ## The extensions that each kind of file can have
 KINDS: Dict[str, tuple] = {
@@ -35,6 +35,16 @@ KINDS: Dict[str, tuple] = {
 
 ## What an identifier of an upload looks like
 _ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+
+## The document types that ACT writes at the top of its XML files, by kind.
+## They name a file next to the XML file and define nothing themselves.
+_DOCTYPES: Dict[str, str] = {
+    "forcefield": "alexandria_chemistry.dtd",
+    "molprop": "molprops.dtd",
+}
+## Where a document type starts, and one as ACT writes it
+_DOCTYPE_START = re.compile(r"<!doctype", re.IGNORECASE)
+_DOCTYPE = re.compile(r'<!DOCTYPE\s+(\S+)\s+PUBLIC\s+"([^"<>\[\]]*)"\s+"([^"<>\[\]]*)"\s*>')
 
 
 class UploadError(ValueError):
@@ -103,11 +113,20 @@ def _check_format(kind: str, extension: str, text: str) -> None:
         head = text.lstrip()[:200]
         if not head.startswith("<"):
             raise UploadError("The file is not an XML file")
-        # No document type: that is how a file makes an XML reader fetch
-        # other files or addresses, or expand to gigabytes
+        # A document type is how a file makes an XML reader fetch other
+        # files or addresses, or expand to gigabytes. Only the one that ACT
+        # writes itself is accepted: it names the description of the format
+        # and defines no entities.
         lowered = text.lower()
-        if "<!doctype" in lowered or "<!entity" in lowered:
-            raise UploadError("XML files with a document type or entities are not accepted")
+        if "<!entity" in lowered:
+            raise UploadError("XML files with entities are not accepted")
+        declared = _DOCTYPE_START.findall(text)
+        if declared:
+            match = _DOCTYPE.search(text)
+            names = set(match.groups()) if match else set()
+            if len(declared) > 1 or names != {_DOCTYPES[kind]}:
+                raise UploadError("XML files with another document type than that of ACT "
+                                  "are not accepted")
         expected = "<alexandria" if kind == "forcefield" else "<molecules"
         if expected not in lowered[:5000]:
             raise UploadError("The file is not %s file of ACT"
@@ -133,15 +152,27 @@ class UploadStore:
     @brief Keeps the uploaded files in a directory.
     """
 
-    def __init__(self, directory: Path, max_bytes: int):
+    def __init__(self, directory: Path, max_bytes: int,
+                 limits: Optional[Mapping[str, int]] = None):
         """!
         @brief Make the store.
         @param directory Where the files are kept, made if it does not exist.
         @param max_bytes The largest file that is accepted.
+        @param limits    Another largest size for some kinds of files, by
+        kind: molprop files are larger than molecules.
         """
         self._dir = Path(directory)
         self._dir.mkdir(parents=True, exist_ok=True)
         self._max_bytes = max_bytes
+        self._limits = dict(limits or {})
+
+    def limit(self, kind: str) -> int:
+        """!
+        @brief The largest file of a kind that is accepted.
+        @param kind molecule, forcefield or molprop.
+        @return The size in bytes.
+        """
+        return self._limits.get(kind, self._max_bytes)
 
     def save(self, name: str, kind: str, data: bytes) -> Upload:
         """!
@@ -154,8 +185,8 @@ class UploadStore:
         """
         if kind not in KINDS:
             raise UploadError("Unknown kind of file '%s'" % kind)
-        if len(data) > self._max_bytes:
-            raise UploadError("The file is larger than %d kB" % (self._max_bytes // 1024))
+        if len(data) > self.limit(kind):
+            raise UploadError("The file is larger than %d kB" % (self.limit(kind) // 1024))
         label = clean_label(name)
         extension = Path(label).suffix.lower()
         if extension not in KINDS[kind]:

@@ -119,15 +119,45 @@ class UploadTest(unittest.TestCase):
 
     def test_xml_with_document_type_is_refused(self):
         """!
-        @brief A file cannot make the XML reader fetch other files.
+        @brief A file cannot make the XML reader fetch other files: no
+        entities, and no document type but the one ACT writes.
         """
+        ours = b'<!DOCTYPE alexandria_chemistry.dtd PUBLIC "alexandria_chemistry.dtd" ' \
+               b'"alexandria_chemistry.dtd">\n'
         for evil in (b'<?xml version="1.0"?>\n<!DOCTYPE a [<!ENTITY x SYSTEM "file:///etc/passwd">]>\n'
                      b'<alexandria_chemistry>&x;</alexandria_chemistry>',
                      b'<?xml version="1.0"?>\n<!doctype a>\n<alexandria_chemistry/>',
-                     b'<alexandria_chemistry><!ENTITY lol "lol"></alexandria_chemistry>'):
-            with self.assertRaises(UploadError) as caught:
+                     b'<alexandria_chemistry><!ENTITY lol "lol"></alexandria_chemistry>',
+                     # Another file or address than the one ACT names
+                     b'<!DOCTYPE alexandria_chemistry.dtd PUBLIC "alexandria_chemistry.dtd" '
+                     b'"http://example.org/evil.dtd">\n<alexandria_chemistry/>',
+                     b'<!DOCTYPE alexandria_chemistry.dtd SYSTEM "/etc/passwd">\n'
+                     b'<alexandria_chemistry/>',
+                     b'<!DOCTYPE alexandria_chemistry.dtd PUBLIC "alexandria_chemistry.dtd" '
+                     b'"alexandria_chemistry.dtd" [<!ELEMENT a ANY>]>\n<alexandria_chemistry/>',
+                     # Two of them, of which the first is fine
+                     ours + b'<!DOCTYPE b SYSTEM "x">\n<alexandria_chemistry/>',
+                     # The document type of the other kind of file
+                     b'<!DOCTYPE molprops.dtd PUBLIC "molprops.dtd" "molprops.dtd">\n'
+                     b'<alexandria_chemistry/>'):
+            with self.assertRaises(UploadError, msg=evil) as caught:
                 self.store.save("ff.xml", "forcefield", evil)
-            self.assertIn("document type", str(caught.exception))
+            self.assertRegex(str(caught.exception), "document type|entities")
+        self.assertEqual([], list(self.dir.iterdir()))
+
+    def test_files_as_act_writes_them_are_kept(self):
+        """!
+        @brief Force field and molprop files of ACT start with a document
+        type that names the description of their format. They are accepted.
+        """
+        head = b'<?xml version="1.0" encoding="ISO-8859-1"?>\n'
+        forcefield = head + (b'<!DOCTYPE alexandria_chemistry.dtd PUBLIC '
+                             b'"alexandria_chemistry.dtd" "alexandria_chemistry.dtd">\n'
+                             b'<alexandria_chemistry>\n</alexandria_chemistry>\n')
+        molprop = head + (b'<!DOCTYPE molprops.dtd PUBLIC "molprops.dtd" "molprops.dtd">\n'
+                          b'<molecules>\n</molecules>\n')
+        self.assertEqual("forcefield", self.store.save("ff.xml", "forcefield", forcefield).kind)
+        self.assertEqual("molprop", self.store.save("mp.xml", "molprop", molprop).kind)
 
     def test_unknown_identifiers(self):
         """!

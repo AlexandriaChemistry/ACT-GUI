@@ -25,7 +25,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 ## The states a job can be in
 QUEUED, RUNNING, FINISHED, FAILED, CANCELLED = (
@@ -34,11 +34,26 @@ QUEUED, RUNNING, FINISHED, FAILED, CANCELLED = (
 ## The states in which a job is not done yet
 ACTIVE = (QUEUED, RUNNING)
 
+## The options of commands that take a list of files, also if there is one
+MULTIPLE = ("vs", "mp")
+
 
 class JobError(RuntimeError):
     """!
     @brief A job that cannot be started. The message is for the user.
     """
+
+
+@dataclass(frozen=True)
+class InputFile:
+    """!
+    @brief A file that the server makes for a job, in the directory of the
+    job. The name and the content come from the server, not from the user.
+    """
+    ## The name of the file, without a directory
+    name: str
+    ## The content
+    text: str
 
 
 @dataclass
@@ -66,8 +81,11 @@ class Job:
     error: str = ""
     ## The reports of the progress of the command
     progress: List[Any] = field(default_factory=list)
-    ## The output files by option name
+    ## The output files by option name, with the input files that were
+    ## made for the job
     files: Dict[str, Path] = field(default_factory=dict)
+    ## The input files that were made for the job, by option name
+    inputs: Dict[str, Path] = field(default_factory=dict)
     ## Set to stop the job
     stop: threading.Event = field(default_factory=threading.Event)
 
@@ -120,7 +138,8 @@ class JobManager:
 
     def submit(self, task: str, command: str, options: Dict[str, Any],
                progress: bool = False,
-               outputs: Optional[Dict[str, str]] = None) -> Job:
+               outputs: Optional[Dict[str, str]] = None,
+               inputs: Optional[Mapping[str, Sequence[InputFile]]] = None) -> Job:
         """!
         @brief Start a job, or put it in the queue.
         @param task     The name of the task, for the browser.
@@ -129,6 +148,9 @@ class JobManager:
         @param progress Whether to follow the progress of the command.
         @param outputs  Output files with a name of our choice, by option
         name. They are written in the directory of the job.
+        @param inputs   Input files that are made here, by option name: one
+        file for an option that takes one, a list of files otherwise. They
+        are written in the directory of the job before it starts.
         @return The job.
         @throws JobError if too many jobs are waiting or running.
         """
@@ -144,6 +166,17 @@ class JobManager:
         for name, filename in (outputs or {}).items():
             # Only a file name, in the directory of the job
             options[name] = job.workdir / Path(filename).name
+        if inputs:
+            job.workdir.mkdir(parents=True, exist_ok=True)
+            for name, files in inputs.items():
+                paths = []
+                for item in files:
+                    path = job.workdir / Path(item.name).name
+                    path.write_text(item.text, encoding="utf-8")
+                    paths.append(path)
+                # One file for an option that takes one file
+                options[name] = paths[0] if len(paths) == 1 and name not in MULTIPLE else paths
+                job.inputs[name] = paths[0]
         self._pool.submit(self._execute, job, options, progress)
         return job
 
@@ -178,7 +211,10 @@ class JobManager:
             result = self._run(job.command, **extra, **options)
             with self._lock:
                 job.result = result.data
-                job.files = {name: paths[0] for name, paths in result.files.items() if paths}
+                # The files that were made for the job, then those it wrote
+                files = dict(job.inputs)
+                files.update({name: paths[0] for name, paths in result.files.items() if paths})
+                job.files = files
             self._finish(job, FINISHED)
         except Exception as exc:  # pylint: disable=broad-except
             # Whatever goes wrong ends this job, not the server

@@ -26,6 +26,8 @@ from act_gui.settings import Settings
 
 ## The program, if it is given
 ALEXANDRIA = os.environ.get("ACT_ALEXANDRIA", "")
+## The directory src/act/testdata of the source of ACT, if it is given
+TESTDATA = os.environ.get("ACT_TESTDATA", "")
 
 
 @unittest.skipUnless(ALEXANDRIA, "ACT_ALEXANDRIA is not set")
@@ -153,6 +155,191 @@ class RealProgramTest(unittest.TestCase):
                              "options": {"minalg": "Fastest"}})
         self.assertEqual("failed", job["status"])
         self.assertIn("minalg", job["error"])
+
+    # --- the force field workspace ---
+
+    def default_types(self, **extra):
+        """!
+        @brief The atom types that the generator proposes.
+        @param extra What to set for each of them, such as shell=True.
+        @return The list for a request.
+        """
+        described = self.client.get("/api/generator", headers=self.headers).json()
+        return [dict({"name": t["name"]}, **extra) for t in described["atomtypes"]
+                if t["default"]]
+
+    def parameter(self, job, interaction, identifier, name):
+        """!
+        @brief Look up a parameter in the description of a force field.
+        @param job         A job with a description.
+        @param interaction The type of the interaction.
+        @param identifier  The identifier of the parameter list.
+        @param name        The name of the parameter.
+        @return The parameter, None if it is not there.
+        """
+        for inter in job["result"]["forcefield"]["interactions"]:
+            if inter["type"] == interaction:
+                for entry in inter["parameterlists"]:
+                    if entry["identifier"] == identifier:
+                        for param in entry["parameters"]:
+                            if param["type"] == name:
+                                return param
+        return None
+
+    def test_generate_force_fields(self):
+        """!
+        @brief gen_ff makes a valid force field of what the generator
+        proposes, of a polarizable model and of one with virtual sites.
+        """
+        plain = self.run_task({"task": "gen_ff",
+                               "generator": {"atomtypes": self.default_types()}})
+        self.assertEqual("finished", plain["status"], plain["error"])
+        described = plain["result"]["forcefield"]
+        self.assertFalse(described["polarizable"])
+        self.assertTrue(plain["result"]["validation"]["ok"])
+        ntypes = len(described["particletypes"]["types"])
+        self.assertGreater(ntypes, 40)
+        kinds = {inter["type"]: inter["function"] for inter in described["interactions"]}
+        self.assertEqual(("WANG_BUCKINGHAM", "HUA_BONDS"),
+                         (kinds["VANDERWAALS"], kinds["BONDS"]))
+        written = self.client.get("/api/jobs/%s/files/o" % plain["id"], headers=self.headers)
+        self.assertEqual(200, written.status_code)
+        self.assertIn("<alexandria", written.text[:300])
+        table = self.client.get("/api/jobs/%s/files/f" % plain["id"], headers=self.headers)
+        self.assertTrue(table.text.startswith("#atomtype|"))
+
+        polarizable = self.run_task({"task": "gen_ff", "generator": {
+            "atomtypes": self.default_types(shell=True),
+            "vdw": {"potential": "LJ14_7"},
+            "charge": {"model": "P+G"},
+            "induction": {"potential": "MACDANIEL_SCHMIDT"},
+            "vsites": {"files": ["vsite2_halogen_sigma_holes", "vsite3_water_lone_pairs"],
+                       "exchange": True}}})
+        self.assertEqual("finished", polarizable["status"], polarizable["error"])
+        described = polarizable["result"]["forcefield"]
+        self.assertTrue(described["polarizable"])
+        self.assertTrue(polarizable["result"]["validation"]["ok"])
+        # Each atom type has a shell, and the virtual sites have their types
+        self.assertGreater(len(described["particletypes"]["types"]), 2 * ntypes)
+        kinds = {inter["type"]: inter for inter in described["interactions"]}
+        self.assertEqual("LJ14_7", kinds["VANDERWAALS"]["function"])
+        self.assertEqual("Volumetric",
+                         kinds["VANDERWAALS"]["combination_rules"]["sigma"]["rule"])
+        self.assertIn("VSITE2", kinds)
+        self.assertIn("INDUCTIONCORRECTION", kinds)
+
+    def test_describe_edit_and_use_a_force_field(self):
+        """!
+        @brief A force field is uploaded and described, a parameter is
+        changed, and the new force field is used for a molecule.
+        """
+        data = self.settings.default_forcefield.read_bytes()
+        uploaded = self.client.post("/api/uploads", params={"kind": "forcefield",
+                                                            "name": "ff.xml"},
+                                    content=data, headers=self.headers).json()["id"]
+        described = self.run_task({"task": "ff_describe", "forcefield": {"file": uploaded}})
+        self.assertEqual("finished", described["status"], described["error"])
+        self.assertFalse(described["result"]["changed"])
+        self.assertTrue(described["result"]["validation"]["ok"])
+        self.assertNotIn("o", described["files"])
+        # A parameter that training may change
+        target = None
+        for inter in described["result"]["forcefield"]["interactions"]:
+            for entry in inter["parameterlists"]:
+                for param in entry["parameters"]:
+                    if (param["mutability"] == "Bounded"
+                            and param["maximum"] - param["minimum"] > 1e-3 and target is None):
+                        target = (inter["type"], entry["identifier"], param)
+        self.assertIsNotNone(target)
+        interaction, identifier, before = target
+        new = 0.5 * (before["minimum"] + before["maximum"])
+        if abs(new - before["value"]) < 1e-6:
+            new = 0.75 * before["minimum"] + 0.25 * before["maximum"]
+        edited = self.run_task({"task": "ff_edit", "forcefield": {"file": uploaded},
+                                "options": {"p": before["type"], "a": identifier, "val": new}})
+        self.assertEqual("finished", edited["status"], edited["error"])
+        self.assertTrue(edited["result"]["changed"])
+        self.assertTrue(edited["result"]["written"])
+        after = self.parameter(edited, interaction, identifier, before["type"])
+        self.assertAlmostEqual(new, after["value"], places=5)
+        self.assertIn("o", edited["files"])
+        # The new force field in turn: another change, and a calculation
+        fixed = self.run_task({"task": "ff_edit", "forcefield": {"job": edited["id"]},
+                               "options": {"p": before["type"], "a": identifier,
+                                           "mut": "Fixed"}})
+        self.assertEqual("finished", fixed["status"], fixed["error"])
+        after = self.parameter(fixed, interaction, identifier, before["type"])
+        self.assertEqual("Fixed", after["mutability"])
+        self.assertAlmostEqual(new, after["value"], places=5)
+        job = self.run_task({"task": "minimize", "molecule": {"smiles": "CC(=O)C"},
+                             "forcefield": {"job": fixed["id"]}})
+        self.assertEqual("finished", job["status"], job["error"])
+        self.assertEqual("C3H6O", job["result"]["molecule"]["formula"])
+
+    def test_change_that_changes_nothing(self):
+        """!
+        @brief A change of a type that is not in the force field leaves no
+        force field behind, and the result says that nothing changed.
+        """
+        made = self.run_task({"task": "gen_ff", "generator": {
+            "atomtypes": [{"name": "hc"}, {"name": "c3"}]}})
+        self.assertEqual("finished", made["status"], made["error"])
+        same = self.run_task({"task": "ff_edit", "forcefield": {"job": made["id"]},
+                              "options": {"p": "chi", "a": "nosuch_z", "val": 5}})
+        self.assertEqual("finished", same["status"], same["error"])
+        self.assertFalse(same["result"]["changed"])
+        self.assertNotIn("o", same["files"])
+        answer = self.client.post("/api/jobs", headers=self.headers, json={
+            "task": "ff_describe", "forcefield": {"job": same["id"]}})
+        self.assertEqual(400, answer.status_code)
+        # A real change of the same force field
+        real = self.run_task({"task": "ff_edit", "forcefield": {"job": made["id"]},
+                              "options": {"p": "chi", "a": ["hc_z", "c3_z"], "val": 6.5}})
+        self.assertEqual("finished", real["status"], real["error"])
+        self.assertTrue(real["result"]["changed"])
+        for identifier in ("hc_z", "c3_z"):
+            chi = self.parameter(real, "ELECTRONEGATIVITYEQUALIZATION", identifier, "chi")
+            self.assertAlmostEqual(6.5, chi["value"], places=5)
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_geometry_from_a_molprop_file(self):
+        """!
+        @brief A force field gets its bonds from the compounds of a molprop
+        file. With a force field that has other atom types than the file no
+        compound can be used, which the result and the log tell.
+        """
+        def send(directory, name, kind):
+            """Upload a file of the test data of ACT"""
+            answer = self.client.post("/api/uploads", params={"kind": kind, "name": name},
+                                      content=(Path(TESTDATA) / directory / name).read_bytes(),
+                                      headers=self.headers)
+            self.assertEqual(200, answer.status_code, answer.text)
+            return answer.json()["id"]
+        molprop = {"file": send("molprop", "molprop.xml", "molprop")}
+        forcefield = {"file": send("forcefields", "ACS-g1.xml", "forcefield")}
+        job = self.run_task({"task": "geometry_ff", "forcefield": forcefield,
+                             "molprop": molprop, "options": {"bfactor": 0.9}})
+        self.assertEqual("finished", job["status"], job["error"])
+        self.assertEqual(3, job["result"]["compounds"])
+        self.assertGreater(job["result"]["extracted"]["BONDS"], 3)
+        length = self.parameter(job, "BONDS", "c3_b~h_b", "bondlength")
+        self.assertEqual(24, length["ntrain"])
+        self.assertAlmostEqual(0.9 * length["value"], length["minimum"], places=3)
+        repaired = self.run_task({"task": "ff_repair", "forcefield": {"job": job["id"]}})
+        self.assertEqual("finished", repaired["status"], repaired["error"])
+        self.assertIn("validation", repaired["result"])
+        # A new force field with the atom types of the generator, which
+        # the compounds of this file do not have
+        made = self.run_task({"task": "gen_ff", "generator": {
+            "atomtypes": self.default_types(), "bonds": "MORSE_BONDS"}})
+        self.assertEqual("finished", made["status"], made["error"])
+        none = self.run_task({"task": "geometry_ff", "forcefield": {"job": made["id"]},
+                              "molprop": molprop})
+        self.assertEqual("finished", none["status"], none["error"])
+        self.assertEqual(0, none["result"]["compounds"])
+        log = self.client.get("/api/jobs/%s/files/g" % none["id"], headers=self.headers)
+        self.assertEqual(200, log.status_code)
+        self.assertIn("Cannot find atomtype", log.text)
 
 
 if __name__ == "__main__":

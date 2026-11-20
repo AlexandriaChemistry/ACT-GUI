@@ -79,8 +79,12 @@ class FakeRun:
         Path(workdir).mkdir(parents=True, exist_ok=True)
         out = Path(workdir) / "confout.pdb"
         out.write_text("ATOM\n")
-        return SimpleNamespace(data={"rmsd": {"value": 0.02, "unit": "nm"}},
-                               files={"c": [out], "empty": []})
+        files = {"c": [out], "empty": []}
+        if isinstance(options.get("o"), Path) and behaviour != "unchanged":
+            # A command that writes a force field
+            options["o"].write_text("<alexandria_chemistry/>\n")
+            files["o"] = [options["o"]]
+        return SimpleNamespace(data={"rmsd": {"value": 0.02, "unit": "nm"}}, files=files)
 
 
 class JobTest(unittest.TestCase):
@@ -143,6 +147,28 @@ class JobTest(unittest.TestCase):
                                   outputs={"c": "../../outside/min.pdb"})
         self.assertTrue(wait_for(job, (jobs.FINISHED,)))
         self.assertEqual(job.workdir / "min.pdb", self.run.calls[0]["options"]["c"])
+
+    def test_input_files_are_written_in_the_job_directory(self):
+        """!
+        @brief Files that the server makes for a job are in its directory
+        before it runs, whatever their name says, and stay available.
+        """
+        job = self.manager.submit(
+            "gen_ff", "gen_ff", {},
+            outputs={"o": "forcefield.xml"},
+            inputs={"f": [jobs.InputFile("../../outside/atomtypes.csv", "#atomtype|a\nhc|1\n")],
+                    "vs": [jobs.InputFile("vsites.json", "{}")]})
+        self.assertTrue(wait_for(job, (jobs.FINISHED,)))
+        options = self.run.calls[0]["options"]
+        # One file for -f, a list for -vs, which takes several files
+        self.assertEqual(job.workdir / "atomtypes.csv", options["f"])
+        self.assertEqual([job.workdir / "vsites.json"], options["vs"])
+        self.assertEqual("#atomtype|a\nhc|1\n", options["f"].read_text())
+        self.assertFalse((job.workdir.parent.parent / "outside").exists())
+        # They can be fetched next to the output files
+        self.assertEqual(["c", "f", "o", "vs"], sorted(job.files))
+        self.assertEqual(job.workdir / "atomtypes.csv", job.files["f"])
+        self.assertEqual(job.workdir / "forcefield.xml", job.files["o"])
 
     def test_failure_is_reported(self):
         """!

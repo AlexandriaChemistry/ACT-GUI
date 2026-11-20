@@ -33,8 +33,8 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import __version__, openmm_package, plots
-from .jobs import JobError, JobManager
+from . import __version__, ffgen, openmm_package, plots
+from .jobs import FINISHED, JobError, JobManager
 from .settings import PACKAGE_DIR, Settings
 from .tasks import TASKS, RequestError, build_request, describe_task, find_task
 from .uploads import UploadError, UploadStore
@@ -51,7 +51,8 @@ CONTENT_SECURITY_POLICY = (
 
 ## The media types of the files of jobs that can be downloaded
 _MEDIA_TYPES = {".pdb": "chemical/x-pdb", ".xvg": "text/plain", ".log": "text/plain",
-                ".json": "application/json", ".gro": "text/plain", ".xml": "application/xml"}
+                ".json": "application/json", ".gro": "text/plain", ".xml": "application/xml",
+                ".csv": "text/csv"}
 
 
 ## The title and the label of the y-axis of series that are not what the
@@ -83,7 +84,8 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
     # Without plotXVG the page does not offer to save plots
     can_plot = plotter is not None or plots.available()
     plotter = plotter or plots.make_pdf
-    uploads = UploadStore(settings.uploads_dir, settings.max_upload_bytes)
+    uploads = UploadStore(settings.uploads_dir, settings.max_upload_bytes,
+                          limits={"molprop": settings.max_molprop_bytes})
     manager = JobManager(settings.jobs_dir, run, max_workers=settings.max_workers,
                          max_active=settings.max_active_jobs, timeout=settings.job_timeout,
                          max_progress=settings.max_progress_points)
@@ -194,9 +196,22 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             "default_forcefield": settings.default_forcefield_label,
             "max_upload_bytes": settings.max_upload_bytes,
             "max_smiles_length": settings.max_smiles_length,
+            "max_molprop_bytes": settings.max_molprop_bytes,
             "limits": settings.limits,
             "pdf": can_plot,
         }
+
+    @app.get("/api/generator")
+    async def generator() -> Dict[str, Any]:
+        """!
+        @brief What a new force field can be made from.
+        @return The atom types, the potentials, the charge models and the
+        predefined virtual sites that can be chosen, see ffgen.describe().
+        """
+        try:
+            return ffgen.describe(ffgen.read_atom_types())
+        except (OSError, ffgen.GeneratorError) as exc:
+            raise fail(500, "The atom types cannot be read: %s" % exc) from exc
 
     @app.get("/api/tasks")
     async def tasks() -> Dict[str, Any]:
@@ -224,24 +239,38 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         @return The identifier with which the file is referred to.
         """
         # Stop reading as soon as the file is too large
+        limit = uploads.limit(kind)
         data = bytearray()
         async for chunk in request.stream():
             data.extend(chunk)
-            if len(data) > settings.max_upload_bytes:
-                raise fail(413, "The file is larger than %d kB"
-                           % (settings.max_upload_bytes // 1024))
+            if len(data) > limit:
+                raise fail(413, "The file is larger than %d kB" % (limit // 1024))
         try:
             saved = uploads.save(name, kind, bytes(data))
         except UploadError as exc:
             raise fail(400, str(exc)) from exc
         return {"id": saved.id, "label": saved.label, "kind": saved.kind, "size": saved.size}
 
+    def written_forcefield(job_id: str) -> Optional[Path]:
+        """!
+        @brief The force field that a job wrote, for use in another job.
+        @param job_id The identifier of the job.
+        @return The file, None if there is no such job, if it is not done
+        or if its task writes no force field.
+        """
+        job = manager.get(job_id)
+        task = TASKS.get(job.task) if job is not None else None
+        if job is None or task is None or task.forcefield is None or job.status != FINISHED:
+            return None
+        path = job.files.get(task.forcefield)
+        return path if path is not None and path.is_file() else None
+
     @app.post("/api/jobs")
     async def submit(request: Request) -> Dict[str, Any]:
         """!
         @brief Start a calculation.
-        @param request The request, with a JSON object: task, molecule,
-        forcefield and options.
+        @param request The request, with a JSON object: task and what the
+        task needs of molecule, forcefield, molprop, generator and options.
         @return The job.
         """
         try:
@@ -252,9 +281,10 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             if not isinstance(body, dict):
                 raise RequestError("The request must be an object")
             task = find_task(body.get("task"))
-            options = build_request(task, body, settings, uploads)
-            job = manager.submit(task.name, task.command, options,
-                                 progress=task.progress, outputs=dict(task.outputs))
+            prepared = build_request(task, body, settings, uploads, written_forcefield)
+            job = manager.submit(task.name, task.command, prepared.options,
+                                 progress=task.progress, outputs=dict(task.outputs),
+                                 inputs=prepared.inputs)
         except RequestError as exc:
             raise fail(400, str(exc)) from exc
         except JobError as exc:
@@ -321,8 +351,12 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         if task is None or option not in task.downloads or path is None or not path.is_file():
             raise fail(404, "There is no such file")
         media = _MEDIA_TYPES.get(path.suffix.lower(), "text/plain")
+        # A force field and the files that were made for the job keep the
+        # name the server gave them, the others are named after the task
+        named = option == task.forcefield or option in job.inputs
         return FileResponse(path, media_type=media,
-                            filename="%s-%s%s" % (job.task, option, path.suffix))
+                            filename=path.name if named
+                            else "%s-%s%s" % (job.task, option, path.suffix))
 
     @app.get("/api/jobs/{job_id}/plots/{option}")
     def job_plot(job_id: str, option: str, series: str = "",

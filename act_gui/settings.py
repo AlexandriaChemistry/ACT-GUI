@@ -56,6 +56,8 @@ class Settings:
     default_forcefield_label: str = "ACS-pg1 (test force field, polarizable)"
     ## The largest file that can be uploaded, in bytes
     max_upload_bytes: int = 5 * 1024 * 1024
+    ## The largest molprop file that can be uploaded, in bytes
+    max_molprop_bytes: int = 200 * 1024 * 1024
     ## The longest SMILES string, the same as alexandria accepts
     max_smiles_length: int = 2000
     ## Seconds after which a calculation is stopped
@@ -73,6 +75,7 @@ class Settings:
                      "deltat": (1e-6, 0.01)},
         "minimize": {"maxiter": (1, 100000)},
         "nma": {"maxiter": (1, 100000), "linewidth": (0.1, 500)},
+        "geometry_ff": {"bfactor": (0.01, 1), "afactor": (0.01, 1), "factor": (0.01, 1)},
     })
 
     def __post_init__(self) -> None:

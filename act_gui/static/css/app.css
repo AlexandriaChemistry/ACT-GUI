@@ -191,3 +191,29 @@ button[disabled] { opacity: 0.55; cursor: default; }
 /* The table of modes has four columns */
 .cols.modes { grid-template-columns: minmax(0, 300px) minmax(0, 1fr); }
 @media (max-width: 760px) { .cols.modes { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------- the force field workspace ---------- */
+.stack { display: grid; gap: 18px; min-width: 0; }
+.scroll.flat { border: 0; border-radius: 0 0 var(--radius) var(--radius); }
+.maxh640 { max-height: 640px; }
+/* A form on the left that is wide enough for two fields next to each other */
+.cols.form-left { grid-template-columns: minmax(0, 420px) minmax(0, 1fr); }
+@media (max-width: 900px) { .cols.form-left { grid-template-columns: minmax(0, 1fr); } }
+.grid3 { display: grid; gap: 12px 14px; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+.seg button { white-space: nowrap; }
+.group > .seg, .field > .seg { justify-self: start; max-width: 100%; }
+.maxh560 { max-height: 560px; }
+.pad { padding: 18px 16px; }
+.checks { display: grid; gap: 8px; }
+details.more > summary { cursor: pointer; font-size: 13px; color: var(--accent); width: fit-content; }
+details.more > summary:hover { text-decoration: underline; }
+table.data td.c, table.data th.c { text-align: center; }
+table.data td.wrap { white-space: normal; min-width: 14em; }
+table.data tr.off td { color: var(--muted); }
+table.data tr.off td:first-child { color: var(--ink); }
+.list li span.what { font-family: var(--mono); font-size: 13px; }
+.list li.more { grid-template-columns: minmax(0, 1fr); color: var(--muted); }
+#p-search { width: 170px; }
+#fftab-edit .head .field { display: block; }
+.range.fixed i { background: var(--muted); }
+
