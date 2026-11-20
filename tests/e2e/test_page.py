@@ -888,7 +888,33 @@ class PageTest(unittest.TestCase):
         self.click("#run-ev")
         self.wait(lambda b: "kinds of parameters" in b.find_element(By.ID, "toast").text)
         self.assertFalse(self.browser.find_element(By.ID, "tr-run").is_displayed())
-        self.browser.find_element(By.ID, "tr-fit").send_keys("De b c bondlength angle kt")
+        # The force field tells which kinds of parameters can be changed
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#tr-kinds button")) > 0)
+
+        def kinds(pressed=False):
+            return self.browser.execute_script(
+                "return [...document.querySelectorAll('#tr-kinds button')]"
+                ".filter(b => !arguments[0] || b.getAttribute('aria-pressed') === 'true')"
+                ".map(b => b.dataset.kind)", pressed)
+        wanted = ["De", "b", "c", "bondlength", "angle", "kt"]
+        self.assertLessEqual(set(wanted), set(kinds()))
+        self.assertEqual([], kinds(True))
+        self.assertIn("Click the kinds", self.text("#tr-kindnote"))
+        counts = self.text('#tr-kinds button[data-kind="De"]').split()
+        self.assertEqual("De", counts[0])
+        self.assertGreater(int(counts[1]), 0)
+        # By a click or typed, and a click takes a kind away again
+        fit = self.browser.find_element(By.ID, "tr-fit")
+        for kind in ("De", "b"):
+            self.click('#tr-kinds button[data-kind="%s"]' % kind)
+        self.assertEqual("De b", fit.get_attribute("value"))
+        fit.send_keys(" c bondlength angle kt charge")
+        self.assertEqual(set(wanted), set(kinds(True)))
+        self.click('#tr-kinds button[data-kind="De"]')
+        self.assertEqual("b c bondlength angle kt charge", fit.get_attribute("value"))
+        fit.clear()
+        fit.send_keys("De b c bondlength angle kt")
+        self.assertEqual(wanted, sorted(kinds(True), key=wanted.index))
         for field, value in (("tr-iter", "5"), ("tr-seed", "1993")):
             element = self.browser.find_element(By.ID, field)
             element.clear()

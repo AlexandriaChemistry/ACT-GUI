@@ -334,7 +334,8 @@
           <div class="row top">
             <div class="field grow"><label for="tr-fit">Kinds of parameters to train</label>
               <input class="mono" type="text" id="tr-fit" placeholder="for instance: sigma epsilon" spellcheck="false" autocomplete="off" autocapitalize="off">
-              <span class="muted fine">Names as in the force field, with spaces between them. Only parameters that are not fixed are changed, within their bounds; the tab Force field lists them.</span></div>
+              <div class="chips" id="tr-kinds" hidden></div>
+              <span class="muted fine" id="tr-kindnote">Names as in the force field, with spaces between them. Only parameters that are not fixed are changed, within their bounds.</span></div>
             <div class="field"><label for="tr-optimizer">Optimizer</label>
               <select id="tr-optimizer"></select></div>
           </div>

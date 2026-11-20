@@ -31,6 +31,8 @@ const state = {
   maxProcesses: 1,  // the most processes of a calculation on this computer
   limits: {},     // the smallest and largest values of options, by task
   tr: { points: [], job: null, running: null },  // the training: its progress, the job when it is done and while it runs
+  kinds: { key: "", list: [] },  // the kinds of parameters that the force field with this reference offers
+  kindsAsked: 0,  // counts the times the kinds were asked for, to drop answers that come too late
 };
 
 /** The most compounds that are put in the table at once. */
@@ -263,18 +265,87 @@ function compared(job, source = "") {
 async function comparison() {
   const observables = $$("#ev-observables input").filter(b => b.checked).map(b => b.dataset.name);
   if (!observables.length) { toast("Choose at least one property to compare."); return null; }
-  const choice = $("#ev-ff").value;
-  let forcefield = { default: true };
-  if (choice === "workspace" && session.forcefield) forcefield = session.forcefield.ref;
-  else if (choice === "upload") {
-    if (!state.pendingFF) { toast("Choose a force field file first."); return null; }
-    if (!state.pendingFF.id) {
-      pill("ev-pill", "Sending the force field…");
-      state.pendingFF.id = (await upload(state.pendingFF.file, "forcefield")).id;
-    }
-    forcefield = { file: state.pendingFF.id };
-  }
+  const forcefield = await chosenForcefield();
+  if (!forcefield) { toast("Choose a force field file first."); return null; }
   return { task: "evaluate", forcefield, observables, molprop: { file: state.file.file, described: state.file.described } };
+}
+
+/**
+ * The force field that is chosen, sent to the server if it is a file of the user.
+ * @returns {Promise<object|null>} How the server finds it, null if a file has to be chosen first.
+ */
+async function chosenForcefield() {
+  const choice = $("#ev-ff").value;
+  if (choice === "workspace" && session.forcefield) return session.forcefield.ref;
+  if (choice !== "upload") return { default: true };
+  if (!state.pendingFF) return null;
+  if (!state.pendingFF.id) {
+    pill("ev-pill", "Sending the force field…");
+    try { state.pendingFF.id = (await upload(state.pendingFF.file, "forcefield")).id; } finally { pill("ev-pill", ""); }
+  }
+  return { file: state.pendingFF.id };
+}
+
+/**
+ * The kinds of parameters of a force field that a training can change.
+ * @param {object} forcefield The force field as edit_ff describes it.
+ * @returns {object[]} For each kind its name and the number of parameters that are not fixed, in the order of the force field.
+ */
+function trainableKinds(forcefield) {
+  const counts = new Map();
+  const count = parameters => {
+    for (const p of parameters || []) if (p.mutability === "Bounded") counts.set(p.type, (counts.get(p.type) || 0) + 1);
+  };
+  for (const type of (forcefield.particletypes || {}).types || []) count(type.parameters);
+  for (const interaction of forcefield.interactions || []) for (const list of interaction.parameterlists || []) count(list.parameters);
+  return [...counts].map(([kind, n]) => ({ kind, n }));
+}
+
+/**
+ * The kinds of parameters that are typed in.
+ * @returns {string[]} The names.
+ */
+const fitNames = () => $("#tr-fit").value.trim().split(/[\s,]+/).filter(Boolean);
+
+/** Show which of the kinds that the force field offers are chosen. */
+function kindsPressed() {
+  const chosen = new Set(fitNames());
+  for (const chip of $$("#tr-kinds button")) chip.setAttribute("aria-pressed", String(chosen.has(chip.dataset.kind)));
+}
+
+/** Offer the kinds of parameters of the force field that is chosen, for a training. */
+async function offerKinds() {
+  if (!training()) return;
+  const host = $("#tr-kinds"), note = $("#tr-kindnote");
+  const typed = "Names as in the force field, with spaces between them. Only parameters that are not fixed are changed, within their bounds.";
+  const asked = ++state.kindsAsked;
+  try {
+    const ref = await chosenForcefield();
+    if (asked !== state.kindsAsked) return;
+    if (!ref) { host.hidden = true; note.textContent = typed; return; }
+    const key = JSON.stringify(ref);
+    if (state.kinds.key !== key) {
+      note.textContent = "Reading the force field…";
+      const job = await runTask({ task: "ff_describe", forcefield: ref });
+      // Another force field was chosen in the meantime
+      if (asked !== state.kindsAsked) return;
+      state.kinds = { key, list: trainableKinds(job.result.forcefield) };
+    }
+    host.textContent = "";
+    for (const { kind, n } of state.kinds.list) {
+      host.append(el("button", { class: "chip", type: "button", data: { kind }, title: `${n} ${n === 1 ? "parameter" : "parameters"} of this kind can be changed` },
+        kind + " ", el("b", {}, String(n))));
+    }
+    host.hidden = !state.kinds.list.length;
+    note.textContent = state.kinds.list.length
+      ? "Click the kinds to train, or type their names. The number is how many parameters of a kind are not fixed; they are changed within their bounds."
+      : "This force field has no parameters that can be changed: all are fixed. The tab Force field can change that.";
+    kindsPressed();
+  } catch (e) {
+    if (asked !== state.kindsAsked) return;
+    host.hidden = true;
+    note.textContent = "The force field could not be read (" + e.message + "). " + typed;
+  }
 }
 
 /* ---------- training a force field ---------- */
@@ -309,7 +380,7 @@ function whole(id, low, high) {
  * @returns {object|null} The request, null if something has to be given first.
  */
 function trainingRequest(body) {
-  const fit = $("#tr-fit").value.trim().split(/[\s,]+/).filter(Boolean);
+  const fit = fitNames();
   if (!fit.length) { toast("Give the kinds of parameters to train, for instance sigma epsilon."); return null; }
   const chosen = optimizer(), limit = (state.limits || {}).train || {};
   const iterations = whole("#tr-iter", 1, (limit.max_iter || [1, 100000])[1]);
@@ -440,6 +511,7 @@ function what() {
     ? `${chosen.name} has one set of parameters, an individual, for each process, and needs two at least. Each generation every individual does the Monte Carlo iterations${chosen.name === "GA" ? " (not used by GA)" : ""}.`
     : "With more than one process each has its own Monte Carlo chain, and the best of them is kept.";
   places();
+  offerKinds();
 }
 
 /**
@@ -592,20 +664,32 @@ function show(label, data) {
 export function startMolprops(told) {
   state.observables = told.observables || [];
   $('#ev-ff option[value="default"]').textContent = told.default_forcefield;
-  $("#ev-ff").onchange = e => { if (e.target.value === "upload") $("#ev-fffile").click(); };
+  $("#ev-ff").onchange = e => { if (e.target.value === "upload") $("#ev-fffile").click(); offerKinds(); };
   $("#ev-fffile").onchange = e => {
     const file = e.target.files[0];
     e.target.value = "";
     if (!file) { if (!state.pendingFF) $("#ev-ff").value = "default"; return; }
     state.pendingFF = { file, id: null };
     $('#ev-ff option[value="upload"]').textContent = file.name;
+    offerKinds();
   };
+  // The kinds of parameters to train: by a click or typed
+  $("#tr-kinds").addEventListener("click", e => {
+    const chip = e.target.closest("button");
+    if (!chip) return;
+    const names = fitNames(), at = names.indexOf(chip.dataset.kind);
+    if (at < 0) names.push(chip.dataset.kind); else names.splice(at, 1);
+    $("#tr-fit").value = names.join(" ");
+    kindsPressed();
+  });
+  $("#tr-fit").oninput = kindsPressed;
   // The force field of the force field workspace can be compared as well
   document.addEventListener("act-forcefield", () => {
     const option = $('#ev-ff option[value="workspace"]'), current = session.forcefield;
     option.hidden = option.disabled = !current;
     if (current) option.textContent = "From the force field tab: " + current.label;
     else if ($("#ev-ff").value === "workspace") $("#ev-ff").value = "default";
+    offerKinds();
   });
   $("#run-ev").onclick = compare;
   // Training
