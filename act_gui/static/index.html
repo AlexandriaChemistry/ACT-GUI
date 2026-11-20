@@ -59,6 +59,7 @@
           <button role="tab" data-tab="minimize" aria-selected="false">Minimize</button>
           <button role="tab" data-tab="modes" aria-selected="false">Normal modes</button>
           <button role="tab" data-tab="simulate" aria-selected="false">Simulate</button>
+          <button role="tab" data-tab="openmm" aria-selected="false">OpenMM</button>
           <span class="ink"></span>
         </nav>
 
@@ -106,6 +107,24 @@
             <span class="spacer"></span><span class="num muted" id="simtime"></span>
             <button class="btn small" id="e-pdf" type="button" hidden>Save as PDF</button></div>
           <div class="plot" id="eplot"></div>
+        </div>
+
+        <div class="body panel" id="tab-openmm" hidden>
+          <p>Everything needed to simulate this molecule with OpenMM and the same force field, in one archive. It describes one molecule in vacuum; the text in the archive says what to change for a liquid.</p>
+          <ul class="files">
+            <li><code>conf.pdb</code><span class="muted">Coordinates of the atoms, with the residue and atom names of the force field file</span></li>
+            <li><code>openmm.xml</code><span class="muted">Force field for OpenMM, written by <code>alexandria gentop -openmm</code></span></li>
+            <li><code>simulation.dat</code><span class="muted">Settings of the simulation, read by <code>act_openmm.py</code></span></li>
+            <li><code>run.py</code><span class="muted">Script that runs the simulation with <code>ActOpenMMSim</code></span></li>
+            <li><code>README.md</code><span class="muted">What the files are and how to run and change the simulation</span></li>
+          </ul>
+          <div class="row">
+            <div class="field"><label for="omm-steps">Steps</label><input type="number" id="omm-steps" value="100000" min="1" step="1000"></div>
+            <div class="field"><label for="omm-dt">Time step (fs)</label><input type="number" id="omm-dt" value="0.5" min="0.01" step="0.1"></div>
+            <div class="field"><label for="omm-temp">Temperature (K)</label><input type="number" id="omm-temp" value="298.15" min="0" step="10"></div>
+            <button class="btn primary end" id="run-omm" type="button" disabled>Create package</button>
+            <span class="spacer"></span><span class="pill" id="omm-pill" hidden></span>
+          </div>
         </div>
       </div>
     </div>

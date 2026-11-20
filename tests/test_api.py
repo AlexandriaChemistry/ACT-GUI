@@ -191,7 +191,7 @@ class ApiTest(unittest.TestCase):
         self.assertIn("ACS-pg1", session["default_forcefield"])
         tasks = self.client.get("/api/tasks", headers=self.headers).json()["tasks"]
         names = [task["name"] for task in tasks]
-        self.assertEqual(["charges", "minimize", "nma", "simulate"], names)
+        self.assertEqual(["charges", "minimize", "nma", "simulate", "openmm"], names)
         minimize = tasks[1]
         minalg = [o for o in minimize["options"] if o["name"] == "minalg"][0]
         self.assertEqual("enum", minalg["type"])
@@ -353,8 +353,8 @@ class ApiTest(unittest.TestCase):
 
     def plot_app(self, plotter="fake"):
         """!
-        @brief An application whose jobs write an xvg file, with a
-        stand-in for plotXVG.
+        @brief An application whose jobs write an xvg file and a force
+        field for OpenMM, with a stand-in for plotXVG.
         @param plotter "fake" for a stand-in that records its calls, None
         for no plotter at all.
         @return The client and the list of calls of the stand-in.
@@ -365,7 +365,9 @@ class ApiTest(unittest.TestCase):
             result = self.run(command, workdir=workdir, **kwargs)
             xvg = Path(workdir) / "data.xvg"
             xvg.write_text('@ s0 legend "EPOT"\n@ s1 legend "TEMPERATURE"\n0 1 2\n1 2 3\n')
-            result.files.update({"ir": [xvg], "e": [xvg]})
+            xml = Path(workdir) / "openmm.xml"
+            xml.write_text("<ForceField/>\n")
+            result.files.update({"ir": [xvg], "e": [xvg], "openmm": [xml]})
             return result
 
         def fake(xvg, pdf, series=()):
@@ -460,6 +462,50 @@ class ApiTest(unittest.TestCase):
         answer = client.get("/api/jobs/%s/plots/ir" % job_id, headers=self.headers)
         self.assertEqual(500, answer.status_code)
         self.assertIn("matplotlib is unhappy", answer.json()["detail"])
+
+    def test_openmm_package(self):
+        """!
+        @brief The files of gentop come as an archive with the settings
+        that were asked for.
+        """
+        import io  # pylint: disable=import-outside-toplevel
+        import zipfile  # pylint: disable=import-outside-toplevel
+        client, _ = self.plot_app()
+        tasks = {t["name"]: t for t in client.get("/api/tasks", headers=self.headers).json()["tasks"]}
+        self.assertTrue(tasks["openmm"]["package"])
+        self.assertFalse(tasks["minimize"]["package"])
+        job_id = self.finished_job(client, "openmm")
+        url = "/api/jobs/%s/package" % job_id
+        answer = client.get(url, headers=self.headers,
+                            params={"steps": 500, "dt": 1, "temperature": 280})
+        self.assertEqual(200, answer.status_code)
+        self.assertEqual("application/zip", answer.headers["content-type"])
+        self.assertIn("act-openmm.zip", answer.headers["content-disposition"])
+        with zipfile.ZipFile(io.BytesIO(answer.content)) as archive:
+            self.assertEqual(5, len(archive.namelist()))
+            self.assertEqual(b"ATOM\n", archive.read("act-openmm/conf.pdb"))
+            self.assertEqual(b"<ForceField/>\n", archive.read("act-openmm/openmm.xml"))
+            settings = archive.read("act-openmm/simulation.dat").decode()
+            self.assertIn("= 500\n", settings)
+            self.assertIn("= 0.001*picoseconds", settings)
+            self.assertIn("= 280*kelvin", settings)
+        # The defaults, and the output files one by one
+        self.assertEqual(200, client.get(url, headers=self.headers).status_code)
+        self.assertEqual(200, client.get("/api/jobs/%s/files/openmm" % job_id,
+                                         headers=self.headers).status_code)
+        # Settings that are refused
+        for params in ({"steps": 0}, {"steps": "1e99"}, {"dt": "fast"}, {"temperature": -3},
+                       {"steps": "10; rm -rf"}):
+            answer = client.get(url, headers=self.headers, params=params)
+            self.assertEqual(400, answer.status_code, params)
+            self.assertIn("must be", answer.json()["detail"])
+        self.assertEqual(401, client.get(url).status_code)
+        # Only for the task that makes the files
+        other = self.finished_job(client, "minimize")
+        self.assertEqual(404, client.get("/api/jobs/%s/package" % other,
+                                         headers=self.headers).status_code)
+        self.assertEqual(404, client.get("/api/jobs/nosuchjob/package",
+                                         headers=self.headers).status_code)
 
     def test_cancel(self):
         """!

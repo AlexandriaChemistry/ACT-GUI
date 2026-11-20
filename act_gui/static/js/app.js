@@ -29,7 +29,7 @@ const NM = 10;
 const state = {
   token: "",            // for requests that change something
   pdf: false,           // whether the server can make PDF files of plots
-  jobs: { nma: null, sim: null },  // the finished jobs whose plots can be saved
+  jobs: { nma: null, sim: null, openmm: null },  // the finished jobs whose files can be saved
   input: null,          // { smiles } or { file, label }
   forcefield: {},       // {} for the default or { file, label }
   mol: null,            // the molecule that was loaded, see moleculeFrom()
@@ -113,29 +113,42 @@ async function runJob(task, options = {}, onUpdate = null) {
 }
 
 /**
- * Fetch a plot as a PDF file, made by plotXVG on the server, and hand it to
- * the browser to save.
- * @param {Element} button The button that was pressed.
- * @param {string} jobId   The job that has the data.
- * @param {string} option  The option of the command that wrote the data.
- * @param {string} series  The series to plot, all if empty.
+ * Fetch a file that the server makes and hand it to the browser to save.
+ * @param {Element} button  The button that was pressed.
+ * @param {string} path     The path below /api.
+ * @param {object} params   The parameters of the request.
+ * @param {string} busy     The text of the button while the file is made.
+ * @param {string} fallback The name of the file if the server gives none.
+ * @returns {Promise<boolean>} Whether the file was saved.
  */
-async function savePdf(button, jobId, option, series = "") {
-  if (!jobId) return;
+async function saveFile(button, path, params, busy, fallback) {
   const label = button.textContent;
-  button.disabled = true; button.textContent = "Making PDF…";
+  button.disabled = true; button.textContent = busy;
   try {
-    const answer = await call(`/jobs/${jobId}/plots/${option}`, { params: series ? { series } : {} });
+    const answer = await call(path, { params });
     const named = /filename="?([^";]+)"?/.exec(answer.headers.get("content-disposition") || "");
-    const name = named ? named[1] : option + ".pdf";
+    const name = named ? named[1] : fallback;
     const url = URL.createObjectURL(await answer.blob()), link = document.createElement("a");
     link.href = url; link.download = name;
     document.body.append(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 30000);
     toast("Saved " + name);
+    return true;
   } catch (e) {
-    alertBox("The plot could not be saved. " + e.message);
+    alertBox("The file could not be saved. " + e.message);
+    return false;
   } finally { button.disabled = false; button.textContent = label; }
+}
+
+/**
+ * Save a plot as a PDF file, made by plotXVG on the server.
+ * @param {Element} button The button that was pressed.
+ * @param {string} jobId   The job that has the data.
+ * @param {string} option  The option of the command that wrote the data.
+ * @param {string} series  The series to plot, all if empty.
+ */
+function savePdf(button, jobId, option, series = "") {
+  if (jobId) saveFile(button, `/jobs/${jobId}/plots/${option}`, series ? { series } : {}, "Making PDF…", option + ".pdf");
 }
 
 /* ---------- tabs and buttons ---------- */
@@ -330,7 +343,7 @@ function scene() {
   $("#qlegend").hidden = ui.colour !== "charge" || !state.mol;
   const titles = { charges: "Structure and charges", minimize: state.min ? "Minimized and original" : "Structure",
     modes: state.nma ? `Vibration at ${state.nma.modes[ui.mode].frequency.value.toFixed(0)} cm⁻¹` : "Structure",
-    simulate: state.sim.pdb ? "Trajectory" : "Structure" };
+    simulate: state.sim.pdb ? "Trajectory" : "Structure", openmm: "Structure" };
   $("#scene-title").textContent = titles[ui.tab];
   if ($("#view-molecule").hidden || !state.mol) return;   // never draw into a hidden canvas
   if (!V && !triedV) { triedV = true; V = makeViewer(); }
@@ -435,7 +448,8 @@ function chargeTable() {
 
 /** Forget the results of the previous molecule. */
 function resetResults() {
-  state.min = null; state.nma = null; state.jobs = { nma: null, sim: null };
+  state.min = null; state.nma = null; state.jobs = { nma: null, sim: null, openmm: null };
+  pill("omm-pill", "");
   $("#ir-pdf").hidden = true; $("#e-pdf").hidden = true;
   state.sim = { points: [], series: state.sim.series, job: null, pdb: null, nsteps: 0 };
   state.ui.focus = -1; state.ui.mode = 0;
@@ -472,7 +486,7 @@ async function loadMolecule() {
     state.xyz = atomCoords(compound.coordinates.positions);
     resetResults();
     chips(); chargeTable();
-    for (const id of ["run-min", "run-nma", "run-sim"]) document.getElementById(id).disabled = false;
+    for (const id of ["run-min", "run-nma", "run-sim", "run-omm"]) document.getElementById(id).disabled = false;
     zoomed = false;
     scene();
   } catch (e) {
@@ -648,6 +662,27 @@ async function simulate() {
 $("#stop-sim").onclick = () => { if (state.sim.job) call("/jobs/" + state.sim.job, { method: "DELETE" }).catch(() => {}); };
 seg($("#eseries"), v => { state.sim.series = v; energyPlot(); });
 
+/* ---------- files for OpenMM ---------- */
+
+/** Make the force field and the coordinates for OpenMM and save the archive with them. */
+async function openmmPackage() {
+  const steps = Math.round(+$("#omm-steps").value), dt = +$("#omm-dt").value, temperature = +$("#omm-temp").value;
+  if (!(steps > 0) || !(dt > 0) || !(temperature >= 0)) { toast("Give the number of steps, the time step and the temperature."); return; }
+  const button = $("#run-omm");
+  alertBox("");
+  try {
+    // The files of the molecule are made once, the settings go into each archive
+    if (!state.jobs.openmm) {
+      button.disabled = true; pill("omm-pill", "Running…", "warn");
+      state.jobs.openmm = (await runJob("openmm")).id;
+    }
+    const saved = await saveFile(button, `/jobs/${state.jobs.openmm}/package`, { steps, dt, temperature }, "Making archive…", "act-openmm.zip");
+    pill("omm-pill", saved ? "Saved" : "Failed", saved ? "good" : "bad");
+  } catch (e) {
+    pill("omm-pill", "Failed", "bad"); alertBox("The files for OpenMM could not be made. " + e.message);
+  } finally { button.disabled = false; }
+}
+
 /* ---------- wiring ---------- */
 
 seg($("#style"), v => { state.ui.style = v; scene(); });
@@ -687,12 +722,13 @@ $("#fffile").onchange = e => {
 $("#run-min").onclick = minimize;
 $("#run-nma").onclick = normalModes;
 $("#run-sim").onclick = simulate;
+$("#run-omm").onclick = openmmPackage;
 // The plot on paper has the series that is on the screen
 $("#ir-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.nma, "ir");
 $("#e-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.sim, "e",
   state.sim.series === "T" ? "TEMPERATURE" : state.sim.series);
 
-const TABS = { charges: "tab-charges", minimize: "tab-minimize", modes: "tab-modes", simulate: "tab-simulate" };
+const TABS = { charges: "tab-charges", minimize: "tab-minimize", modes: "tab-modes", simulate: "tab-simulate", openmm: "tab-openmm" };
 tabs($("#tasks"), name => { state.ui.tab = name; showOnly(Object.values(TABS), TABS[name]); scene(); });
 const VIEWS = { molecule: "view-molecule", "force-field": "view-force-field", molprop: "view-molprop" };
 tabs($("#nav"), name => { showOnly(Object.values(VIEWS), VIEWS[name]); if (name === "molecule") scene(); else if (V) V.stopAnimate(); });

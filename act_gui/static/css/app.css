@@ -145,6 +145,7 @@ pre.code { margin: 0; font: 12.5px/1.55 var(--mono); background: var(--stage); b
 .files li { display: grid; grid-template-columns: minmax(0, 15em) minmax(0, 1fr); gap: 4px 16px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .files li:last-child { border-bottom: 0; }
 .files code, code { font-family: var(--mono); font-size: 13px; }
+.files span code { white-space: nowrap; }
 @media (max-width: 560px) { .files li { grid-template-columns: minmax(0, 1fr); } }
 .cols { display: grid; gap: 18px; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); align-items: start; }
 .cols.side-right { grid-template-columns: minmax(0, 1fr) minmax(0, 340px); }

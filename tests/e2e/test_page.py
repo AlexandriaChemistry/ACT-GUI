@@ -78,7 +78,8 @@ class PageTest(unittest.TestCase):
         options.set_preference("browser.download.dir", str(cls.downloads.resolve()))
         options.set_preference("browser.download.useDownloadDir", True)
         options.set_preference("browser.download.alwaysOpenPanel", False)
-        options.set_preference("browser.helperApps.neverAsk.saveToDisk", "application/pdf")
+        options.set_preference("browser.helperApps.neverAsk.saveToDisk",
+                               "application/pdf,application/zip")
         options.set_preference("pdfjs.disabled", True)
         options.add_argument("-headless")
         options.add_argument("--width=1440")
@@ -204,7 +205,7 @@ class PageTest(unittest.TestCase):
         self.assertAlmostEqual(0.0, total, places=2)
         # Only the panel of the selected tab is shown
         self.assertTrue(self.browser.find_element(By.ID, "tab-charges").is_displayed())
-        for other in ("tab-minimize", "tab-modes", "tab-simulate"):
+        for other in ("tab-minimize", "tab-modes", "tab-simulate", "tab-openmm"):
             self.assertFalse(self.browser.find_element(By.ID, other).is_displayed(), other)
         self.shot("02-charges")
         # A row selects an atom
@@ -260,6 +261,38 @@ class PageTest(unittest.TestCase):
         self.shot("05-simulate")
         # The plot on paper has the series that is on the screen
         self.saved_pdf("e-pdf", "simulate-e-TEMPERATURE.pdf")
+
+    def test_2b_openmm_package(self):
+        """!
+        @brief The archive for OpenMM of the molecule that was loaded is
+        saved, with the settings of the form.
+        """
+        import zipfile  # pylint: disable=import-outside-toplevel
+        self.open_page()
+        # Nothing to make before a molecule is loaded
+        self.assertFalse(self.browser.find_element(By.ID, "run-omm").is_enabled())
+        self.click("#load")
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#qtable tr.pick")) == 10)
+        self.click('#tasks button[data-tab="openmm"]')
+        self.assertTrue(self.browser.find_element(By.ID, "tab-openmm").is_displayed())
+        self.assertEqual("Structure", self.text("#scene-title"))
+        steps = self.browser.find_element(By.ID, "omm-steps")
+        steps.clear()
+        steps.send_keys("2500")
+        self.shot("05b-openmm")
+        self.click("#run-omm")
+        target = self.downloads / "act-openmm.zip"
+        self.wait(lambda b: b.find_element(By.ID, "omm-pill").text == "Saved")
+        self.wait(lambda b: target.is_file() and not list(self.downloads.glob("*.part")))
+        self.assertEqual("", self.errors())
+        with zipfile.ZipFile(target) as archive:
+            self.assertEqual(5, len(archive.namelist()))
+            self.assertIn("= 2500\n", archive.read("act-openmm/simulation.dat").decode())
+            self.assertIn("<ForceField", archive.read("act-openmm/openmm.xml").decode())
+            # The atoms of acetone; OpenMM adds the shells
+            atoms = [line for line in archive.read("act-openmm/conf.pdb").decode().splitlines()
+                     if line.startswith(("ATOM", "HETATM"))]
+            self.assertEqual(10, len(atoms))
 
     def test_3_wrong_smiles_gives_a_message(self):
         """!

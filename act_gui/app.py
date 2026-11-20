@@ -33,7 +33,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import __version__, plots
+from . import __version__, openmm_package, plots
 from .jobs import JobError, JobManager
 from .settings import PACKAGE_DIR, Settings
 from .tasks import TASKS, RequestError, build_request, describe_task, find_task
@@ -354,6 +354,34 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
                 raise fail(500, str(exc)) from exc
         return FileResponse(target, media_type="application/pdf",
                             filename="%s-%s.pdf" % (job.task, label))
+
+    @app.get("/api/jobs/{job_id}/package")
+    async def job_package(job_id: str, steps: Optional[str] = None, dt: Optional[str] = None,
+                          temperature: Optional[str] = None) -> Response:
+        """!
+        @brief The archive with which the molecule of a job is simulated
+        with OpenMM: the files that gentop wrote, the settings of the
+        simulation, a script and an explanation.
+        @param job_id      The identifier of a job of a task with a package.
+        @param steps       The number of steps of the simulation.
+        @param dt          The time step in fs.
+        @param temperature The temperature in K.
+        @return The zip archive.
+        """
+        job = find_job(job_id)
+        task = TASKS.get(job.task)
+        pdb: Optional[Path] = job.files.get("c")
+        xml: Optional[Path] = job.files.get("openmm")
+        if task is None or not task.package or pdb is None or xml is None:
+            raise fail(404, "There is no such package")
+        try:
+            chosen = openmm_package.parse_settings(steps, dt, temperature)
+            data = openmm_package.build(pdb, xml, chosen, __version__)
+        except openmm_package.PackageError as exc:
+            raise fail(400, str(exc)) from exc
+        return Response(content=data, media_type="application/zip",
+                        headers={"Content-Disposition":
+                                 'attachment; filename="%s.zip"' % openmm_package.FOLDER})
 
     static_dir = PACKAGE_DIR / "static"
     if static_dir.is_dir():

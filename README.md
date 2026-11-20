@@ -29,8 +29,14 @@ The spectrum and the energies can be saved as PDF files, which
 [plotXVG](https://github.com/AlexandriaChemistry/plotXVG) makes on the
 server from the xvg files of the program.
 
-Not there yet: the OpenMM package, the force field and molprop workspaces,
-and the server for several users.
+The tab OpenMM gives an archive with which the molecule is simulated with
+OpenMM and the same force field: the coordinates and the force field file
+that `alexandria gentop -openmm` writes, the settings of the simulation, a
+script that runs it with `ActOpenMMSim` of ACT-utilities, and a text that
+says what is what.
+
+Not there yet: the force field and molprop workspaces, and the server for
+several users.
 
 The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 `act_gui/static/vendor/`) to show molecules.
@@ -57,11 +63,13 @@ removed at the end; `--data DIR` keeps them in a directory.
 
     python -m unittest discover -s tests -t .
 
-The tests of the server use a function in the place of the program. The
-tests in `tests/test_alexandria.py` run the real program when
-`ACT_ALEXANDRIA` is set. The tests in `tests/e2e` drive the page in Firefox
-without a window, through selenium, with the real program; with
-`ACT_GUI_SHOTS` set to a directory they save pictures of the page there.
+The tests of the server use a function in the place of the program. With
+`ACT_ALEXANDRIA` set, the tests in `tests/test_alexandria.py` run the real
+program, and `tests/test_openmm_package.py` runs ten steps of the archive
+for OpenMM when OpenMM and ACT-utilities are installed. The tests in
+`tests/e2e` drive the page in Firefox without a window, through selenium,
+with the real program; with `ACT_GUI_SHOTS` set to a directory they save
+pictures of the page there.
 
 ## The default force field
 

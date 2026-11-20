@@ -57,6 +57,8 @@ class Task:
     downloads: Tuple[str, ...] = ()
     ## The output files with data that can be saved as a plot, by option name
     plots: Tuple[str, ...] = ()
+    ## Whether the output files are offered as an archive for OpenMM
+    package: bool = False
 
 
 ## The options to choose how the charges are made, the same for all tasks
@@ -92,6 +94,12 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          progress=True,
          downloads=("o", "e", "c", "g"),
          plots=("e",)),
+    Task(name="openmm", command="gentop",
+         title="Files for a simulation with OpenMM",
+         options=_CHARGE_OPTIONS,
+         outputs={"openmm": "openmm.xml", "c": "conf.pdb"},
+         downloads=("openmm", "c", "g"),
+         package=True),
 )}
 
 
@@ -199,5 +207,5 @@ def describe_task(task: Task, command_info: Optional[Any]) -> Dict[str, Any]:
         described.append(entry)
     return {"name": task.name, "title": task.title, "command": task.command,
             "progress": task.progress, "downloads": list(task.downloads),
-            "plots": list(task.plots),
+            "plots": list(task.plots), "package": task.package,
             "options": described}
