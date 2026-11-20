@@ -27,7 +27,7 @@ from typing import List, Optional
 
 import uvicorn
 
-from . import __version__
+from . import __version__, cluster
 from .app import create_app
 from .settings import Settings
 
@@ -57,6 +57,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--data", type=Path, default=None,
                         help="directory for uploads and results, a temporary "
                         "directory that is removed at the end by default")
+    parser.add_argument("--config", type=Path, default=None,
+                        help="file with your settings, such as the cluster for long "
+                        "jobs; %s by default" % cluster.default_config_file())
     parser.add_argument("--no-browser", action="store_true",
                         help="do not open the browser, only print the address")
     parser.add_argument("--version", action="version", version="act-gui " + __version__)
@@ -67,7 +70,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if data_dir is None:
         temporary = tempfile.TemporaryDirectory(prefix="act-gui-")
         data_dir = Path(temporary.name)
-    settings = Settings(data_dir=data_dir, mode="desktop")
+    settings = Settings(data_dir=data_dir, mode="desktop",
+                        config_file=args.config or cluster.default_config_file())
     if not settings.default_forcefield.is_file():
         sys.stderr.write("The default force field %s does not exist\n"
                          % settings.default_forcefield)
