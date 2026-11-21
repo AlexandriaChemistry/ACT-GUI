@@ -196,6 +196,15 @@ _SITE_TYPE = re.compile(r"^v[A-Za-z0-9]{1,14}$")
 ## The largest number of virtual sites of the user, and the largest
 ## absolute value of a bound of their parameters
 MAX_SITES = 50
+## The largest number of parameters of the user that are fixed
+MAX_FIXED = 2000
+## The largest value of a fixed parameter
+MAX_FIXED_VALUE = 1e12
+## What the names in a fixed parameter may look like
+_FIXED_NAMES = {"interaction": re.compile(r"^[A-Z_]{0,40}$"),
+                "type": re.compile(r"^[A-Za-z0-9+_-]{1,20}$"),
+                "parameter": re.compile(r"^[A-Za-z0-9_]{1,30}$"),
+                "unit": re.compile(r"^[A-Za-z0-9/^ ]{0,30}$")}
 MAX_SITE_PARAMETER = 1000.0
 
 ## The combination rules of the exchange correction on virtual sites
@@ -343,6 +352,9 @@ class Choices:
     rules: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     ## The virtual sites that the user defined, in the form of gen_ff -vs
     sites: Tuple[Mapping[str, Any], ...] = ()
+    ## The parameters that the user fixed at a value: interaction, type,
+    ## parameter, value and unit, see _fixed
+    fixed: Tuple[Mapping[str, Any], ...] = ()
 
 
 def default_rules(vdw: str, induction: str) -> Dict[str, Dict[str, str]]:
@@ -457,7 +469,7 @@ def _sites(given: Any, chosen: List["TypeChoice"],
             if key not in ("type", "interaction", "atoms", "parameters"):
                 raise GeneratorError("A virtual site has no '%s'" % (key,))
         name = entry.get("type")
-        if not isinstance(name, str) or not _SITE_TYPE.match(name) or name in particles:
+        if not isinstance(name, str) or not _SITE_TYPE.fullmatch(name) or name in particles:
             raise GeneratorError("'%s' cannot be the name of a virtual site: use a v and up "
                                  "to 14 letters and digits, and no name of an atom type"
                                  % (name,))
@@ -496,6 +508,51 @@ def _sites(given: Any, chosen: List["TypeChoice"],
     return tuple(sites)
 
 
+def _fixed(given: Any) -> Tuple[Mapping[str, Any], ...]:
+    """!
+    @brief Check the parameters that the user fixed, as the file of actgui
+    gave them.
+    @param given What the request gave: a list of objects with interaction
+    (empty for a parameter of the particle type itself, such as q), type,
+    parameter, value and unit (empty for the unit of the table).
+    @return The parameters, with nothing in them but what was checked.
+    Whether the types have these parameters is checked by build.
+    @throws GeneratorError if one is not complete, not a number or given
+    twice.
+    """
+    if given is None:
+        return ()
+    if not isinstance(given, list):
+        raise GeneratorError("The fixed parameters must be a list")
+    if len(given) > MAX_FIXED:
+        raise GeneratorError("At most %d parameters can be fixed" % MAX_FIXED)
+    fixed = []
+    seen = set()
+    for entry in given:
+        entry = _object(entry, "A fixed parameter")
+        for key in entry:
+            if key not in ("interaction", "type", "parameter", "value", "unit"):
+                raise GeneratorError("A fixed parameter has no '%s'" % (key,))
+        names = {}
+        for key, pattern in _FIXED_NAMES.items():
+            value = entry.get(key, "")
+            if not isinstance(value, str) or not pattern.fullmatch(value):
+                raise GeneratorError("The %s of a fixed parameter cannot be '%s'" % (key, value))
+            names[key] = value
+        value = entry.get("value")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value) or abs(value) > MAX_FIXED_VALUE:
+            raise GeneratorError("The value of %s of %s must be a number"
+                                 % (names["parameter"], names["type"]))
+        key = (names["interaction"], names["type"], names["parameter"])
+        if key in seen:
+            raise GeneratorError("The parameter %s %s of %s is fixed twice"
+                                 % (names["interaction"], names["parameter"], names["type"]))
+        seen.add(key)
+        fixed.append(dict(names, value=value))
+    return tuple(fixed)
+
+
 def parse_choices(request: Any, atom_types: Mapping[str, AtomType]) -> Choices:
     """!
     @brief Check what the browser sent and fill in what it left out.
@@ -503,15 +560,15 @@ def parse_choices(request: Any, atom_types: Mapping[str, AtomType]) -> Choices:
     list of objects with name, vsite and shell), vdw (potential, particles,
     nexcl), charge (model, epsilonr, maxrow, symmetric), bonds, angles,
     dihedrals, induction (potential, particles), vsites (files, exchange
-    and sites, the virtual sites of the user) and rules (by interaction and
-    parameter).
+    and sites, the virtual sites of the user), rules (by interaction and
+    parameter) and fixed (the parameters that the user fixed, see _fixed).
     @param atom_types The atom types that can be chosen.
     @return The choices.
     @throws GeneratorError if something is not one of the possibilities.
     """
     request = _object(request, "The choices for the force field")
     known = ("atomtypes", "vdw", "charge", "bonds", "angles", "dihedrals", "induction",
-             "vsites", "rules")
+             "vsites", "rules", "fixed")
     for key in request:
         if key not in known:
             raise GeneratorError("Unknown choice '%s'" % (key,))
@@ -592,7 +649,8 @@ def parse_choices(request: Any, atom_types: Mapping[str, AtomType]) -> Choices:
         vsite_files=tuple(files),
         exchange=_flag(vsites.get("exchange"), False, "exchange"),
         rules=rules,
-        sites=_sites(vsites.get("sites"), types, atom_types))
+        sites=_sites(vsites.get("sites"), types, atom_types),
+        fixed=_fixed(request.get("fixed")))
 
 
 class _Table:
@@ -636,6 +694,31 @@ class _Table:
         row[prefix + "mut"] = mutability
         row[prefix + "unit"] = unit
         row[prefix + "nonneg"] = str(nonnegative)
+
+    def fix(self, name: str, interaction: str, parameter: str, value: float, unit: str) -> None:
+        """!
+        @brief Fix a parameter of a particle type at a value, as actgui did
+        with the parameters of the user.
+        @param name        The name of the particle type.
+        @param interaction The interaction, empty for a parameter of the
+        particle type itself.
+        @param parameter   The name of the parameter.
+        @param value       The value.
+        @param unit        Its unit, which must be that of the table; empty
+        for that unit.
+        @throws GeneratorError if the type has no such parameter, or it has
+        another unit.
+        """
+        prefix = "%s:%s:" % (interaction, parameter)
+        row = self.rows[name]
+        if prefix + "min" not in row:
+            raise GeneratorError("The particle type %s has no parameter %s to fix"
+                                 % (name, (interaction + " " + parameter).strip()))
+        if unit and unit != row[prefix + "unit"]:
+            raise GeneratorError("The unit of %s of %s is %s, not %s"
+                                 % (parameter, name, row[prefix + "unit"], unit))
+        self.parameter(name, interaction, parameter, value, value, FIXED, row[prefix + "unit"],
+                       value >= 0)
 
     def text(self) -> str:
         """!
@@ -830,6 +913,12 @@ def build(choices: Choices, atom_types: Mapping[str, AtomType],
                                     BOUNDED if on else FIXED, unit)
             if kind == ATOM:
                 table.rows[name]["comment"] = atom.comment
+
+    # The parameters that the user fixed, of the types that are there
+    for entry in choices.fixed:
+        if entry["type"] in table.rows:
+            table.fix(entry["type"], entry["interaction"], entry["parameter"], entry["value"],
+                      entry["unit"])
 
     options: Dict[str, Any] = {
         "nexcl": choices.nexcl,

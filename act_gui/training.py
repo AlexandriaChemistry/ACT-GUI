@@ -69,7 +69,7 @@ def options(spec: Any) -> Dict[str, Any]:
     if len(fit) > MAX_PARAMETERS:
         raise TrainingError("More than %d kinds of parameters to train" % MAX_PARAMETERS)
     for name in fit:
-        if not isinstance(name, str) or not _PARAMETER.match(name):
+        if not isinstance(name, str) or not _PARAMETER.fullmatch(name):
             raise TrainingError("'%s' is not the name of a kind of parameter" % (name,))
     if len(set(fit)) != len(fit):
         raise TrainingError("A kind of parameter is given twice")

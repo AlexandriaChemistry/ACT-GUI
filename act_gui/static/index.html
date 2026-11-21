@@ -190,6 +190,11 @@
           <div class="checks" id="g-vsites"></div>
           <label class="check"><input type="checkbox" id="g-exchange"> Exchange correction on σ-holes</label>
           <p class="muted fine" id="g-ownsites"></p></div>
+        <div class="group"><h3>Fixed parameters</h3>
+          <p class="muted fine">Parameters with a known value, from experiments or quantum chemistry, are fixed at that value during training. A file has a line for each: interaction|potential|atom type|parameter|value|unit, as the file of actgui.</p>
+          <div class="row"><button class="btn small" id="g-fixed-open" type="button" title="Add the parameters of a file">Open file…</button>
+            <input class="visually-hidden" type="file" id="g-fixed-file" accept=".csv,.dat,.txt,text/plain,text/csv" tabindex="-1" aria-hidden="true"></div>
+          <ul class="sites" id="g-fixed"></ul></div>
         <div class="row"><button class="btn primary" id="run-gen" type="button" disabled>Generate force field</button>
           <span class="pill" id="gen-pill" hidden></span></div>
       </div></div>

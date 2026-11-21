@@ -235,7 +235,7 @@ def _identifiers(value: Any) -> str:
     if not names or len(names) > MAX_IDENTIFIERS:
         raise RequestError("Give between 1 and %d identifiers" % MAX_IDENTIFIERS)
     for name in names:
-        if not isinstance(name, str) or not _IDENTIFIER.match(name):
+        if not isinstance(name, str) or not _IDENTIFIER.fullmatch(name):
             raise RequestError("'%s' is not the identifier of a particle type or an "
                                "interaction" % (name,))
     return " ".join(names)
@@ -250,7 +250,7 @@ def _edit_options(given: Dict[str, Any]) -> Dict[str, Any]:
     """
     options = dict(given)
     name = options.get("p")
-    if not isinstance(name, str) or not _PARAMETER_NAME.match(name):
+    if not isinstance(name, str) or not _PARAMETER_NAME.fullmatch(name):
         raise RequestError("Give the name of the parameter to change")
     if "a" not in options:
         # Without it edit_ff changes the parameter for every type

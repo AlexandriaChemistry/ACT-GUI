@@ -137,7 +137,7 @@ def _directory(given: str, what: str) -> str:
         raise ClusterError("Give %s below your home directory or with its full path, of at "
                            "most %d characters" % (what, MAX_WORKDIR))
     for part in parts:
-        if not _PART.match(part):
+        if not _PART.fullmatch(part):
             raise ClusterError("'%s' cannot be part of %s: use letters, digits and "
                                ". _ + @ -, and no spaces" % (part, what))
     return ("/" if absolute else "") + "/".join(parts)
@@ -174,11 +174,11 @@ def parse(given: Any) -> ClusterSettings:
                       ("workdir", "working directory")):
         if not text[key]:
             raise ClusterError("Give the %s" % name)
-    if not _SERVER.match(text["server"]):
+    if not _SERVER.fullmatch(text["server"]):
         raise ClusterError("'%s' cannot be the name of a server: use letters, digits, dots "
                            "and dashes, as in csb.example.org or a name from your ssh "
                            "configuration" % text["server"])
-    if not _USER.match(text["user"]):
+    if not _USER.fullmatch(text["user"]):
         raise ClusterError("'%s' cannot be a user name on the server" % text["user"])
     text["workdir"] = _directory(text["workdir"], "the working directory")
 
@@ -190,7 +190,7 @@ def parse(given: Any) -> ClusterSettings:
         name = ""
     elif kind == "source":
         name = _directory(name, "the file that is read") if name else ""
-    elif len(name) > 100 or not (_MODULE if kind == "module" else _ENVIRONMENT).match(name):
+    elif len(name) > 100 or not (_MODULE if kind == "module" else _ENVIRONMENT).fullmatch(name):
         raise ClusterError("'%s' cannot be the name of a %s" % (
             name, "module" if kind == "module" else "conda environment"))
     if kind != "none" and not name:
@@ -199,16 +199,16 @@ def parse(given: Any) -> ClusterSettings:
 
     for key, what in (("partition", "The partitions"),
                       ("gpu_partition", "The partitions for jobs with a GPU")):
-        if len(text[key]) > 200 or not _PARTITIONS.match(text[key]):
+        if len(text[key]) > 200 or not _PARTITIONS.fullmatch(text[key]):
             raise ClusterError("%s are names with commas in between, as in "
                                "CLUSTER,CLUSTER-AMD" % what)
-    if not _GRES.match(text["gpu_gres"]) or len(text["gpu_gres"]) > 100:
+    if not _GRES.fullmatch(text["gpu_gres"]) or len(text["gpu_gres"]) > 100:
         raise ClusterError("What a job asks for to get a GPU looks like gpu:1")
-    if text["account"] and not _ACCOUNT.match(text["account"]):
+    if text["account"] and not _ACCOUNT.fullmatch(text["account"]):
         raise ClusterError("'%s' cannot be the name of an account" % text["account"])
     if text["launcher"] not in LAUNCHERS:
         raise ClusterError("Parallel jobs are started with one of: %s" % ", ".join(LAUNCHERS))
-    if not _PROGRAM.match(text["program"]):
+    if not _PROGRAM.fullmatch(text["program"]):
         raise ClusterError("'%s' cannot be the name of the program of ACT on the cluster: "
                            "give a name such as alexandria or alexandria_d, without a "
                            "directory" % text["program"])
@@ -260,7 +260,7 @@ def batch_script(settings: ClusterSettings, name: str, words: Sequence[str], *,
     @throws ClusterError for a name, a number of processes or a time that
     is not possible, or an empty command.
     """
-    if not isinstance(name, str) or not _JOB_NAME.match(name):
+    if not isinstance(name, str) or not _JOB_NAME.fullmatch(name):
         raise ClusterError("'%s' cannot be the name of a job" % (name,))
     if isinstance(tasks, bool) or not isinstance(tasks, int) or not 1 <= tasks <= MAX_TASKS:
         raise ClusterError("The number of processes is between 1 and %d" % MAX_TASKS)

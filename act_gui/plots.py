@@ -137,7 +137,7 @@ def check_series(xvg: Path, series: Sequence[str]) -> List[str]:
     if chosen:
         known = legends(xvg)
         for name in chosen:
-            if not isinstance(name, str) or not _SERIES_NAME.match(name) or name not in known:
+            if not isinstance(name, str) or not _SERIES_NAME.fullmatch(name) or name not in known:
                 raise PlotError("The file has no series '%s'" % (name,))
     return chosen
 
@@ -152,7 +152,7 @@ def _relabelled(xvg: Path, copy: Path, title: Optional[str], ylabel: Optional[st
     @throws PlotError for a text that does not fit in the header.
     """
     for text in (title, ylabel):
-        if text is not None and not _LABEL_TEXT.match(text):
+        if text is not None and not _LABEL_TEXT.fullmatch(text):
             raise PlotError("The label '%s' cannot be used in a plot" % text)
     with open(xvg, "r", encoding="utf-8", errors="replace") as source, \
             open(copy, "w", encoding="utf-8") as target:

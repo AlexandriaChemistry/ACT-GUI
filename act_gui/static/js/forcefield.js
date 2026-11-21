@@ -36,7 +36,58 @@ const state = {
   filter: "",          // the interaction of which the parameters are listed
   query: "",           // the text that identifiers must contain
   picked: null,        // the parameter that is being changed: { interaction, identifier, param }
+  fixed: [],           // the files with fixed parameters: { name, entries }
 };
+
+/** The largest file with fixed parameters that is read. */
+const MAX_FIXED_FILE = 1048576;
+
+/**
+ * The parameters of a file with fixed parameters, as actgui read them: a
+ * line interaction|potential|atom type|parameter|value|unit for each, and
+ * lines that start with # are comments. The potential is not used.
+ * @param {string} text The content of the file.
+ * @returns {object[]} For each parameter its interaction, type, parameter, value and unit.
+ * @throws {Error} With what is wrong, for the user.
+ */
+export function fixedOfFile(text) {
+  const entries = [];
+  text.split(/\r?\n/).forEach((line, i) => {
+    if (!line.trim() || line.startsWith("#")) return;
+    const words = line.split("|").map(w => w.trim());
+    if (words.length !== 6) throw new Error(`line ${i + 1} does not have six fields separated by |`);
+    const [interaction, , type, parameter, number, unit] = words;
+    const value = Number(number);
+    if (!number || !isFinite(value)) throw new Error(`the value on line ${i + 1} is not a number`);
+    if (!type || !parameter) throw new Error(`line ${i + 1} has no atom type or parameter`);
+    entries.push({ interaction, type, parameter, value, unit });
+  });
+  if (!entries.length) throw new Error("it has no parameters");
+  return entries;
+}
+
+/** Show the files with fixed parameters. */
+function fixedList() {
+  const list = $("#g-fixed");
+  list.replaceChildren(...state.fixed.map((file, i) => el("li", {},
+    el("span", {}, `${file.name}: ${file.entries.length} ${file.entries.length === 1 ? "parameter" : "parameters"}`),
+    el("button", { class: "btn small", type: "button", data: { remove: i }, title: "Do not use this file" }, "Remove"))));
+}
+
+/**
+ * Add the parameters of a file to those that are fixed.
+ * @param {File} file The file.
+ */
+async function openFixed(file) {
+  alertBox("");
+  try {
+    if (file.size > MAX_FIXED_FILE) throw new Error("it is larger than 1 MB");
+    state.fixed.push({ name: file.name, entries: fixedOfFile(await file.text()) });
+    fixedList();
+  } catch (e) {
+    alertBox(`The parameters of ${file.name} could not be read: ${e.message}.`);
+  }
+}
 
 /** The most lists of parameters that are put in the table at once. */
 const MAX_LISTS = 300;
@@ -279,6 +330,7 @@ function generatorChoices() {
     vsites: { files: $$("#g-vsites input").filter(b => b.checked).map(b => b.dataset.name), exchange: $("#g-exchange").checked,
               sites: chosenSites() },
     rules: { VANDERWAALS: chosenRules($("#g-vdwrules")) },
+    fixed: state.fixed.flatMap(file => file.entries),
   };
   if (choices.induction.potential !== "NONE") choices.rules.INDUCTIONCORRECTION = chosenRules($("#g-icrules"));
   return choices;
@@ -653,6 +705,18 @@ export async function startForceFields(told) {
     if (ref && ref.job) saveFile(e.currentTarget, `/jobs/${ref.job}/files/o`, {}, "Saving…", "forcefield.xml");
   };
   $("#run-gen").onclick = generate;
+  $("#g-fixed-open").onclick = () => $("#g-fixed-file").click();
+  $("#g-fixed-file").onchange = e => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (file) openFixed(file);
+  };
+  $("#g-fixed").addEventListener("click", e => {
+    const button = e.target.closest("button[data-remove]");
+    if (!button) return;
+    state.fixed.splice(+button.dataset.remove, 1);
+    fixedList();
+  });
   $("#g-save-f").onclick = e => saveFile(e.currentTarget, `/jobs/${state.genJob}/files/f`, {}, "Saving…", "atomtypes.csv");
   $("#g-save-vs").onclick = e => saveFile(e.currentTarget, `/jobs/${state.genJob}/files/vs`, {}, "Saving…", "vsites.json");
   seg($("#geo-qalg"), () => {});
