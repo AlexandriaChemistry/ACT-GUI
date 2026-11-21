@@ -24,9 +24,10 @@ from __future__ import annotations
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import cluster_jobs
@@ -46,7 +47,8 @@ MAX_REPORTS = 5000
 def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
              prepare: Callable[..., Tuple[Task, Prepared]],
              arguments: Callable[..., Any],
-             fail: Callable[[int, str], HTTPException]) -> None:
+             fail: Callable[[int, str], HTTPException],
+             written: Optional[Callable[[str], Dict[str, str]]] = None) -> None:
     """!
     @brief Add the routes for jobs on the cluster to the application.
     @param app       The application. Its state has the settings of the cluster.
@@ -59,6 +61,9 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
     @param arguments The function that makes the arguments of a command,
     see cluster_queue.make_plan().
     @param fail      The function that makes the answer for an error.
+    @param written   The function that tells which files a command writes
+    under their default names when their option is not given, by option
+    name; they are fetched as well. None for none.
     """
 
     def poll_seconds() -> int:
@@ -112,10 +117,18 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
             # In a file in the directory of the job, which is read when
             # the cluster is asked for the state of the job
             options[PROGRESS] = True
+        # Also the files that the command writes without being asked, such
+        # as the log file of a training, unless the job names them otherwise
+        collect = dict(task.collect)
+        named = set(collect.values()) | set(task.outputs.values())
+        for key, filename in (written(task.command) if written else {}).items():
+            if key not in options and key not in task.outputs and key not in collect \
+                    and filename not in named:
+                collect[key] = filename
         try:
             return make_plan(name, task.name, task.command, options, staging,
                              arguments, app.state.cluster, outputs=dict(task.outputs),
-                             inputs=prepared.inputs, collect=dict(task.collect),
+                             inputs=prepared.inputs, collect=collect,
                              tasks=tasks, minutes=minutes,
                              gpu=chosen.get("gpu", False), observables=prepared.observables)
         except (ValueError, OSError) as exc:
@@ -259,6 +272,37 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
                                 observables=job.observables)
         queue.adopted(name, adopted.id)
         return {"job": adopted.id, "task": task.name}
+
+    @app.get("/api/cluster/jobs/{name}/files")
+    def cluster_files(name: str) -> Dict[str, Any]:
+        """!
+        @brief The output files of a job that were fetched, to be saved.
+        @param name The name of the job.
+        @return "files": for each its name and size in bytes.
+        """
+        try:
+            files = queue.output_files(name)
+        except ClusterError as exc:
+            raise fail(404, str(exc)) from exc
+        return {"files": [{"name": item, "size": path.stat().st_size}
+                          for item, path in files.items()]}
+
+    @app.get("/api/cluster/jobs/{name}/files/{filename}")
+    def cluster_file(name: str, filename: str) -> FileResponse:
+        """!
+        @brief An output file of a job that was fetched.
+        @param name     The name of the job.
+        @param filename The name of the file, one of cluster_files().
+        @return The file, to be saved.
+        """
+        try:
+            files = queue.output_files(name)
+        except ClusterError as exc:
+            raise fail(404, str(exc)) from exc
+        if filename not in files:
+            raise fail(404, "The job has no such file")
+        return FileResponse(files[filename], media_type="application/octet-stream",
+                            filename=filename)
 
     @app.delete("/api/cluster/jobs/{name}")
     def cluster_stop(name: str, forget: bool = False) -> Dict[str, Any]:

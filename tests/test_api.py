@@ -32,9 +32,14 @@ def fake_program_info():
     @brief Stands in for act.program_info().
     @return Commands with a few options, as far as the tasks need them.
     """
-    def option(name, otype, default=None, values=()):
+    def option(name, otype, default=None, values=(), **more):
         return SimpleNamespace(name=name, type=otype, default=default, values=values,
-                               description="Help for " + name)
+                               description="Help for " + name, **more)
+
+    def written(name, default):
+        # A file that the program writes under its default name when the
+        # option is not given
+        return option(name, "file", default, is_file=True, is_output=True, required=True)
 
     def command(*options):
         table = {o.name: o for o in options}
@@ -48,6 +53,8 @@ def fake_program_info():
         "gentop": [option("qalg", "string")],
         "simulate": [option("qalg", "string"), option("nsteps", "int", 0),
                      option("temp", "real", 0)],
+        "train_ff": [written("g", "train_ff.log"), written("sensout", "sensitivity.json"),
+                     written("gpout", "genepool.csv"), written("o", "ff_train.xml")],
     }
     # What the interface gives with every run of a task, the program has
     for task in TASKS.values():

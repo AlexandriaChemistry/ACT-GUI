@@ -107,7 +107,19 @@ class Plan:
                 "command": cluster.remote_command(self.words), "script": self.script,
                 "files": [{"name": name, "size": path.stat().st_size}
                           for name, path in sorted(self.files.items())],
-                "tasks": self.tasks, "minutes": self.minutes, "gpu": self.gpu}
+                "tasks": self.tasks, "minutes": self.minutes, "gpu": self.gpu,
+                "fetch": self.fetched_names()}
+
+    def fetched_names(self) -> List[str]:
+        """!
+        @brief The files that are fetched when the job is done, those that
+        are there then.
+        @return Their names in the directory of the job.
+        """
+        names = {name for listed in self.outputs.values() for name in listed}
+        names.update(self.collect.values())
+        names.add(cluster.OUTPUT_FILE)
+        return sorted(names)
 
 
 def make_plan(name: str, task: str, command: str, options: Mapping[str, Any],
@@ -425,6 +437,25 @@ class ClusterQueue:
         @return The directory in which each job has a directory.
         """
         return self._dir
+
+    def output_files(self, name: str) -> Dict[str, Path]:
+        """!
+        @brief The output files of a job that were fetched: those that its
+        command wrote and the output of Slurm, not the files that were
+        sent along.
+        @param name The name of the job.
+        @return The files by their name.
+        @throws ClusterError if there is no such job.
+        """
+        job = self.get(name)
+        if job is None:
+            raise ClusterError("There is no job %s" % name)
+        names = {item for listed in job.outputs.values() for item in listed}
+        names.update(job.collect.values())
+        names.add(cluster.OUTPUT_FILE)
+        directory = self._dir / job.name
+        return {item: directory / item for item in sorted(names)
+                if _FILE_NAME.fullmatch(item) and (directory / item).is_file()}
 
     def directory(self, name: str) -> Path:
         """!

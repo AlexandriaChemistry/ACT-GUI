@@ -2137,6 +2137,19 @@ class PageTest(unittest.TestCase):
         self.shot("35-cluster-training-results")
         self.assertEqual(logins + 3, len(self.cluster.calls()))
 
+        # The output files of the training came back and can be saved, also
+        # the log that train_ff writes without being asked
+        self.click('#nav button[data-view="cluster"]')
+        self.click('#cj-table button[data-act="files"]')
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, '#cj-table button[data-save="train_ff.log"]'))
+        listed = self.text("#cj-table")
+        for name in ("trained.xml", "train_ff.json", "sensitivity.json", "slurm.out"):
+            self.assertIn(name, listed)
+        self.assertNotIn("selection.dat", listed)
+        log = self.saved_file('#cj-table button[data-save="train_ff.log"]', "train_ff.log", "The log")
+        self.assertIn("train_ff", log)
+        self.assertEqual(logins + 3, len(self.cluster.calls()))
+
         # Take the job and the cluster away again
         self.click('#nav button[data-view="cluster"]')
         self.click('#cj-table button[data-act="forget"]')

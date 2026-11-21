@@ -330,6 +330,11 @@ echo "{\"asked\": \"$*\"}" > result.json
 echo running "$@"
 command=$1
 status=0
+# Files that train_ff writes under their default names
+if [ "$command" = "train_ff" ]; then
+  echo "The log of train_ff" > train_ff.log
+  echo '{"sensitivity": {}}' > sensitivity.json
+fi
 while [ $# -gt 0 ]; do
   case "$1" in
     -json)

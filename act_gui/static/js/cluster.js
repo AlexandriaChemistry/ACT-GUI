@@ -20,7 +20,7 @@
  *
  * All text that comes from the server is put on the page as text.
  */
-import { $, alertBox, call, el, num, pill, session, toast } from "./common.js";
+import { $, alertBox, call, el, num, pill, saveFile, session, toast } from "./common.js";
 
 /** The fields of the form, by the name of the setting. */
 const FIELDS = {
@@ -77,7 +77,27 @@ const STATES = {
   lost: ["Ended without result", "bad"], cancelled: ["Stopped", ""],
 };
 /** The jobs as the server last told them, and the timer of the next question. */
-const jobs = { listing: null, timer: null, busy: false };
+const jobs = { listing: null, timer: null, busy: false, files: new Map() };  // files: the output files that are shown, by job
+
+/**
+ * The size of a file for people.
+ * @param {number} bytes The size.
+ * @returns {string} The size in bytes, kB or MB.
+ */
+const size = bytes => (bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} kB` : `${(bytes / 1048576).toFixed(1)} MB`);
+
+/**
+ * The output files of a job with a button to save each.
+ * @param {string} name   The name of the job.
+ * @param {object[]} list The files: name and size.
+ * @returns {Element} The list.
+ */
+function fileList(name, list) {
+  if (!list.length) return el("p", { class: "muted fine" }, "The job has no output files here.");
+  return el("ul", { class: "sites" }, ...list.map(file => el("li", {},
+    el("span", {}, `${file.name} · ${size(file.size)}`),
+    el("button", { class: "btn small", type: "button", data: { save: file.name, name } }, "Save"))));
+}
 
 /**
  * A time of today as hours and minutes, of another day with the date.
@@ -147,6 +167,7 @@ function showJobs(listing) {
       const buttons = el("div", { class: "row tight" });
       if (!done) buttons.append(action("Stop", "stop", job.name));
       if (job.state === "finished" && job.fetched) buttons.append(action("Show results", "open", job.name));
+      if (job.fetched) buttons.append(action(jobs.files.has(job.name) ? "Hide files" : "Files", "files", job.name));
       if (done && job.state !== "cancelled" && !job.fetched) buttons.append(action("Fetch results", "fetch", job.name));
       if (done) buttons.append(action("Forget", "forget", job.name));
       body.append(el("tr", { data: { job: job.name } }, el("td", { class: "mono" }, job.name), el("td", {}, job.title),
@@ -156,6 +177,7 @@ function showJobs(listing) {
         el("td", {}, when(job.created)), el("td", {}, asked(job)), el("td", { class: "mono" }, `${job.server}:${job.directory}`),
         el("td", {}, buttons)));
       if (job.error) body.append(el("tr", { class: "more" }, el("td", { colSpan: 8 }, el("pre", { class: "code" }, job.error))));
+      if (jobs.files.has(job.name)) body.append(el("tr", { class: "more" }, el("td", { colSpan: 8 }, fileList(job.name, jobs.files.get(job.name)))));
     }
     table.append(body);
   }
@@ -221,6 +243,13 @@ async function jobAction(button) {
   button.disabled = true;
   alertBox("");
   try {
+    if (act === "files") {
+      // The output files that came back, shown or hidden
+      if (jobs.files.has(name)) jobs.files.delete(name);
+      else jobs.files.set(name, (await (await call(`/cluster/jobs/${encodeURIComponent(name)}/files`)).json()).files);
+      showJobs(jobs.listing);
+      return;
+    }
     if (act === "open") {
       const opened = await (await call(`/cluster/jobs/${encodeURIComponent(name)}/open`, { method: "POST" })).json();
       const job = await (await call("/jobs/" + opened.job)).json();
@@ -236,7 +265,8 @@ async function jobAction(button) {
   } catch (e) {
     button.disabled = false;
     alertBox({ stop: "The job could not be stopped. ", forget: "The job could not be forgotten. ",
-               fetch: "The results could not be fetched. ", open: "The results could not be shown. " }[act] + e.message);
+               fetch: "The results could not be fetched. ", open: "The results could not be shown. ",
+               files: "The files of the job could not be listed. " }[act] + e.message);
   }
 }
 
@@ -337,6 +367,12 @@ export async function startCluster(told) {
   }
   $("#cj-ask").onclick = () => ask(true);
   $("#cj-table").addEventListener("click", e => {
+    const save = e.target.closest("button[data-save]");
+    if (save) {
+      const { name } = save.dataset;
+      saveFile(save, `/cluster/jobs/${encodeURIComponent(name)}/files/${encodeURIComponent(save.dataset.save)}`, {}, "Saving…", save.dataset.save);
+      return;
+    }
     const button = e.target.closest("button[data-act]");
     if (button) jobAction(button);
   });

@@ -70,8 +70,10 @@ class ClusterJobTest(unittest.TestCase):
         """
         self.assertEqual("4242", self.send())
         job = self.remote / "job1"
+        # With the files that train_ff writes without being asked
         self.assertEqual(["act-exit-status", "ff.xml", "job.sh", "result.json", "selection.dat",
-                          "slurm.out"], sorted(p.name for p in job.iterdir()))
+                          "sensitivity.json", "slurm.out", "train_ff.log"],
+                         sorted(p.name for p in job.iterdir()))
         self.assertEqual("<alexandria_chemistry/>\n", (job / "ff.xml").read_text())
         self.assertEqual("water|Train\n", (job / "selection.dat").read_text())
         self.assertIn("#SBATCH --partition=CLUSTER,CLUSTER-AMD", (job / "job.sh").read_text())

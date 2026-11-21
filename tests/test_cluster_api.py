@@ -319,6 +319,11 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.assertEqual(200, answer.status_code, answer.text)
         shown = answer.json()
         self.assertIn("#SBATCH -n 4\n", shown["script"])
+        # What comes back: also the files that train_ff writes under their
+        # default names, but not one that the job names otherwise
+        self.assertLessEqual({"train_ff.log", "sensitivity.json", "genepool.csv", "trained.xml"},
+                             set(shown["fetch"]))
+        self.assertNotIn("ff_train.xml", shown["fetch"])
         self.assertIn("srun alexandria train_ff -ff ff.xml -mp mp.xml -fc_inter 1 "
                       "-fit 'sigma epsilon' -optimizer HYBRID -max_generations 3 -max_iter 20 "
                       "-pop_size 4 -json train_ff.json -progress progress.jsonl "
@@ -360,7 +365,27 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.assertIn("Train", result["result"]["statistics"])
         self.assertEqual(["start", "generation", "generation", "step"],
                          [report["event"] for report in result["progress"]])
-        self.assertLessEqual({"o", "progress", "INTERACTION", "json"}, set(result["files"]))
+        self.assertLessEqual({"o", "progress", "INTERACTION", "json", "g", "sensout"},
+                             set(result["files"]))
+        # The output files of the job can be saved
+        listed = self.client.get("/api/cluster/jobs/train-1/files", headers=self.headers)
+        self.assertEqual(200, listed.status_code, listed.text)
+        names = [entry["name"] for entry in listed.json()["files"]]
+        self.assertLessEqual({"train_ff.log", "sensitivity.json", "trained.xml", "train_ff.json",
+                              "INTERACTION.xvg"}, set(names))
+        # The files that were sent along are not output
+        self.assertNotIn("selection.dat", names)
+        self.assertTrue(all(entry["size"] > 0 for entry in listed.json()["files"]))
+        log = self.client.get("/api/cluster/jobs/train-1/files/train_ff.log", headers=self.headers)
+        self.assertEqual(200, log.status_code)
+        self.assertEqual("The log of train_ff\n", log.text)
+        self.assertIn("attachment", log.headers["content-disposition"])
+        for wrong in ("selection.dat", "../train-1/train_ff.log", "nothing.log", ".act-job.json"):
+            self.assertEqual(404, self.client.get("/api/cluster/jobs/train-1/files/" + wrong,
+                                                  headers=self.headers).status_code, wrong)
+        self.assertEqual(404, self.client.get("/api/cluster/jobs/nojob/files",
+                                              headers=self.headers).status_code)
+        self.assertEqual(401, self.client.get("/api/cluster/jobs/train-1/files").status_code)
         # The trained force field is one to calculate with
         trained = self.client.get("/api/jobs/%s/files/o" % opened.json()["job"],
                                   headers=self.headers)

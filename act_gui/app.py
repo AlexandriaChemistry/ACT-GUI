@@ -795,7 +795,23 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         # nobody logs in elsewhere as somebody else.
         app.state.cluster_queue = ClusterQueue(settings.cluster_jobs_dir,
                                                program=settings.ssh_program)
-        cluster_api.register(app, manager, app.state.cluster_queue, prepare, arguments, fail)
+        def written(command: str) -> Dict[str, str]:
+            """!
+            @brief The files that a command writes under their default
+            names when their option is not given.
+            @param command The command.
+            @return The names by option.
+            """
+            try:
+                options = program_info().commands[command].options
+            except Exception:  # pylint: disable=broad-except
+                return {}
+            values = options.values() if isinstance(options, dict) else options
+            return {option.name: option.default for option in values
+                    if getattr(option, "is_file", False) and getattr(option, "is_output", False)
+                    and getattr(option, "required", False) and isinstance(option.default, str)}
+        cluster_api.register(app, manager, app.state.cluster_queue, prepare, arguments, fail,
+                             written)
 
     static_dir = PACKAGE_DIR / "static"
     if static_dir.is_dir():
