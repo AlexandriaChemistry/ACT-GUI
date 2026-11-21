@@ -182,6 +182,29 @@ class ApiTest(unittest.TestCase):
         self.assertEqual("no-store", self.client.get("/api/session",
                                                      headers=self.headers).headers["cache-control"])
 
+    def test_logo_and_icon(self):
+        """!
+        @brief The page shows the logo of ACT, and the browser gets it as the
+        icon of the page, also at /favicon.ico where it asks without being
+        told; neither needs the key.
+        """
+        page = self.client.get("/").text
+        self.assertIn('<link rel="icon" href="/favicon.ico" sizes="any">', page)
+        self.assertIn('src="/static/img/act-logo.png"', page)
+        logo = self.client.get("/static/img/act-logo.png")
+        self.assertEqual(200, logo.status_code)
+        self.assertEqual("image/png", logo.headers["content-type"])
+        self.assertTrue(logo.content.startswith(b"\x89PNG"))
+        icon = self.client.get("/favicon.ico")
+        self.assertEqual(200, icon.status_code)
+        self.assertIn(icon.headers["content-type"], ("image/vnd.microsoft.icon", "image/x-icon"))
+        # An icon file with the sizes that browsers use
+        self.assertEqual(b"\x00\x00\x01\x00", icon.content[:4])
+        count = int.from_bytes(icon.content[4:6], "little")
+        sizes = sorted(icon.content[6 + 16 * i] or 256 for i in range(count))
+        self.assertEqual([16, 32, 48, 64], sizes)
+        self.assertIn("content-security-policy", icon.headers)
+
     def test_no_generated_documentation_pages(self):
         """!
         @brief The pages that FastAPI can make of the interface are off.
