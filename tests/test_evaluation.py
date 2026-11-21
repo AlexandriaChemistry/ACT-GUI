@@ -11,9 +11,51 @@
 @brief Tests of what is made for, and kept of, the evaluation of a force
 field with alexandria train_ff.
 """
+import tempfile
 import unittest
+from pathlib import Path
 
 from act_gui import evaluation
+
+## A molprop file with a dimer of which two calculations have atoms
+MOLPROP = """<?xml version="1.0" encoding="ISO-8859-1"?>
+<!DOCTYPE molprops.dtd PUBLIC "molprops.dtd" "molprops.dtd">
+<molecules>
+  <molecule molname="water">
+    <experiment datafile="0001"><atom name="O" obtype="ow" coord_unit="Angstrom">
+      <x>0</x><y>0</y><z>0</z></atom></experiment>
+  </molecule>
+  <molecule molname="w2">
+    <fragments>
+      <fragment identifier="InChI=1S/H2O/h1H2" formula="H2O"> 1 2 3</fragment>
+      <fragment identifier="InChI=1S/H2O/h1H2" formula="H2O"> 4 5 6</fragment>
+    </fragments>
+    <molinfo iupac="water#water" cas="" cid="" inchi=""/>
+    <experiment datafile="0007" method="sapt2+">
+      <atom name="O" obtype="ow" coord_unit="Angstrom"><x>0.0</x><y>0.0</y><z>0.0</z></atom>
+      <atom name="H" obtype="hw" coord_unit="Angstrom"><x>0.96</x><y>0.0</y><z>0.0</z></atom>
+      <atom name="H" obtype="hw" coord_unit="Angstrom"><x>-0.24</x><y>0.93</y><z>0.0</z></atom>
+      <atom name="O" obtype="ow" coord_unit="nm"><x>0.3</x><y>0.0</y><z>0.0</z></atom>
+      <atom name="H" obtype="hw" coord_unit="pm"><x>396</x><y>0</y><z>0</z></atom>
+      <atom name="Cl" obtype="cl" coord_unit="Angstrom"><x>3.0</x><y>1.0</y><z>0</z></atom>
+    </experiment>
+    <experiment datafile="0008"><atom name="O" obtype="ow" coord_unit="Angstrom">
+      <x>1</x><y>2</y><z>3</z></atom></experiment>
+  </molecule>
+</molecules>
+"""
+
+## The result of train_ff for a comparison of dimers and a compound
+RESULT = {"molecules": {
+    "0": {"name": "w2", "dataset": "Train", "atoms": {"0": {"fx": 1.0}},
+          "interaction_energies": {
+              "calculation-0007": {"INTERACTION": {"QM": -20, "ACT": -19.5},
+                                   "COULOMB": {"QM": -30, "ACT": -28}},
+              "calculation-0008": {"INTERACTION": {"QM": -5, "ACT": -6},
+                                   "COULOMB": {"QM": 1, "ACT": "x"}}}},
+    "1": {"name": "methanol", "dataset": "Test", "interaction_energies": None},
+    "2": {"name": "methanol#water", "dataset": "Test",
+          "interaction_energies": {"calculation-0100": {"INTERACTION": {"QM": -9, "ACT": -8}}}}}}
 
 
 class EvaluationTest(unittest.TestCase):
@@ -48,6 +90,121 @@ class EvaluationTest(unittest.TestCase):
         self.assertEqual(len(evaluation.PLOTS), len(set(evaluation.PLOTS)))
         self.assertTrue(any(o["dimer"] for o in described))
         self.assertFalse(all(o["dimer"] for o in described))
+
+    def test_what_each_observable_is_compared_on(self):
+        """!
+        @brief Each property names the statistics and the plots of train_ff
+        that are about it, such that the page shows only those of the
+        properties that were chosen.
+        """
+        described = {o["name"]: o for o in evaluation.describe()}
+        self.assertEqual(["DISPERSION"], described["disp"]["statistics"])
+        self.assertEqual(["DISPERSION"], described["disp"]["plots"])
+        self.assertEqual(["INTERACTION"], described["inter"]["plots"])
+        self.assertEqual(["COULOMB"], described["elec"]["statistics"])
+        self.assertEqual(["EXCHDISP"], described["vdw"]["plots"])
+        self.assertEqual(["Potential energy"], described["epot"]["statistics"])
+        self.assertEqual(["epotcorr"], described["epot"]["plots"])
+        self.assertEqual(["Polariz. components", "Isotropic Polariz.", "Anisotropic Polariz."],
+                         described["polar"]["statistics"])
+        for observable in described.values():
+            self.assertTrue(observable["statistics"], observable["name"])
+            self.assertTrue(all(plotted in evaluation.PLOTS for plotted in observable["plots"]))
+        # Every file that can be plotted belongs to a property
+        self.assertEqual(set(evaluation.PLOTS),
+                         {p for o in described.values() for p in o["plots"]})
+
+    def test_points_of_an_energy_term(self):
+        """!
+        @brief The points of a term of the interaction energy, each with
+        its compound, calculation and data set, such that a click on a
+        point can show the structure.
+        """
+        points = evaluation.points(RESULT, "INTERACTION")
+        self.assertEqual({"term": "INTERACTION", "truncated": False,
+                          "reference": [-20, -5, -9], "forcefield": [-19.5, -6, -8],
+                          "dataset": ["Train", "Train", "Test"], "compound": [0, 0, 2],
+                          "calculation": ["calculation-0007", "calculation-0008",
+                                          "calculation-0100"]}, points)
+        # What is no number is left out
+        self.assertEqual([-30], evaluation.points(RESULT, "COULOMB")["reference"])
+        self.assertEqual([], evaluation.points(RESULT, "DISPERSION")["reference"])
+        for wrong in ("epotcorr", "", None, "INTERACTION.xvg", 3):
+            with self.assertRaises(evaluation.EvaluationError, msg=repr(wrong)):
+                evaluation.points(RESULT, wrong)
+
+    def test_one_calculation(self):
+        """!
+        @brief The energies of one calculation of a compound, with the
+        difference of the force field and the reference for each term.
+        """
+        told = evaluation.calculation(RESULT, 0, "calculation-0007")
+        self.assertEqual({"name": "w2", "dataset": "Train", "calculation": "calculation-0007",
+                          "datafile": "0007",
+                          "energies": [{"term": "INTERACTION", "reference": -20, "forcefield": -19.5,
+                                        "difference": 0.5},
+                                       {"term": "COULOMB", "reference": -30, "forcefield": -28,
+                                        "difference": 2}]}, told)
+        partial = evaluation.calculation(RESULT, 0, "calculation-0008")["energies"]
+        self.assertEqual([{"term": "INTERACTION", "reference": -5, "forcefield": -6,
+                           "difference": -1},
+                          {"term": "COULOMB", "reference": 1, "forcefield": None,
+                           "difference": None}], partial)
+        for index, key in ((0, "calculation-9999"), (1, "calculation-0007"), (5, "calculation-0007"),
+                           (0, "../x"), (0, 7), ("0", "calculation-0007")):
+            with self.assertRaises(evaluation.EvaluationError, msg=repr((index, key))):
+                evaluation.calculation(RESULT, index, key)
+
+    def test_structure_of_a_calculation(self):
+        """!
+        @brief The atoms of a calculation in a molprop file, found by the
+        name or IUPAC name of the compound and the data file of the
+        calculation, in Angstrom, with the compound of the dimer that each
+        atom belongs to.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mp.xml"
+            path.write_text(MOLPROP)
+            atoms = evaluation.structure([path], "w2", "0007")
+            self.assertEqual(["O", "H", "H", "O", "H", "Cl"], [a["element"] for a in atoms])
+            self.assertEqual([0, 0, 0, 1, 1, 1], [a["fragment"] for a in atoms])
+            self.assertEqual(["ow", "hw", "hw", "ow", "hw", "cl"], [a["type"] for a in atoms])
+            self.assertAlmostEqual(3.0, atoms[3]["x"])
+            self.assertAlmostEqual(3.96, atoms[4]["x"])
+            self.assertAlmostEqual(0.93, atoms[2]["y"])
+            # By the IUPAC name as well
+            self.assertEqual(atoms, evaluation.structure([path], "water#water", "0007"))
+            self.assertEqual([2.0], [a["y"] for a in evaluation.structure([path], "w2", "0008")])
+            for name, datafile in (("w2", "0001"), ("nothing", "0007"), ("water", "0007")):
+                with self.assertRaises(evaluation.EvaluationError, msg=(name, datafile)):
+                    evaluation.structure([path], name, datafile)
+            broken = Path(tmp) / "broken.xml"
+            broken.write_text("<molecules><molecule molname=")
+            with self.assertRaises(evaluation.EvaluationError):
+                evaluation.structure([broken], "w2", "0007")
+
+    def test_selection_of_the_user(self):
+        """!
+        @brief A selection file of the user goes to train_ff as it is, after
+        a check: every line a name and Train, Test or Ignore, and one
+        compound of the molprop file for training at least.
+        """
+        molecules = [{"name": "w2", "iupac": "water#water"}, {"name": "methanol#water", "iupac": ""}]
+        text = "water#water|Train\n\nmethanol#water|Test\nethanol|Train\n"
+        self.assertEqual("water#water|Train\nmethanol#water|Test\nethanol|Train\n",
+                         evaluation.user_selection(molecules, text))
+        self.assertEqual("water#water|Train\n",
+                         evaluation.user_selection(molecules, "  water#water | Train  \r\n"))
+        for wrong, said in (("water#water|train\n", "Line 1"),
+                            ("water#water|Train\nmethanol#water\n", "Line 2"),
+                            ("water#water|Test\nmethanol#water|Ignore\n", "training"),
+                            ("ethanol|Train\n", "training"),
+                            ("", "training"), (None, "text"),
+                            ("x|Train\n" * 3 + "a" * evaluation.MAX_SELECTION_SIZE, "larger")):
+            with self.subTest(said=said):
+                with self.assertRaises(evaluation.EvaluationError) as caught:
+                    evaluation.user_selection(molecules, wrong)
+                self.assertIn(said, str(caught.exception))
 
     def test_selection(self):
         """!

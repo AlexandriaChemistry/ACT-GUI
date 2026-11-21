@@ -120,6 +120,9 @@ class Job:
     files: Dict[str, Path] = field(default_factory=dict)
     ## The input files that were made for the job, by option name
     inputs: Dict[str, Path] = field(default_factory=dict)
+    ## The properties that a comparison or a training compares, in the
+    ## order in which they were chosen
+    observables: List[str] = field(default_factory=list)
     ## Set to stop the job
     stop: threading.Event = field(default_factory=threading.Event)
 
@@ -139,6 +142,7 @@ class Job:
             "progress": self.progress[progress_from:],
             "progress_total": len(self.progress),
             "files": sorted(self.files),
+            "observables": list(self.observables),
         }
 
 
@@ -176,7 +180,7 @@ class JobManager:
                inputs: Optional[Mapping[str, Sequence[InputFile]]] = None,
                collect: Optional[Mapping[str, str]] = None,
                digest: Optional[Callable[[Any], Any]] = None,
-               processes: int = 1) -> Job:
+               processes: int = 1, observables: Sequence[str] = ()) -> Job:
         """!
         @brief Start a job, or put it in the queue.
         @param task     The name of the task, for the browser.
@@ -194,6 +198,8 @@ class JobManager:
         @param digest   A function that makes what is kept of the result of
         the command, for results that are too large to send to the browser.
         @param processes The number of processes that the command runs on.
+        @param observables The properties that a comparison compares, for
+        the browser.
         @return The job.
         @throws JobError if too many jobs are waiting or running.
         """
@@ -203,7 +209,8 @@ class JobManager:
                 raise JobError("There are %d calculations waiting or running, "
                                "wait until one is done" % active)
             job_id = uuid.uuid4().hex
-            job = Job(id=job_id, task=task, command=command, workdir=self._dir / job_id)
+            job = Job(id=job_id, task=task, command=command, workdir=self._dir / job_id,
+                      observables=list(observables))
             self._jobs[job_id] = job
         options, job.inputs = place_files(job.workdir, options, outputs, inputs)
         self._pool.submit(self._execute, job, options, progress, dict(collect or {}), digest,
@@ -269,7 +276,8 @@ class JobManager:
     def adopt(self, task: str, command: str, workdir: Path, result: Any,
               files: Mapping[str, Path], *, inputs: Optional[Mapping[str, Path]] = None,
               created: Optional[float] = None, ended: Optional[float] = None,
-              progress: Optional[Sequence[Any]] = None) -> Job:
+              progress: Optional[Sequence[Any]] = None,
+              observables: Sequence[str] = ()) -> Job:
         """!
         @brief Take in a job that ran elsewhere, such as on a cluster, and
         of which the results are on this machine. From here on it is a
@@ -283,6 +291,7 @@ class JobManager:
         @param created When the job was made, now if None.
         @param ended   When it ended, now if None.
         @param progress The reports of its progress, if it made them.
+        @param observables The properties that a comparison compared.
         @return The job.
         """
         now = time.time()
@@ -290,7 +299,8 @@ class JobManager:
                   status=FINISHED, created=now if created is None else created,
                   ended=now if ended is None else ended, result=result,
                   files=dict(files), inputs=dict(inputs or {}),
-                  progress=list(progress or [])[:self._max_progress])
+                  progress=list(progress or [])[:self._max_progress],
+                  observables=list(observables))
         with self._lock:
             self._jobs[job.id] = job
         return job

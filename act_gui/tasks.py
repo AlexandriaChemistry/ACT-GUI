@@ -116,6 +116,9 @@ class Prepared:
     inputs: Dict[str, Sequence[InputFile]] = field(default_factory=dict)
     ## The number of processes that the command runs on
     processes: int = 1
+    ## The properties that a comparison or a training compares, in the
+    ## order in which they were chosen
+    observables: Tuple[str, ...] = ()
 
 
 ## The options to choose how the charges are made, the same for all tasks
@@ -398,17 +401,27 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
             try:
                 test = training.test_fraction(request.get("training")) \
                     if TRAINING in task.needs else 0.0
-                inputs["sel"] = [InputFile("selection.dat", evaluation.selection(
-                    molecules, test, molprop.get("sets")))]
+                mine = molprop.get("selection")
+                if mine is not None and SELECTION in task.needs:
+                    # A selection file of the user, as it is
+                    if molprop.get("sets") is not None or test > 0:
+                        raise RequestError("The selection file says which compounds are used "
+                                           "and which are for testing; give no other choice")
+                    text = evaluation.user_selection(molecules, mine)
+                else:
+                    text = evaluation.selection(molecules, test, molprop.get("sets"))
+                inputs["sel"] = [InputFile("selection.dat", text)]
             except (evaluation.EvaluationError, training.TrainingError) as exc:
                 raise RequestError(str(exc)) from exc
 
+    observables: Tuple[str, ...] = ()
     if OBSERVABLES in task.needs:
         try:
             options.update(evaluation.options(request.get("observables"),
                                               request.get("weights")))
         except evaluation.EvaluationError as exc:
             raise RequestError(str(exc)) from exc
+        observables = tuple(request["observables"])
 
     if TRAINING in task.needs:
         try:
@@ -478,7 +491,7 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
         raise RequestError("%s runs on one process" % task.title)
     options.update(chosen)
     options.update(task.fixed)
-    return Prepared(options=options, inputs=inputs, processes=number)
+    return Prepared(options=options, inputs=inputs, processes=number, observables=observables)
 
 
 def find_task(name: Any) -> Task:

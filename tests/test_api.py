@@ -235,7 +235,8 @@ class ApiTest(unittest.TestCase):
                          [task["name"] for task in tasks if task["progress"]])
         self.assertEqual(self.settings.max_processes, session["max_processes"])
         self.assertEqual("MCMC", session["training"]["default_optimizer"])
-        self.assertIn({"name": "inter", "label": "Interaction energy", "dimer": True},
+        self.assertIn({"name": "inter", "label": "Interaction energy", "dimer": True,
+                       "statistics": ["INTERACTION"], "plots": ["INTERACTION"]},
                       session["observables"])
         self.assertEqual(["generator"], tasks[5]["needs"])
         self.assertEqual(["forcefield", "molprop", "chosen"], tasks[6]["needs"])
@@ -776,8 +777,9 @@ class ApiTest(unittest.TestCase):
                 whole = Path(workdir) / "train_ff.json"
                 whole.write_text(json.dumps({"train_ff": {"molecules": {"0": {
                     "name": "water#water", "dataset": "Train", "atoms": {"0": {"fx": 1}},
-                    "interaction_energies": {"c": {"INTERACTION": {"QM": -20, "ACT": -19}},
-                                             "d": {"INTERACTION": {"QM": -5, "ACT": -6}}}}}}}))
+                    "interaction_energies": {
+                        "calculation-0007": {"INTERACTION": {"QM": -20, "ACT": -19}},
+                        "calculation-0008": {"INTERACTION": {"QM": -5, "ACT": -6}}}}}}}))
                 result.files["json"] = [whole]
                 if kwargs.get("optimize") is not False \
                         and kwargs.get("optimizer") in ("GA", "HYBRID"):
@@ -899,6 +901,103 @@ class ApiTest(unittest.TestCase):
         ]
         for request in wrong:
             self.assertEqual(400, post(request).status_code, request)
+        self.assertEqual(ncalls, len(self.run.calls))
+
+    def test_points_structures_and_choices(self):
+        """!
+        @brief A comparison remembers the properties that were chosen, in
+        their order. The page gets the points of an energy term with their
+        compounds and calculations, and for one calculation its energies
+        and its structure from the molprop file that is open. A selection
+        file of the user goes to train_ff as it is.
+        """
+        from tests.test_evaluation import MOLPROP  # pylint: disable=import-outside-toplevel
+        client, _ = self.evaluation_app()
+
+        def done(answer):
+            self.assertEqual(200, answer.status_code, answer.text)
+            for _ in range(500):
+                job = client.get("/api/jobs/" + answer.json()["id"], headers=self.headers).json()
+                if job["status"] in ("finished", "failed", "cancelled"):
+                    return job
+                time.sleep(0.01)
+            self.fail("The job did not finish")
+            return None
+
+        def post(body):
+            return client.post("/api/jobs", headers=self.headers, json=body)
+        molprop = client.post("/api/uploads", params={"kind": "molprop", "name": "mols.xml"},
+                              content=MP, headers=self.headers).json()["id"]
+        described = done(post({"task": "mp_describe", "molprop": {"file": molprop}}))
+        body = {"task": "evaluate", "forcefield": {"default": True},
+                "molprop": {"file": molprop, "described": described["id"]},
+                "observables": ["disp", "inter"]}
+        job = done(post(body))
+        self.assertEqual("finished", job["status"], job["error"])
+        self.assertEqual(["disp", "inter"], job["observables"])
+        self.assertEqual([], done(post({"task": "minimize",
+                                        "molecule": {"smiles": "CC"}}))["observables"])
+
+        def get(path, **params):
+            return client.get("/api/jobs/%s/%s" % (job["id"], path), params=params,
+                              headers=self.headers)
+        points = get("points/INTERACTION")
+        self.assertEqual(200, points.status_code, points.text)
+        self.assertEqual({"term": "INTERACTION", "truncated": False, "reference": [-20, -5],
+                          "forcefield": [-19, -6], "dataset": ["Train", "Train"],
+                          "compound": [0, 0],
+                          "calculation": ["calculation-0007", "calculation-0008"]}, points.json())
+        for wrong in ("epotcorr", "json", "x"):
+            self.assertEqual(404, get("points/" + wrong).status_code, wrong)
+        self.assertEqual(404, client.get("/api/jobs/%s/points/INTERACTION" % described["id"],
+                                         headers=self.headers).status_code)
+        self.assertEqual(401, client.get("/api/jobs/%s/points/INTERACTION" % job["id"]).status_code)
+
+        # One calculation, with its structure from the molprop file that is open
+        structures = client.post("/api/uploads", params={"kind": "molprop", "name": "dimers.xml"},
+                                 content=MOLPROP.encode(), headers=self.headers)
+        self.assertEqual(200, structures.status_code, structures.text)
+        open_file = structures.json()["id"]
+        one = get("compounds/0/calculations/calculation-0007", molprop=open_file)
+        self.assertEqual(200, one.status_code, one.text)
+        told = one.json()
+        self.assertEqual("water#water", told["name"])
+        self.assertEqual([{"term": "INTERACTION", "reference": -20, "forcefield": -19,
+                           "difference": 1}], told["energies"])
+        self.assertEqual(["O", "H", "H", "O", "H", "Cl"], [a["element"] for a in told["atoms"]])
+        # Without the file, or with one that does not have it: the energies alone
+        alone = get("compounds/0/calculations/calculation-0008").json()
+        self.assertEqual([], alone["atoms"])
+        self.assertEqual("", alone["structure_error"])
+        other = get("compounds/0/calculations/calculation-0008", molprop=molprop).json()
+        self.assertEqual([], other["atoms"])
+        self.assertIn("has no calculation 0008", other["structure_error"])
+        for path, params in (("compounds/0/calculations/calculation-9", {}),
+                             ("compounds/3/calculations/calculation-0007", {}),
+                             ("compounds/0/calculations/calculation-0007", {"molprop": "nosuch"})):
+            self.assertEqual(404, get(path, **params).status_code, (path, params))
+        forcefield = client.post("/api/uploads", params={"kind": "forcefield", "name": "f.xml"},
+                                 content=FF, headers=self.headers).json()["id"]
+        self.assertEqual(404, get("compounds/0/calculations/calculation-0007",
+                                  molprop=forcefield).status_code)
+
+        # A selection file of the user, as it is
+        mine = dict(body, molprop={"file": molprop, "described": described["id"],
+                                   "selection": "water#water | Train\nmethanol#water|Test\n"})
+        job = done(post(mine))
+        self.assertEqual("finished", job["status"], job["error"])
+        self.assertEqual("water#water|Train\nmethanol#water|Test\n",
+                         self.run.calls[-1]["options"]["sel"].read_text())
+        ncalls = len(self.run.calls)
+        for wrong in (dict(mine["molprop"], selection="water#water|Maybe\n"),
+                      dict(mine["molprop"], selection="methanol#water|Test\n"),
+                      dict(mine["molprop"], selection=3),
+                      dict(mine["molprop"], sets={"test": ["methanol#water"]})):
+            answer = post(dict(mine, molprop=wrong))
+            self.assertEqual(400, answer.status_code, wrong)
+        answer = post(dict(mine, task="train", training={"fit": ["sigma"], "test": 0.2}))
+        self.assertEqual(400, answer.status_code)
+        self.assertIn("selection file", answer.json()["detail"])
         self.assertEqual(ncalls, len(self.run.calls))
 
     def test_selection_file(self):

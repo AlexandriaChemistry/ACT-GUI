@@ -117,7 +117,7 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
                              arguments, app.state.cluster, outputs=dict(task.outputs),
                              inputs=prepared.inputs, collect=dict(task.collect),
                              tasks=tasks, minutes=minutes,
-                             gpu=chosen.get("gpu", False))
+                             gpu=chosen.get("gpu", False), observables=prepared.observables)
         except (ValueError, OSError) as exc:
             # Also an option that the command does not take
             raise fail(400, str(exc)) from exc
@@ -255,7 +255,8 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
             data = task.digest(data)
         adopted = manager.adopt(task.name, task.command, queue.directory(name), data, files,
                                 inputs=inputs, created=job.created, ended=job.ended,
-                                progress=queue.progress_reports(name, MAX_REPORTS))
+                                progress=queue.progress_reports(name, MAX_REPORTS),
+                                observables=job.observables)
         queue.adopted(name, adopted.id)
         return {"job": adopted.id, "task": task.name}
 
