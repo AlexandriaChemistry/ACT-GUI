@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import dataclasses
 import hmac
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, Optional, Tuple
@@ -502,6 +503,32 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         return FileResponse(path, media_type=media,
                             filename=path.name if named
                             else "%s-%s%s" % (job.task, option, path.suffix))
+
+    @app.get("/api/jobs/{job_id}/compounds/{index}")
+    def job_compound(job_id: str, index: int) -> Dict[str, Any]:
+        """!
+        @brief The energies of one compound of a comparison or a training,
+        from the file in which the program wrote its whole result.
+        @param job_id The identifier of the calculation.
+        @param index  The place of the compound in the list of the result.
+        @return See evaluation.compound().
+        """
+        job = find_job(job_id)
+        task = TASKS.get(job.task)
+        path: Optional[Path] = job.files.get("json")
+        if task is None or task.digest not in (evaluation.digest, training.digest) \
+                or job.status != FINISHED or path is None or not path.is_file():
+            raise fail(404, "This calculation has no energies of compounds")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            # As act does: the file has one key, the name of the command
+            if isinstance(data, dict) and len(data) == 1:
+                data = next(iter(data.values()))
+            return evaluation.compound(data, index)
+        except evaluation.EvaluationError as exc:
+            raise fail(404, str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise fail(500, "The result of the calculation cannot be read") from exc
 
     @app.get("/api/jobs/{job_id}/plots/{option}")
     def job_plot(job_id: str, option: str, series: str = "",

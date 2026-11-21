@@ -81,17 +81,30 @@ PLOTS: Tuple[str, ...] = tuple(option for o in OBSERVABLES.values() for option i
 MAX_COMPOUNDS = 200000
 MAX_NAME_LENGTH = 300
 
+## The most data points of a term of a compound that are sent to the browser
+MAX_POINTS = 20000
+
+## The largest weight of a property in a training
+MAX_WEIGHT = 1e6
+
+## The data sets that the user can put compounds in by hand: for testing,
+## or not used at all. The other compounds are for training.
+SETS = ("test", "ignore")
+
 ## The seed with which the compounds for testing are drawn, such that the
 ## same file and the same part give the same compounds
 SPLIT_SEED = 20261120
 
 
-def options(chosen: Any) -> Dict[str, Any]:
+def options(chosen: Any, weights: Any = None) -> Dict[str, Any]:
     """!
     @brief The options of train_ff for the properties that were chosen.
-    @param chosen The names of the properties.
+    @param chosen  The names of the properties.
+    @param weights How much a property counts in a training, by its name,
+    for those that do not count once: numbers above zero. None for none.
     @return The weights and the options for the files.
-    @throws EvaluationError if there is none, or one that is not in the list.
+    @throws EvaluationError if there is no property, one that is not in the
+    list, or a weight that is no such number or for another property.
     """
     if not isinstance(chosen, (list, tuple)) or not chosen:
         raise EvaluationError("Choose at least one property to compare")
@@ -105,21 +118,42 @@ def options(chosen: Any) -> Dict[str, Any]:
         made[observable.weight] = 1
         for option in observable.files:
             made[option] = True
+    if weights is None:
+        return made
+    if not isinstance(weights, Mapping):
+        raise EvaluationError("The weights of the properties must be an object")
+    for name, weight in weights.items():
+        if name not in chosen:
+            raise EvaluationError("A weight is given for '%s', which is not a property that "
+                                  "was chosen" % (name,))
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)) \
+                or not 0 < weight <= MAX_WEIGHT:
+            raise EvaluationError("The weight of a property is a number above 0, at most %g"
+                                  % MAX_WEIGHT)
+        made[OBSERVABLES[name].weight] = weight
     return made
 
 
-def selection(molecules: Any, test: float = 0.0) -> str:
+def selection(molecules: Any, test: float = 0.0, sets: Any = None) -> str:
     """!
-    @brief The selection of compounds for train_ff: all of them.
+    @brief The selection of compounds for train_ff: all of them, unless
+    the user chose otherwise.
     @param molecules The compounds of a molprop file, as edit_mp describes
     them: objects with "iupac" and "name".
     @param test      The part of the compounds that is kept for testing,
     drawn at random with a fixed seed; the others are for training. With a
     part above zero and two compounds or more, one compound at least is
     kept for testing and one for training.
-    @return The text of the selection file, one line for each compound.
-    @throws EvaluationError if there are no compounds, or if a name cannot
-    be written in the file.
+    @param sets      The compounds that the user chose by hand: an object
+    with "test", the names of those for testing, and "ignore", the names
+    of those that are not used. The names are those of the selection, the
+    IUPAC name of a compound or else its name. None for none.
+    @return The text of the selection file, one line for each compound
+    that is used.
+    @throws EvaluationError if there are no compounds, if a name cannot be
+    written in the file, if a name that was chosen is not in the file or
+    is in both sets, if compounds for testing are given by hand and as a
+    part, or if no compound is left for training.
     """
     if not isinstance(molecules, Sequence) or isinstance(molecules, (str, bytes)) \
             or not molecules:
@@ -142,12 +176,34 @@ def selection(molecules: Any, test: float = 0.0) -> str:
         if name not in seen:
             seen.add(name)
             names.append(name)
-    testing = set()
-    if test > 0 and len(names) > 1:
-        number = min(len(names) - 1, max(1, round(test * len(names))))
-        testing = set(random.Random(SPLIT_SEED).sample(range(len(names)), number))
-    return "".join("%s|%s\n" % (name, "Test" if index in testing else "Train")
-                   for index, name in enumerate(names))
+    by_hand: Dict[str, set] = {key: set() for key in SETS}
+    if sets is not None:
+        if not isinstance(sets, Mapping) or not set(sets) <= set(SETS):
+            raise EvaluationError("The compounds that are chosen are given as those for "
+                                  "testing (test) and those that are not used (ignore)")
+        for key, chosen in sets.items():
+            if not isinstance(chosen, (list, tuple)) or len(chosen) > MAX_COMPOUNDS:
+                raise EvaluationError("The compounds that are chosen must be a list of names")
+            for name in chosen:
+                if not isinstance(name, str) or name not in seen:
+                    raise EvaluationError("The molprop file has no compound %r"
+                                          % (str(name)[:60],))
+                if any(name in other for other in by_hand.values()):
+                    raise EvaluationError("The compound %s is chosen twice" % name)
+                by_hand[key].add(name)
+    if by_hand["test"] and test > 0:
+        raise EvaluationError("Give the compounds for testing by hand or as a part of all, "
+                              "not both")
+    used = [name for name in names if name not in by_hand["ignore"]]
+    testing = set(by_hand["test"])
+    if test > 0 and len(used) > 1:
+        number = min(len(used) - 1, max(1, round(test * len(used))))
+        testing = {used[index] for index in
+                   random.Random(SPLIT_SEED).sample(range(len(used)), number)}
+    if len(testing) >= len(used):
+        raise EvaluationError("No compound is left to train on")
+    return "".join("%s|%s\n" % (name, "Test" if name in testing else "Train")
+                   for name in used)
 
 
 def digest(data: Any) -> Any:
@@ -162,11 +218,7 @@ def digest(data: Any) -> Any:
     if not isinstance(data, Mapping):
         return data
     compounds = []
-    molecules = data.get("molecules") or {}
-    listed = molecules.values() if isinstance(molecules, Mapping) else molecules
-    for molecule in listed:
-        if not isinstance(molecule, Mapping):
-            continue
+    for molecule in _molecules(data):
         points = molecule.get("interaction_energies")
         compounds.append({"name": molecule.get("name", ""),
                           "dataset": molecule.get("dataset", ""),
@@ -181,6 +233,60 @@ def digest(data: Any) -> Any:
             outliers[name] = [dict(entry, calculation=key) for key, entry in entries.items()
                               if isinstance(entry, Mapping)][:20]
     return {"compounds": compounds, "statistics": statistics, "outliers": outliers}
+
+
+def _molecules(data: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+    """!
+    @brief The compounds in the result of train_ff.
+    @param data The result of train_ff.
+    @return The compounds, in the order of the result.
+    """
+    molecules = data.get("molecules") or {}
+    listed = molecules.values() if isinstance(molecules, Mapping) else molecules
+    return [molecule for molecule in listed if isinstance(molecule, Mapping)]
+
+
+def compound(data: Any, index: Any) -> Dict[str, Any]:
+    """!
+    @brief The energies of one compound in the result of train_ff: for
+    each term, such as the interaction energy or the electrostatics, the
+    reference values and the values of the force field for the structures
+    of the compound.
+    @param data  The result of train_ff.
+    @param index The place of the compound in the list that digest() made.
+    @return The name, the data set and "energies": by the name of the term
+    an object with "reference" and "forcefield", two lists of the same
+    length. "truncated" tells whether there were more than MAX_POINTS
+    structures, of which the first are given.
+    @throws EvaluationError if there is no such compound.
+    """
+    molecules = _molecules(data) if isinstance(data, Mapping) else []
+    if isinstance(index, bool) or not isinstance(index, int) \
+            or not 0 <= index < len(molecules):
+        raise EvaluationError("There is no such compound")
+    molecule = molecules[index]
+    energies: Dict[str, Dict[str, List[float]]] = {}
+    points = molecule.get("interaction_energies")
+    truncated = False
+    if isinstance(points, Mapping):
+        for number, terms in enumerate(points.values()):
+            if number >= MAX_POINTS:
+                truncated = True
+                break
+            if not isinstance(terms, Mapping):
+                continue
+            for term, pair in terms.items():
+                if not isinstance(pair, Mapping):
+                    continue
+                reference, forcefield = pair.get("QM"), pair.get("ACT")
+                if any(isinstance(value, bool) or not isinstance(value, (int, float))
+                       for value in (reference, forcefield)):
+                    continue
+                kept = energies.setdefault(str(term), {"reference": [], "forcefield": []})
+                kept["reference"].append(reference)
+                kept["forcefield"].append(forcefield)
+    return {"name": molecule.get("name", ""), "dataset": molecule.get("dataset", ""),
+            "energies": energies, "truncated": truncated}
 
 
 def describe() -> List[Dict[str, Any]]:

@@ -149,6 +149,7 @@
       <button role="tab" data-tab="vsite" aria-selected="false">Virtual sites</button>
       <button role="tab" data-tab="geom" aria-selected="false">Geometry</button>
       <button role="tab" data-tab="edit" aria-selected="false">Edit and validate</button>
+      <button role="tab" data-tab="diff" aria-selected="false">Compare</button>
       <span class="ink"></span>
     </nav>
 
@@ -288,6 +289,25 @@
             <div class="row"><button class="btn" id="v-repair" type="button" hidden>Write corrected force field</button></div></div></div>
       </div>
     </div>
+
+    <div class="panel" id="fftab-diff" hidden>
+      <div class="card">
+        <div class="bar">
+          <div class="field"><label for="fd-other">Compare the force field of this workspace with</label>
+            <select id="fd-other"><option value="default">Default</option><option value="given" hidden disabled></option><option value="upload">Upload force field…</option></select></div>
+          <input class="visually-hidden" type="file" id="fd-file" accept=".xml" tabindex="-1" aria-hidden="true">
+          <button class="btn primary" id="run-diff" type="button">Compare</button>
+          <span class="pill" id="fd-pill" hidden></span>
+        </div>
+      </div>
+      <div class="card" id="fd-result" hidden>
+        <div class="head"><h2>What is different</h2><span class="spacer"></span>
+          <label class="check"><input type="checkbox" id="fd-all"> Also what only one of them has</label></div>
+        <div class="body"><div class="chips" id="fd-chips"></div></div>
+        <div class="scroll flat maxh560"><table class="data" id="fd-table"></table></div>
+        <div class="body"><p class="muted fine" id="fd-note"></p></div>
+      </div>
+    </div>
   </section>
 
   <!-- ================= Molprop data ================= -->
@@ -304,6 +324,11 @@
     <div class="cols side-right" id="mpw-content" hidden>
       <div class="card"><div class="head"><h2>Compounds</h2><span class="muted" id="mpw-count"></span><span class="spacer"></span>
           <div class="field"><input type="text" id="mpw-search" placeholder="Find name or formula" aria-label="Find a compound" spellcheck="false" autocomplete="off"></div></div>
+        <div class="setbar" id="mpw-setbar"><span class="muted fine" id="mpw-sets"></span><span class="spacer"></span>
+          <span class="muted fine">Use the compounds in the table for</span>
+          <button class="btn small" type="button" data-set="train">Training</button>
+          <button class="btn small" type="button" data-set="test">Testing</button>
+          <button class="btn small" type="button" data-set="ignore">Nothing</button></div>
         <div class="scroll flat maxh560"><table class="data" id="mpw-table"></table></div>
         <p class="empty pad" id="mpw-empty" hidden>No compound with this text.</p></div>
       <div class="stack">
@@ -334,7 +359,8 @@
           <div class="row top">
             <div class="field grow"><label for="tr-fit">Kinds of parameters to train</label>
               <input class="mono" type="text" id="tr-fit" placeholder="for instance: sigma epsilon" spellcheck="false" autocomplete="off" autocapitalize="off">
-              <span class="muted fine">Names as in the force field, with spaces between them. Only parameters that are not fixed are changed, within their bounds; the tab Force field lists them.</span></div>
+              <div class="chips" id="tr-kinds" hidden></div>
+              <span class="muted fine" id="tr-kindnote">Names as in the force field, with spaces between them. Only parameters that are not fixed are changed, within their bounds.</span></div>
             <div class="field"><label for="tr-optimizer">Optimizer</label>
               <select id="tr-optimizer"></select></div>
           </div>
@@ -346,7 +372,8 @@
             <div class="field" id="tr-procfield"><label for="tr-procs">Processes</label>
               <input type="number" id="tr-procs" min="1" step="1" value="1"></div>
             <div class="field"><label for="tr-test">Compounds for testing (%)</label>
-              <input type="number" id="tr-test" min="0" max="50" step="5" value="0"></div>
+              <input type="number" id="tr-test" min="0" max="50" step="5" value="0">
+              <span class="muted fine" id="tr-testnote" hidden>Chosen in the table of compounds.</span></div>
             <div class="field"><label for="tr-seed">Random seed</label>
               <input type="number" id="tr-seed" min="1" step="1" placeholder="any"></div>
             <div class="field"><span class="lab">Start</span>
@@ -398,6 +425,7 @@
     </div>
     <div class="card" id="tr-result" hidden>
       <div class="head"><h2>Trained parameters</h2><span class="muted" id="tr-count"></span><span class="spacer"></span>
+        <button class="btn small" id="tr-diff" type="button" hidden>What changed</button>
         <button class="btn small" id="tr-use" type="button">Open in the tab Force field</button>
         <button class="btn small" id="tr-save" type="button">Save force field</button></div>
       <div class="scroll flat maxh380"><table class="data" id="tr-params"></table></div>
@@ -415,6 +443,13 @@
           <button class="btn small" id="ev-log" type="button">Save log file</button></div>
         <div class="xscroll"><table class="data" id="ev-stats"></table></div>
         <div class="body"><p class="muted fine">RMSD is the root mean square deviation, MSE the mean signed error (force field minus reference), MAE the mean absolute error; the slope and R are those of a straight line through the points.</p></div></div>
+    </div>
+    <div class="card" id="ev-comp" hidden>
+      <div class="head"><h2>Energies of a compound</h2><span class="spacer"></span>
+        <div class="field"><select id="ev-compsel" aria-label="Compound"></select></div>
+        <div class="field"><select id="ev-compterm" aria-label="Energy term"></select></div></div>
+      <div class="body"><div class="plot" id="evhist"></div>
+        <p class="muted fine" id="ev-compnote"></p></div>
     </div>
   </section>
 
@@ -464,10 +499,12 @@
               <input class="mono wide" type="text" id="cl-gres" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
             <div class="field"><label for="cl-launcher">Parallel jobs start with</label>
               <select id="cl-launcher"><option value="srun">srun</option><option value="mpirun">mpirun</option></select></div>
+            <div class="field"><label for="cl-program">Program of ACT there</label>
+              <input class="mono" type="text" id="cl-program" maxlength="64" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
             <div class="field"><label for="cl-poll">Seconds between status checks</label>
               <input type="number" id="cl-poll" min="60" max="3600" step="30"></div>
           </div>
-          <p class="muted fine">Several partitions are given with commas in between. What is filled in at first are the values for the cluster csb.</p></div>
+          <p class="muted fine">Several partitions are given with commas in between. The program is <span class="mono">alexandria</span>, or <span class="mono">alexandria_d</span> for a build in double precision. What is filled in at first are the values for the cluster csb.</p></div>
         <div class="row"><button class="btn primary" id="cl-save" type="button">Save</button>
           <button class="btn" id="cl-check" type="button" disabled>Test the login</button>
           <span class="spacer"></span>

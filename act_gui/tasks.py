@@ -314,9 +314,10 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
     @param request  The request. What it must have depends on the task:
     "molecule" with either "smiles" or "file", "forcefield" with "file" or
     "job", "molprop" with "file" and, for a selection of its compounds,
-    "described" with the job that described the file, "generator" with the
+    "described" with the job that described the file and "sets" with the
+    compounds that are for testing or not used, "generator" with the
     choices for a new force field, "observables" with the properties to
-    compare, "training" with the kinds of parameters to train ("fit") and
+    compare and "weights" with how much they count, "training" with the kinds of parameters to train ("fit") and
     the part of the compounds for testing ("test"), "processes" for a task
     that runs on several, and "options".
     @param settings The settings, for the limits and the default force field.
@@ -385,14 +386,15 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
             try:
                 test = training.test_fraction(request.get("training")) \
                     if TRAINING in task.needs else 0.0
-                inputs["sel"] = [InputFile("selection.dat",
-                                           evaluation.selection(molecules, test))]
+                inputs["sel"] = [InputFile("selection.dat", evaluation.selection(
+                    molecules, test, molprop.get("sets")))]
             except (evaluation.EvaluationError, training.TrainingError) as exc:
                 raise RequestError(str(exc)) from exc
 
     if OBSERVABLES in task.needs:
         try:
-            options.update(evaluation.options(request.get("observables")))
+            options.update(evaluation.options(request.get("observables"),
+                                              request.get("weights")))
         except evaluation.EvaluationError as exc:
             raise RequestError(str(exc)) from exc
 

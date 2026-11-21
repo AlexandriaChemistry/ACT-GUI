@@ -15,6 +15,7 @@ selenium is installed and ACT_ALEXANDRIA points to the alexandria program;
 they are skipped otherwise. With ACT_GUI_SHOTS set to a directory, pictures
 of the page are saved there at the main steps.
 """
+import json
 import os
 import socket
 import tempfile
@@ -644,6 +645,47 @@ class PageTest(unittest.TestCase):
         self.assertEqual("Fixed", self.parameter_rows()[index][7])
         self.assertTrue(self.browser.find_element(By.ID, "ff-save").is_displayed())
         self.shot("14-ff-default-changed")
+        # Compared with the default: the one parameter that is fixed now
+        self.click('#fftabs button[data-tab="diff"]')
+        self.assertFalse(self.browser.find_element(By.ID, "fd-result").is_displayed())
+        self.click("#run-diff")
+        self.wait(lambda b: b.find_element(By.ID, "fd-pill").text == "Done")
+        self.assertEqual("", self.errors())
+
+        def chips():
+            return self.browser.execute_script(
+                "return [...document.querySelectorAll('#fd-chips .chip')].map(c => c.textContent)")
+
+        def differences():
+            return self.browser.execute_script(
+                "return [...document.querySelectorAll('#fd-table tbody tr')]"
+                ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertEqual(["another value 0", "only other bounds or training 1"], chips()[:2])
+        self.assertEqual("0", chips()[2].split()[-1])
+        self.assertEqual("0", chips()[3].split()[-1])
+        self.assertGreater(int(chips()[4].split()[-1]), 100)
+        found = differences()
+        self.assertEqual(1, len(found))
+        self.assertEqual(("VANDERWAALS", target[0] or found[0][1], target[1]), tuple(found[0][:3]))
+        self.assertEqual(found[0][3], found[0][4])
+        self.assertEqual("", found[0][5])
+        self.assertEqual("training: Bounded and Fixed", found[0][7])
+        self.shot("14b-ff-compared")
+        if os.path.isdir(TESTDATA):
+            # With another force field, of which the file is chosen
+            self.browser.find_element(By.ID, "fd-file").send_keys(
+                str(Path(TESTDATA) / "forcefields" / "ACS-g1.xml"))
+            Select(self.browser.find_element(By.ID, "fd-other")).select_by_value("upload")
+            self.click("#run-diff")
+            self.wait(lambda b: b.find_element(By.ID, "fd-pill").text == "Done")
+            self.assertEqual("", self.errors())
+            self.assertIn("only in ACS-g1.xml", chips()[2])
+            listed = len(differences())
+            only = int(chips()[2].split()[-1]) + int(chips()[3].split()[-1])
+            self.assertGreater(only, 0)
+            self.click("#fd-all")
+            self.assertEqual(min(500, listed + only), len(differences()))
+            self.click("#fd-all")
         # In the molecule workspace
         self.click('#nav button[data-view="molecule"]')
         choice = self.browser.find_element(By.CSS_SELECTOR, '#ffsel option[value="workspace"]')
@@ -781,7 +823,7 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
         # A file with dimers offers the properties of dimers, the first is ticked
         offered = self.browser.execute_script(
-            "return [...document.querySelectorAll('#ev-observables input')]"
+            "return [...document.querySelectorAll('#ev-observables input[type=checkbox]')]"
             ".map(b => b.dataset.name + (b.checked ? '*' : ''))")
         self.assertEqual("inter*", offered[0])
         self.assertIn("elec", offered)
@@ -815,6 +857,32 @@ class PageTest(unittest.TestCase):
             By.CSS_SELECTOR, "#evplot svg").get_attribute("aria-label"))
         self.browser.execute_script("document.getElementById('ev-result').scrollIntoView()")
         self.shot("21-molprop-comparison")
+        # The energies of one compound: how often which value, for the
+        # reference and for the force field
+        self.assertTrue(self.browser.find_element(By.ID, "ev-comp").is_displayed())
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#evhist svg path")) >= 2)
+        compounds = Select(self.browser.find_element(By.ID, "ev-compsel"))
+        listed = [option.text for option in compounds.options]
+        self.assertEqual(3, len(listed))
+        self.assertEqual({"37", "52", "154"}, {text.split()[-2] for text in listed})
+        first = listed[0].split()[-2]
+        self.assertTrue(self.text("#ev-compnote").startswith(first + " structures"))
+        self.assertIn("RMSD", self.text("#ev-compnote"))
+        terms = Select(self.browser.find_element(By.ID, "ev-compterm"))
+        self.assertEqual("INTERACTION", terms.first_selected_option.get_attribute("value"))
+        self.assertIn("COULOMB", [option.get_attribute("value") for option in terms.options])
+        terms.select_by_value("COULOMB")
+        self.wait(lambda b: "Electrostatics (kJ/mol)" in b.find_element(By.ID, "evhist").text)
+        compounds.select_by_index(1)
+        second = listed[1].split()[-2]
+        self.wait(lambda b: b.find_element(By.ID, "ev-compnote").text.startswith(
+            second + " structures"))
+        # The term stays the one that was chosen
+        self.assertEqual("COULOMB", Select(self.browser.find_element(
+            By.ID, "ev-compterm")).first_selected_option.get_attribute("value"))
+        self.assertEqual("", self.errors())
+        self.browser.execute_script("document.getElementById('ev-comp').scrollIntoView()")
+        self.shot("21b-compound-energies")
         # Another property
         Select(self.browser.find_element(By.ID, "ev-plotsel")).select_by_value("COULOMB")
         self.wait(lambda b: "Electrostatics" in b.find_element(
@@ -847,6 +915,7 @@ class PageTest(unittest.TestCase):
         self.assertIn("None of the compounds", self.errors())
         # The result of the comparison before this one is gone
         self.assertFalse(self.browser.find_element(By.ID, "ev-result").is_displayed())
+        self.assertFalse(self.browser.find_element(By.ID, "ev-comp").is_displayed())
         self.shot("22-molprop-default")
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
@@ -888,7 +957,33 @@ class PageTest(unittest.TestCase):
         self.click("#run-ev")
         self.wait(lambda b: "kinds of parameters" in b.find_element(By.ID, "toast").text)
         self.assertFalse(self.browser.find_element(By.ID, "tr-run").is_displayed())
-        self.browser.find_element(By.ID, "tr-fit").send_keys("De b c bondlength angle kt")
+        # The force field tells which kinds of parameters can be changed
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#tr-kinds button")) > 0)
+
+        def kinds(pressed=False):
+            return self.browser.execute_script(
+                "return [...document.querySelectorAll('#tr-kinds button')]"
+                ".filter(b => !arguments[0] || b.getAttribute('aria-pressed') === 'true')"
+                ".map(b => b.dataset.kind)", pressed)
+        wanted = ["De", "b", "c", "bondlength", "angle", "kt"]
+        self.assertLessEqual(set(wanted), set(kinds()))
+        self.assertEqual([], kinds(True))
+        self.assertIn("Click the kinds", self.text("#tr-kindnote"))
+        counts = self.text('#tr-kinds button[data-kind="De"]').split()
+        self.assertEqual("De", counts[0])
+        self.assertGreater(int(counts[1]), 0)
+        # By a click or typed, and a click takes a kind away again
+        fit = self.browser.find_element(By.ID, "tr-fit")
+        for kind in ("De", "b"):
+            self.click('#tr-kinds button[data-kind="%s"]' % kind)
+        self.assertEqual("De b", fit.get_attribute("value"))
+        fit.send_keys(" c bondlength angle kt charge")
+        self.assertEqual(set(wanted), set(kinds(True)))
+        self.click('#tr-kinds button[data-kind="De"]')
+        self.assertEqual("b c bondlength angle kt charge", fit.get_attribute("value"))
+        fit.clear()
+        fit.send_keys("De b c bondlength angle kt")
+        self.assertEqual(wanted, sorted(kinds(True), key=wanted.index))
         for field, value in (("tr-iter", "5"), ("tr-seed", "1993")):
             element = self.browser.find_element(By.ID, field)
             element.clear()
@@ -923,7 +1018,27 @@ class PageTest(unittest.TestCase):
         self.assertIn("Potential energy", self.text("#ev-stats"))
         self.browser.execute_script("document.getElementById('tr-run').scrollIntoView()")
         self.shot("24-train-done")
+        # What the training changed: the trained force field against the one it started from
+        self.browser.execute_script("document.getElementById('tr-result').scrollIntoView()")
+        self.click("#tr-diff")
+        self.wait(lambda b: b.find_element(By.ID, "fd-result").is_displayed() or self.errors())
+        self.assertEqual("", self.errors())
+        self.assertTrue(self.browser.find_element(By.ID, "view-force-field").is_displayed())
+        self.assertIn("Trained force field", self.text("#ffchips"))
+        heads = self.browser.execute_script(
+            "return [...document.querySelectorAll('#fd-table thead th')].map(c => c.textContent)")
+        self.assertEqual(["halgren-PG.xml", "Trained force field", "Difference"], heads[3:6])
+        changed = self.browser.execute_script(
+            "return [...document.querySelectorAll('#fd-table tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertGreater(len(changed), 0)
+        self.assertLessEqual({row[2] for row in changed},
+                             {"De", "b", "c", "bondlength", "angle", "kt"})
+        self.assertTrue(all(row[5] for row in changed))
+        self.shot("24b-train-changed")
         # The trained force field in the force field workspace
+        self.click('#nav button[data-view="molprop"]')
+        self.browser.execute_script("document.getElementById('tr-result').scrollIntoView()")
         self.click("#tr-use")
         self.wait(lambda b: b.find_element(By.ID, "view-force-field").is_displayed()
                   or self.errors())
@@ -935,6 +1050,108 @@ class PageTest(unittest.TestCase):
         self.click('#ev-what button[data-v="compare"]')
         self.assertFalse(self.browser.find_element(By.ID, "tr-opts").is_displayed())
         self.assertEqual("Compare", self.text("#run-ev"))
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_9c_compounds_and_weights(self):
+        """!
+        @brief The user says in the table what each compound is used for:
+        training, testing or nothing, one by one or for all that the table
+        shows. A comparison then has both data sets, and a training gets
+        them with the weights of the properties.
+        """
+        data = Path(TESTDATA)
+        self.open_page()
+        self.click('#nav button[data-view="molprop"]')
+        self.browser.find_element(By.ID, "mpw-file").send_keys(str(data / "molprop" / "mpdimer.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        self.assertEqual("3 for training", self.text("#mpw-sets"))
+
+        def uses():
+            return self.browser.execute_script(
+                "return [...document.querySelectorAll('#mpw-table button[data-use]')]"
+                ".map(b => b.textContent)")
+
+        def use(row, times=1):
+            for _ in range(times):
+                self.browser.execute_script(
+                    "document.querySelectorAll('#mpw-table button[data-use]')[arguments[0]].click()",
+                    row)
+        self.assertEqual(["Training"] * 3, uses())
+        use(0)
+        use(1, 2)
+        self.assertEqual(["Testing", "Not used", "Training"], uses())
+        self.assertEqual("1 for training, 1 for testing, 1 not used", self.text("#mpw-sets"))
+        # A click on the button does not open the details of the compound
+        self.assertFalse(self.browser.find_element(By.ID, "mpw-detail").is_displayed())
+
+        self.browser.find_element(By.ID, "ev-fffile").send_keys(
+            str(data / "forcefields" / "ACS-pol.xml"))
+        Select(self.browser.find_element(By.ID, "ev-ff")).select_by_value("upload")
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text == "Done")
+        self.assertEqual("", self.errors())
+        self.assertEqual("2 compounds", self.text("#ev-ncomp"))
+        rows = self.browser.execute_script(
+            "return [...document.querySelectorAll('#ev-stats tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertEqual({"Train", "Test"}, {row[1] for row in rows})
+        self.shot("25-compounds-chosen")
+
+        # In a training the compounds for testing are those of the table,
+        # and each property that is chosen has a weight
+        self.browser.execute_script("document.getElementById('ev-card').scrollIntoView()")
+        self.click('#ev-what button[data-v="train"]')
+        percent = self.browser.find_element(By.ID, "tr-test")
+        self.assertFalse(percent.is_enabled())
+        self.assertTrue(self.browser.find_element(By.ID, "tr-testnote").is_displayed())
+        weight = self.browser.find_element(By.CSS_SELECTOR, '#ev-observables input[data-weight="inter"]')
+        other = self.browser.find_element(By.CSS_SELECTOR, '#ev-observables input[data-weight="elec"]')
+        self.assertTrue(weight.is_displayed())
+        self.assertEqual("1", weight.get_attribute("value"))
+        self.assertFalse(other.is_displayed())
+        self.click('#ev-observables input[data-name="elec"]')
+        self.assertTrue(other.is_displayed())
+        weight.clear()
+        weight.send_keys("2.5")
+        # What the page asks the server for
+        self.browser.execute_script(
+            "window.asked = []; const send = window.fetch;"
+            "window.fetch = (url, init) => { if (init && init.body && typeof init.body === 'string')"
+            " window.asked.push(init.body); return send(url, init); };")
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#tr-kinds button")) > 0)
+        self.browser.execute_script("document.querySelector('#tr-kinds button').click()")
+        iterations = self.browser.find_element(By.ID, "tr-iter")
+        iterations.clear()
+        iterations.send_keys("2")
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text in ("Done", "Failed"))
+        asked = [json.loads(body) for body in self.browser.execute_script("return window.asked")]
+        request = [body for body in asked if body.get("task") == "train"][0]
+        self.assertEqual({"inter": 2.5}, request["weights"])
+        self.assertEqual(["inter", "elec"], request["observables"])
+        self.assertEqual(0, request["training"]["test"])
+        sets = request["molprop"]["sets"]
+        self.assertEqual((1, 1), (len(sets["test"]), len(sets["ignore"])))
+        self.assertEqual("Done", self.text("#ev-pill"), self.errors())
+
+        # All that the table shows at once: those with a name that is found
+        self.browser.execute_script("document.getElementById('mpw-content').scrollIntoView()")
+        self.click('#mpw-setbar button[data-set="ignore"]')
+        self.assertEqual(["Not used"] * 3, uses())
+        self.assertEqual("0 for training, 3 not used", self.text("#mpw-sets"))
+        self.browser.execute_script("document.getElementById('run-ev').scrollIntoView()")
+        self.click("#run-ev")
+        self.wait(lambda b: "No compound is left" in b.find_element(By.ID, "toast").text)
+        self.click('#mpw-setbar button[data-set="train"]')
+        self.assertEqual("3 for training", self.text("#mpw-sets"))
+        self.assertTrue(percent.is_enabled())
+        self.assertFalse(self.browser.find_element(By.ID, "tr-testnote").is_displayed())
+        # Another file starts with all compounds for training
+        use(0)
+        self.browser.find_element(By.ID, "mpw-file").send_keys(
+            str(data / "molprop" / "molprop.xml"))
+        self.wait(lambda b: "molprop.xml" in b.find_element(By.ID, "mpw-chips").text)
+        self.assertNotIn("testing", self.text("#mpw-sets"))
 
     # --- the cluster for long jobs ---
 
@@ -962,10 +1179,10 @@ class PageTest(unittest.TestCase):
             return self.browser.find_element(By.ID, field).get_attribute("value")
         # What is proposed: the module ACT and the partitions of csb
         self.assertEqual(("module", "ACT", "CLUSTER,CLUSTER-AMD", "GPU,CLUSTER-AMD", "gpu:1", "",
-                          "srun", "120"),
+                          "srun", "alexandria", "120"),
                          tuple(value(f) for f in ("cl-load", "cl-loadname", "cl-partition",
                                                   "cl-gpupartition", "cl-gres", "cl-account",
-                                                  "cl-launcher", "cl-poll")))
+                                                  "cl-launcher", "cl-program", "cl-poll")))
         self.assertEqual("Name of the module", self.text("#cl-loadlabel"))
         # Settings that cannot be are refused and not kept
         fill("-oProxyCommand=evil", "spoel", "act")
@@ -988,7 +1205,8 @@ class PageTest(unittest.TestCase):
                                       "load": "source", "load_name": "/opt/act/bin/ACTRC",
                                       "partition": "cpu,cpu-long",
                                       "gpu_partition": "GPU,CLUSTER-AMD", "gpu_gres": "gpu:1",
-                                      "account": "", "launcher": "srun", "poll_seconds": 120}},
+                                      "account": "", "launcher": "srun",
+                                      "program": "alexandria", "poll_seconds": 120}},
                          json.loads(self.config.read_text()))
         self.assertEqual("act/jobs", value("cl-workdir"))
         # Nothing to load: the field for it goes away

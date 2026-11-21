@@ -58,6 +58,12 @@ there or opened from a file:
   problems that `edit_ff -validate` finds, with a button to write the force
   field without those that writing removes.
 
+- *Compare* lists what differs between the force field of the workspace
+  and another one, the default or a file: the parameters with another
+  value, with other bounds or another way of training, and those that
+  only one of the two has. After a training, "What changed" does this
+  for the trained force field and the one it started from.
+
 Every step writes a new file on the server, which can be saved and which
 the molecule workspace can use for its calculations.
 
@@ -71,14 +77,23 @@ workspace or an uploaded one) can be compared with its data: `alexandria
 train_ff -nooptimize` computes the properties that are chosen for every
 compound, and the page shows the statistics and, for each property, the
 values of the force field against the reference values. The plot can be
-saved as a PDF file and the data as an xvg file.
+saved as a PDF file and the data as an xvg file. For a compound with
+several structures, such as a dimer, a histogram shows which energies the
+reference and the force field have, for each term of the energy.
+
+The table of compounds says what each compound is used for: training,
+testing, or nothing. A click changes it for one compound, and the buttons
+above the table for all compounds that the table shows, which are those
+with the text that is searched for. A comparison then gives the
+statistics for both data sets.
 
 A force field can also be trained on the data of the file, with `alexandria
-train_ff`: you give the kinds of parameters to train (such as `sigma
-epsilon`), the properties to train on, the optimizer (Monte Carlo, or the
+train_ff`: you choose the kinds of parameters to train (such as `sigma`
+and `epsilon`) from those that the force field has and that are not fixed,
+the properties to train on with a weight for each, the optimizer (Monte Carlo, or the
 genetic algorithm with or without Monte Carlo, which needs two processes
 at least), the number of iterations and generations, and the part of the
-compounds that is kept for testing. `train_ff` has one set of parameters
+compounds that is kept for testing, unless they were chosen in the table. `train_ff` has one set of parameters
 for each process, so the number of processes is the size of the
 population; more than one process needs `mpirun`, `mpiexec` or `srun` in
 the `PATH`, or the program in the environment variable `ACT_MPIEXEC`. The
@@ -94,10 +109,7 @@ the server, your user name there and a working directory. The comparison
 can then run as a job on the cluster, and the tab lists the jobs, see
 below.
 
-Not there yet: the comparison of two force fields, a choice of the
-compounds to compare or train on,
-weights for the properties, histograms of the energies of a compound, and
-the server for several users.
+Not there yet: the server for several users.
 
 The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 `act_gui/static/vendor/`) to show molecules.
@@ -142,6 +154,7 @@ interface starts; `--config FILE` names another file. The file looks like
         "gpu_gres": "gpu:1",
         "account": "",
         "launcher": "srun",
+        "program": "alexandria",
         "poll_seconds": 120
       }
     }
@@ -153,7 +166,9 @@ with the name in `load_name`), `source` (the shell reads the file in
 `load_name`, such as the `ACTRC` of an installation), `conda` (the
 environment in `load_name` is activated) or `none`. Jobs without a GPU go
 to the partitions in `partition`; jobs that need one go to those in
-`gpu_partition` and ask for `gpu_gres` with `--gres`.
+`gpu_partition` and ask for `gpu_gres` with `--gres`. `program` is the
+name of the program of ACT on the cluster: `alexandria`, or `alexandria_d`
+for a build in double precision.
 
 The interface logs in with the `ssh` program of your machine, which uses
 your own keys and settings. It never asks for a password or a key and
@@ -177,7 +192,7 @@ Slurm, the command and the files that go along. The files get a name
 after the option they are for (`ff.xml`, `mp.xml`), so no name of a file
 on your machine goes to the cluster. The command is made with the options
 that the `alexandria` of your machine knows; the program on the cluster,
-which is called `alexandria` there, has to know them as well.
+whose name is a setting, has to know them as well.
 
 Sending a job is one login: the files and the script go to the directory
 `workdir/name-of-the-job`, where `sbatch` is started. The tab Cluster

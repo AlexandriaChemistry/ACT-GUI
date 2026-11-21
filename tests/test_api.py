@@ -10,6 +10,7 @@
 @file
 @brief Tests of the web interface, with a function in the place of act.run().
 """
+import json
 import tempfile
 import time
 import unittest
@@ -661,6 +662,13 @@ class ApiTest(unittest.TestCase):
                                                    "interaction_energies": {"c": {}}}},
                                "statistics": {"Train": {"INTERACTION": {"N": 2, "RMSD": 1.0}}},
                                "outliers": {}}
+                # The whole result is in a file, as the program writes it
+                whole = Path(workdir) / "train_ff.json"
+                whole.write_text(json.dumps({"train_ff": {"molecules": {"0": {
+                    "name": "water#water", "dataset": "Train", "atoms": {"0": {"fx": 1}},
+                    "interaction_energies": {"c": {"INTERACTION": {"QM": -20, "ACT": -19}},
+                                             "d": {"INTERACTION": {"QM": -5, "ACT": -6}}}}}}}))
+                result.files["json"] = [whole]
                 if kwargs.get("optimize") is not False:
                     # A training
                     result.data["parameters"] = {"0": {"class": "sigma", "name": "ow",
@@ -726,6 +734,22 @@ class ApiTest(unittest.TestCase):
         data = client.get("/api/jobs/%s/files/INTERACTION" % job["id"], headers=self.headers)
         self.assertEqual(200, data.status_code)
         self.assertIn("-20 -19", data.text)
+        # The energies of one compound, from the file with the whole result
+        one = client.get("/api/jobs/%s/compounds/0" % job["id"], headers=self.headers)
+        self.assertEqual(200, one.status_code, one.text)
+        self.assertEqual({"name": "water#water", "dataset": "Train", "truncated": False,
+                          "energies": {"INTERACTION": {"reference": [-20, -5],
+                                                       "forcefield": [-19, -6]}}}, one.json())
+        self.assertEqual(404, client.get("/api/jobs/%s/compounds/1" % job["id"],
+                                         headers=self.headers).status_code)
+        self.assertEqual(404, client.get("/api/jobs/%s/compounds/0" % described["id"],
+                                         headers=self.headers).status_code)
+        self.assertEqual(404, client.get("/api/jobs/nosuchjob/compounds/0",
+                                         headers=self.headers).status_code)
+        self.assertEqual(401, client.get("/api/jobs/%s/compounds/0" % job["id"]).status_code)
+        # The file itself is not handed out
+        self.assertEqual(404, client.get("/api/jobs/%s/files/json" % job["id"],
+                                         headers=self.headers).status_code)
         self.assertEqual(404, client.get("/api/jobs/%s/files/COULOMB" % job["id"],
                                          headers=self.headers).status_code)
         # The plot on paper compares the values point by point
@@ -833,8 +857,32 @@ class ApiTest(unittest.TestCase):
                          sorted(line.split("|")[1]
                                 for line in options["sel"].read_text().splitlines()))
 
+        # The compounds for testing chosen by hand, and a property that counts double
+        chosen = dict(body, weights={"inter": 2},
+                      molprop=dict(body["molprop"], sets={"test": ["methanol#water"]}))
+        job = done(post(chosen))
+        self.assertEqual("finished", job["status"], job["error"])
+        options = self.run.calls[-1]["options"]
+        self.assertEqual(2, options["fc_inter"])
+        self.assertEqual("water#water|Train\nmethanol#water|Test\n", options["sel"].read_text())
+        ignored = dict(body, task="evaluate", observables=["inter"],
+                       molprop=dict(body["molprop"], sets={"ignore": ["water#water"]}))
+        del ignored["training"]
+        job = done(post(ignored))
+        self.assertEqual("finished", job["status"], job["error"])
+        self.assertEqual("methanol#water|Train\n",
+                         self.run.calls[-1]["options"]["sel"].read_text())
+
         ncalls = len(self.run.calls)
         wrong = [
+            dict(body, weights={"epot": 2}),
+            dict(body, weights={"inter": 0}),
+            dict(body, weights=[2]),
+            dict(body, molprop=dict(body["molprop"], sets={"test": ["acetone"]})),
+            dict(body, molprop=dict(body["molprop"], sets={"test": ["water#water",
+                                                                    "methanol#water"]})),
+            dict(body, molprop=dict(body["molprop"], sets={"test": ["methanol#water"]}),
+                 training={"fit": ["sigma"], "test": 0.5}),
             {k: v for k, v in body.items() if k != "training"},
             dict(body, training={}),
             dict(body, training={"fit": ["sigma", "-o"]}),

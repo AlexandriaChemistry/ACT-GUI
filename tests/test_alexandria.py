@@ -418,6 +418,18 @@ class RealProgramTest(unittest.TestCase):
                 self.assertIn('legend "Train"', data.text)
             # The dipoles are not in this file, so there is nothing to plot for them
             self.assertNotIn("dipolecorr", job["files"])
+            # The energies of the first compound: of dimers for each
+            # structure, of single compounds there are none
+            one = self.client.get("/api/jobs/%s/compounds/0" % job["id"], headers=self.headers)
+            self.assertEqual(200, one.status_code, one.text)
+            self.assertEqual(result["compounds"][0]["name"], one.json()["name"])
+            if statistic == "INTERACTION":
+                energies = one.json()["energies"]["INTERACTION"]
+                self.assertEqual(result["compounds"][0]["points"], len(energies["reference"]))
+                self.assertEqual(len(energies["reference"]), len(energies["forcefield"]))
+                self.assertGreater(len(energies["reference"]), 10)
+            else:
+                self.assertEqual({}, one.json()["energies"])
             if plots.available():
                 pdf = self.client.get("/api/jobs/%s/plots/%s" % (job["id"], files[0]),
                                       headers=self.headers)

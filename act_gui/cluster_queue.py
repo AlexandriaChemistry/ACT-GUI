@@ -40,8 +40,6 @@ from . import cluster, cluster_jobs
 from .cluster import ClusterError, ClusterSettings
 from .jobs import InputFile, place_files
 
-## The name of the program on the cluster
-PROGRAM = "alexandria"
 ## The file with what is known about a job, in its directory on this machine
 RECORD = "job.json"
 ## The option of a command for the file in which it reports its progress
@@ -171,7 +169,7 @@ def make_plan(name: str, task: str, command: str, options: Mapping[str, Any],
             remote[local] = sent
             files[sent] = Path(local)
     args, expected = arguments(command, placed, staging)
-    words = [PROGRAM, command]
+    words = [settings.program, command]
     for arg in args:
         if arg in remote:
             words.append(remote[arg])

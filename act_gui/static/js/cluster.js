@@ -26,7 +26,7 @@ import { $, alertBox, call, el, num, pill, session, toast } from "./common.js";
 const FIELDS = {
   server: "cl-server", user: "cl-user", workdir: "cl-workdir", load: "cl-load", load_name: "cl-loadname",
   partition: "cl-partition", gpu_partition: "cl-gpupartition", gpu_gres: "cl-gres", account: "cl-account",
-  launcher: "cl-launcher", poll_seconds: "cl-poll",
+  launcher: "cl-launcher", program: "cl-program", poll_seconds: "cl-poll",
 };
 /** What is asked for with each way of making ACT available. */
 const LOAD_LABELS = { module: "Name of the module", source: "The file, with its path", conda: "Name of the environment" };
