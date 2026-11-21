@@ -153,7 +153,7 @@ class ClusterJobsApiTest(unittest.TestCase):
                          [entry["name"] for entry in shown["files"]])
         self.assertEqual(len(MP), shown["files"][1]["size"])
         for line in ("#SBATCH --job-name=compare-1", "#SBATCH --partition=GPU,CLUSTER-AMD",
-                     "#SBATCH --gres=gpu:1", "#SBATCH --ntasks=8", "#SBATCH --time=0-02:30:00",
+                     "#SBATCH --gres=gpu:1", "#SBATCH -n 8", "#SBATCH --time=0-02:30:00",
                      "srun alexandria train_ff -ff ff.xml -mp mp.xml -fc_inter 1 -fc_epot 1 "
                      "-epotcorr epot_corr.xvg -json train_ff.json -nooptimize "
                      "-sel selection.dat"):
@@ -316,7 +316,7 @@ class ClusterJobsApiTest(unittest.TestCase):
         answer = post(name="train-1", tasks=4, minutes=120)
         self.assertEqual(200, answer.status_code, answer.text)
         shown = answer.json()
-        self.assertIn("#SBATCH --ntasks=4\n", shown["script"])
+        self.assertIn("#SBATCH -n 4\n", shown["script"])
         self.assertIn("srun alexandria train_ff -ff ff.xml -mp mp.xml -fc_inter 1 "
                       "-fit 'sigma epsilon' -optimizer HYBRID -max_generations 3 -max_iter 20 "
                       "-pop_size 4 -json train_ff.json -progress progress.jsonl "
