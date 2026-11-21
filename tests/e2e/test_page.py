@@ -26,6 +26,7 @@ from pathlib import Path
 
 try:
     from selenium import webdriver
+    from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.common.by import By
     from selenium.webdriver.firefox.options import Options
     from selenium.webdriver.support.ui import Select, WebDriverWait
@@ -1042,7 +1043,7 @@ class PageTest(unittest.TestCase):
         rows = self.browser.execute_script(
             "return [...document.querySelectorAll('#ev-stats tbody tr')]"
             ".map(r => [...r.cells].map(c => c.textContent))")
-        interaction = [row for row in rows if row[0] == "INTERACTION"][0]
+        interaction = [row for row in rows if row[0] == "Interaction energy"][0]
         self.assertEqual(["Train", "243"], interaction[1:3])
         self.assertEqual("kJ/mol", interaction[6])
         self.assertGreater(float(interaction[3]), 0)
@@ -1386,6 +1387,129 @@ class PageTest(unittest.TestCase):
         # Monte Carlo alone leaves the individuals where they are
         optimizer.select_by_value("MCMC")
         self.assertIn("does not use the 4 individuals", self.text("#tr-conttext"))
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_9f_sorted_table_own_selection_and_points(self):
+        """!
+        @brief The table of compounds is sorted by a column. A comparison
+        uses a selection file of the user as it is, shows only the
+        properties that were chosen, the first one first, tells training
+        and testing apart, zooms, and shows the structure and the energies
+        of a point that is clicked.
+        """
+        data = Path(TESTDATA)
+        self.open_page()
+        self.click('#nav button[data-view="molprop"]')
+        self.browser.find_element(By.ID, "mpw-file").send_keys(str(data / "molprop" / "mpdimer.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        script = self.browser.execute_script
+
+        def column(index):
+            return script("return [...document.querySelectorAll('#mpw-table tbody tr')]"
+                          ".map(r => r.cells[arguments[0]].textContent)", index)
+        in_file = column(1)
+        self.assertEqual(["1-propanol#ethane", "guanidinium#water", "water#1-butanol"], in_file)
+        # By the number of atoms, up, down and back to the order of the file
+        atoms = [int(n) for n in column(4)]
+        self.click('#mpw-table button[data-sort="natom"]')
+        self.assertEqual(sorted(atoms), [int(n) for n in column(4)])
+        self.assertIn("Atoms", self.text('#mpw-table th[aria-sort="ascending"]'))
+        self.click('#mpw-table button[data-sort="natom"]')
+        self.assertEqual(sorted(atoms, reverse=True), [int(n) for n in column(4)])
+        self.click('#mpw-table button[data-sort="natom"]')
+        self.assertEqual(in_file, column(1))
+        self.click('#mpw-table button[data-sort="name"]')
+        self.assertEqual(sorted(in_file), column(1))
+        self.shot("28b-sorted-table")
+
+        # A selection file of the user: one that is not one is told
+        with tempfile.TemporaryDirectory() as tmp:
+            wrong = Path(tmp) / "wrong.dat"
+            wrong.write_text("1-propanol#ethane Train\n")
+            chooser = self.browser.find_element(By.ID, "ev-selfile")
+            chooser.send_keys(str(wrong))
+            self.wait(lambda b: "wrong.dat" in self.errors())
+            self.assertEqual("table", Select(self.browser.find_element(By.ID, "ev-sel"))
+                             .first_selected_option.get_attribute("value"))
+            mine = Path(tmp) / "mine.dat"
+            mine.write_text("1-propanol#ethane|Train\nguanidinium#water|Test\nnobody|Train\n")
+            chooser.send_keys(str(mine))
+            self.wait(lambda b: "1 for training" in b.find_element(By.ID, "ev-selnote").text)
+        note = self.text("#ev-selnote")
+        self.assertIn("1 for testing, 1 of the molprop file not used", note)
+        self.assertIn("1 name is not in the molprop file", note)
+        self.assertEqual("mine.dat", Select(self.browser.find_element(By.ID, "ev-sel"))
+                         .first_selected_option.text)
+
+        # Dispersion first, then electrostatics; not the interaction energy
+        self.click('#ev-observables input[data-name="inter"]')
+        self.click('#ev-observables input[data-name="disp"]')
+        self.click('#ev-observables input[data-name="elec"]')
+        self.browser.find_element(By.ID, "ev-fffile").send_keys(str(data / "forcefields" / "ACS-pol.xml"))
+        script("window.asked = []; const send = window.fetch;"
+               "window.fetch = (url, init) => { if (init && init.body) window.asked.push(init.body);"
+               " return send(url, init); };")
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text in ("Done", "Failed"))
+        self.assertEqual("Done", self.text("#ev-pill"), self.errors())
+        request = [json.loads(body) for body in script("return window.asked")
+                   if '"evaluate"' in body][0]
+        self.assertEqual(["disp", "elec"], request["observables"])
+        self.assertEqual("1-propanol#ethane|Train\nguanidinium#water|Test\nnobody|Train\n",
+                         request["molprop"]["selection"])
+        self.assertNotIn("sets", request["molprop"])
+        # Only what was chosen, the first one first
+        plots = Select(self.browser.find_element(By.ID, "ev-plotsel"))
+        self.assertEqual(["DISPERSION", "COULOMB"],
+                         [o.get_attribute("value") for o in plots.options])
+        self.assertEqual("DISPERSION", plots.first_selected_option.get_attribute("value"))
+        rows = script("return [...document.querySelectorAll('#ev-stats tbody tr')]"
+                      ".map(r => [r.cells[0].textContent, r.cells[1].textContent])")
+        self.assertEqual({"Dispersion", "Electrostatics"}, {row[0] for row in rows})
+        self.assertEqual("Dispersion", rows[0][0])
+        self.assertEqual({"Train", "Test"}, {row[1] for row in rows})
+        # Training and testing in the legend
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#evplot g.legend")) == 2)
+        self.assertEqual(["Train", "Test"], [g.text for g in self.browser.find_elements(
+            By.CSS_SELECTOR, "#evplot g.legend")])
+
+        # Zooming in shows other numbers on the axes, All shows all again
+        def ticks():
+            return script("return [...document.querySelectorAll('#evplot svg > text')]"
+                          ".map(t => t.textContent).join(' ')")
+        whole = ticks()
+        self.click("#ev-zoomin")
+        self.click("#ev-zoomin")
+        self.assertNotEqual(whole, ticks())
+        self.click("#ev-zoomall")
+        self.assertEqual(whole, ticks())
+        self.shot("28c-comparison-chosen")
+
+        # A click on a point of the training: its structure and its energies
+        script("document.getElementById('evplot').scrollIntoView({ block: 'center' })")
+        place = script("""
+            const svg = document.querySelector('#evplot svg'), box = svg.getBoundingClientRect();
+            const scale = box.width / svg.viewBox.baseVal.width;
+            const path = [...svg.querySelectorAll('g path')].filter(p => p.getAttribute('stroke-linecap') === 'round')[0];
+            const [x, y] = path.getAttribute('d').slice(1).split('h')[0].split(' ').map(Number);
+            return [x * scale - box.width / 2, y * scale - box.height / 2];""")
+        svg = self.browser.find_element(By.CSS_SELECTOR, "#evplot svg")
+        ActionChains(self.browser).move_to_element_with_offset(
+            svg, int(round(place[0])), int(round(place[1]))).click().perform()
+        self.wait(lambda b: b.find_element(By.ID, "ev-calc").is_displayed())
+        self.assertEqual("", self.errors())
+        self.assertEqual("1-propanol#ethane", self.text("#ev-calcname"))
+        self.assertIn("Train, calculation", self.text("#ev-calcwhat"))
+        energies = script("return [...document.querySelectorAll('#ev-calctab tbody tr')]"
+                          ".map(r => [r.cells[0].textContent, r.className])")
+        self.assertIn(["Dispersion", "plotted"], energies)
+        self.assertIn("Interaction energy", [row[0] for row in energies])
+        self.assertIn("atoms, the second compound with green carbons", self.text("#ev-calcnote"))
+        self.assertEqual(1, len(self.browser.find_elements(By.CSS_SELECTOR, "#evplot circle.marked")))
+        self.shot("28d-structure-of-a-point")
+        self.click("#ev-calcclose")
+        self.assertFalse(self.browser.find_element(By.ID, "ev-calc").is_displayed())
+        self.assertEqual(0, len(self.browser.find_elements(By.CSS_SELECTOR, "#evplot circle.marked")))
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_9c_compounds_and_weights(self):
@@ -1884,7 +2008,7 @@ class PageTest(unittest.TestCase):
         rows = self.browser.execute_script(
             "return [...document.querySelectorAll('#ev-stats tbody tr')]"
             ".map(r => [...r.cells].map(c => c.textContent))")
-        self.assertEqual(["INTERACTION", "Train", "2", "1"], rows[0][:4])
+        self.assertEqual(["Interaction energy", "Train", "2", "1"], rows[0][:4])
         self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#evplot svg path")) >= 2)
         self.assertIn("2 Train", self.text("#ev-plotnote"))
         saved = self.saved_file("#ev-data", "evaluate-INTERACTION.xvg", "@")

@@ -389,6 +389,13 @@
           <input class="visually-hidden" type="file" id="ev-fffile" accept=".xml" tabindex="-1" aria-hidden="true">
           <div class="field grow"><span class="lab" id="ev-obslab">Properties to compare</span><div class="row" id="ev-observables"></div></div>
         </div>
+        <div class="row top">
+          <div class="field"><label for="ev-sel">Compounds</label>
+            <select id="ev-sel"><option value="table">As the table of compounds says</option><option value="file" hidden disabled></option></select></div>
+          <div class="field"><span class="lab">&nbsp;</span><button class="btn" id="ev-selopen" type="button" title="Use a selection file of your own, as train_ff reads it: a line with the name of a compound, a bar and Train, Test or Ignore for each">Open selection file…</button></div>
+          <input class="visually-hidden" type="file" id="ev-selfile" accept=".dat,.txt,text/plain" tabindex="-1" aria-hidden="true">
+          <p class="muted fine grow" id="ev-selnote"></p>
+        </div>
         <div id="tr-opts" hidden>
           <p class="fine notice" id="tr-contnote" hidden><span id="tr-conttext"></span> <button class="btn small" id="tr-anew" type="button">Start anew</button></p>
           <div class="row top">
@@ -473,6 +480,9 @@
     <div class="cols plot-left" id="ev-result" hidden>
       <div class="card"><div class="head"><h2>Force field against reference</h2><span class="spacer"></span>
           <div class="field"><select id="ev-plotsel" aria-label="Property to plot"></select></div>
+          <span class="row tight"><button class="btn small" id="ev-zoomin" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+            <button class="btn small" id="ev-zoomout" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+            <button class="btn small" id="ev-zoomall" type="button" title="Show all points">All</button></span>
           <button class="btn small" id="ev-pdf" type="button" hidden>Save as PDF</button>
           <button class="btn small" id="ev-data" type="button">Save data</button></div>
         <div class="body"><div class="plot" id="evplot"></div>
@@ -481,6 +491,16 @@
           <button class="btn small" id="ev-log" type="button">Save log file</button></div>
         <div class="xscroll"><table class="data" id="ev-stats"></table></div>
         <div class="body"><p class="muted fine">RMSD is the root mean square deviation, MSE the mean signed error (force field minus reference), MAE the mean absolute error; the slope and R are those of a straight line through the points.</p></div></div>
+    </div>
+    <div class="card" id="ev-calc" hidden>
+      <div class="head"><h2 id="ev-calcname">Structure</h2><span class="muted" id="ev-calcwhat"></span><span class="spacer"></span>
+        <button class="btn small" id="ev-calcclose" type="button">Close</button></div>
+      <div class="cols plot-left">
+        <div class="body"><div class="stage square" id="ev-calcstage"><div class="gl" id="gl3"></div></div>
+          <p class="muted fine" id="ev-calcnote"></p></div>
+        <div class="body"><div class="xscroll"><table class="data" id="ev-calctab"></table></div>
+          <p class="muted fine">Energies in kJ/mol: the reference (SAPT) and the force field (ACT) for this structure, and their difference. The term that is plotted is in bold.</p></div>
+      </div>
     </div>
     <div class="card" id="ev-comp" hidden>
       <div class="head"><h2>Energies of a compound</h2><span class="spacer"></span>

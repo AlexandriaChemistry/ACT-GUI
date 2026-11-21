@@ -15,7 +15,7 @@
  * text, never as markup.
  */
 import { $, $$, alertBox, call, el, num, pill, runTask, saveFile, seg, session, toast, upload } from "./common.js";
-import { limits, plot } from "./plot.js";
+import { css, limits, markPoint, plot, resetZoom, zoomPlot } from "./plot.js";
 
 /** What the workspace knows. */
 const state = {
@@ -37,14 +37,52 @@ const state = {
   cont: null,     // the training that the next one continues: { job, label, individuals }, individuals 0 without a population
   kinds: { key: "", list: [] },  // the kinds of parameters that the force field with this reference offers
   kindsAsked: 0,  // counts the times the kinds were asked for, to drop answers that come too late
+  sort: { key: "", up: true },  // the column the table of compounds is sorted by, none for the order of the file
+  userSel: null,  // a selection file of the user for the comparison: { name, text, read }, read as /selection/read tells
+  ticked: [],     // the properties to compare in the order in which they were ticked
 };
+
+/** The columns of the table of compounds that it can be sorted by: the header and the value of a compound. */
+const SORT_COLUMNS = {
+  name: { head: "Name", value: m => m.name || m.iupac || "" },
+  use: { head: "Used for", value: m => Object.keys(SET_NAMES).indexOf(state.sets.get(selectionName(m)) || "train") },
+  formula: { head: "Formula", value: m => m.formula || "" },
+  natom: { head: "Atoms", value: m => m.natom, number: true },
+  charge: { head: "Charge", value: m => m.charge, number: true },
+  fragments: { head: "Compounds", value: m => m.fragments.length, number: true },
+  experiments: { head: "Calculations", value: m => m.experiments, number: true },
+  methods: { head: "Methods", value: m => m.methods.join(", ") },
+};
+
+/**
+ * The header of a column of the table of compounds, with a button that sorts by it.
+ * @param {string} key The column, see SORT_COLUMNS.
+ * @returns {Element} The header.
+ */
+function sortHeader(key) {
+  const column = SORT_COLUMNS[key], on = state.sort.key === key;
+  return el("th", { class: column.number ? "n" : "", "aria-sort": on ? (state.sort.up ? "ascending" : "descending") : "none" },
+    el("button", { class: "sort", type: "button", data: { sort: key }, title: "Sort by " + column.head.toLowerCase() },
+      column.head, el("span", { class: "arrow", "aria-hidden": "true" }, on ? (state.sort.up ? "▲" : "▼") : "")));
+}
+
+/**
+ * Sort by a column of the table of compounds: up, then down, then in the order of the file.
+ * @param {string} key The column.
+ */
+function sortBy(key) {
+  if (state.sort.key !== key) state.sort = { key, up: true };
+  else if (state.sort.up) state.sort = { key, up: false };
+  else state.sort = { key: "", up: true };
+  compoundTable();
+}
 
 /** The most compounds that are put in the table at once. */
 const MAX_ROWS = 300;
 /** The most messages of the validation that are listed. */
 const MAX_MESSAGES = 40;
 /** The most points of one data set that are drawn. */
-const MAX_POINTS = 5000;
+const MAX_POINTS = 20000;
 /** What the page calls the files with a comparison. */
 const PLOT_NAMES = {
   epotcorr: "Potential energy", forcecorr: "Forces", freqcorr: "Vibrational frequencies", espcorr: "Electrostatic potential",
@@ -80,7 +118,19 @@ function compoundsShown() {
   const query = state.query.trim().toLowerCase();
   let all = state.data.molecules.map((molecule, index) => ({ index, molecule }));
   if (state.property) all = all.filter(({ molecule: m }) => (m.properties || {})[state.property] > 0);
-  return query ? all.filter(({ molecule: m }) => (m.name + " " + m.iupac + " " + m.formula).toLowerCase().includes(query)) : all;
+  if (query) all = all.filter(({ molecule: m }) => (m.name + " " + m.iupac + " " + m.formula).toLowerCase().includes(query));
+  const column = SORT_COLUMNS[state.sort.key];
+  if (column) {
+    // Numbers as numbers and names with the numbers in them in their order; equal ones stay in the order of the file
+    const order = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+    const sign = state.sort.up ? 1 : -1;
+    all.sort((a, b) => {
+      const x = column.value(a.molecule), y = column.value(b.molecule);
+      const by = column.number ? (Number(x) || 0) - (Number(y) || 0) : order.compare(String(x), String(y));
+      return sign * by || a.index - b.index;
+    });
+  }
+  return all;
 }
 
 /** Fill the table of compounds. */
@@ -96,8 +146,7 @@ function compoundTable() {
   const used = found.filter(({ molecule }) => state.sets.get(selectionName(molecule)) !== "ignore").length;
   const all = el("input", { type: "checkbox", checked: used === found.length, indeterminate: used > 0 && used < found.length,
                             data: { all: "1" }, title: "Use all compounds that the table shows, or none of them", "aria-label": "Use all compounds that the table shows" });
-  table.append(el("thead", {}, el("tr", {}, el("th", { class: "tick" }, all), el("th", {}, "Name"), el("th", {}, "Used for"), el("th", {}, "Formula"), el("th", { class: "n" }, "Atoms"),
-    el("th", { class: "n" }, "Charge"), el("th", { class: "n" }, "Compounds"), el("th", { class: "n" }, "Calculations"), el("th", {}, "Methods"))));
+  table.append(el("thead", {}, el("tr", {}, el("th", { class: "tick" }, all), ...Object.keys(SORT_COLUMNS).map(sortHeader))));
   const body = el("tbody"), invalid = new Set(state.data.validation.invalid || []);
   for (const { index, molecule: m } of shown) {
     const bad = invalid.has(m.name) || invalid.has(m.iupac), set = state.sets.get(selectionName(m)) || "train";
@@ -131,11 +180,12 @@ function chosenSets() {
 
 /** Tell how many compounds are for training, for testing and not used, and what follows from that for the form. */
 function setsNote() {
-  const sets = chosenSets(), byHand = sets.test.length > 0;
+  const sets = chosenSets(), byHand = sets.test.length > 0 || ownSelection();
   $("#mpw-sets").textContent = `${sets.train} for training` + (byHand ? `, ${sets.test.length} for testing` : "") + (sets.ignore.length ? `, ${sets.ignore.length} not used` : "");
   // Compounds for testing are chosen by hand or drawn as a part, not both
   $("#tr-test").disabled = byHand;
   $("#tr-testnote").hidden = !byHand;
+  $("#tr-testnote").textContent = ownSelection() ? "Chosen in the selection file." : "Chosen in the table of compounds.";
   if (!$("#sel-mono").hidden) monomerList();
   // The force field workspace can take its geometries from the compounds that are chosen here
   session.molprop = { ...state.file, sets: { test: sets.test, ignore: sets.ignore }, used: sets.train + sets.test.length,
@@ -343,6 +393,7 @@ function observableBoxes() {
                     title: "How much this property counts in the training", "aria-label": "Weight of " + o.label })));
     first = false;
   }
+  state.ticked = $$("#ev-observables input[type=checkbox]").filter(b => b.checked).map(b => b.dataset.name);
   weightFields();
 }
 
@@ -382,17 +433,59 @@ function parseSets(text) {
   return out;
 }
 
+/** The data sets of train_ff, in the order of the legend; the colour of each is the one of its place. */
+const DATASETS = ["Train", "Test", "Ignore"];
+
+/**
+ * A property that can be compared, as the server describes it.
+ * @param {string} name The name of the property.
+ * @returns {object|undefined} Its label, whether it is of dimers, its statistics and its plots.
+ */
+const describedObservable = name => state.observables.find(o => o.name === name);
+
+/**
+ * Whether a plot is of a term of the interaction energy, of which every point has its structure.
+ * @param {string} option The name of the plot.
+ * @returns {boolean} True if it is.
+ */
+const isEnergyTerm = option => state.observables.some(o => o.dimer && o.plots.includes(option));
+
+/**
+ * The points of a term of the interaction energy, by data set.
+ * @param {object} points What /api/jobs/{id}/points/{term} gives.
+ * @returns {object} xlabel, legends, for each set its x and y values and the places of its points, and the points.
+ */
+function pointSets(points) {
+  const names = [...new Set(points.dataset)].sort((a, b) => {
+    const i = DATASETS.indexOf(a), j = DATASETS.indexOf(b);
+    return (i < 0 ? 99 : i) - (j < 0 ? 99 : j);
+  });
+  const sets = names.map(() => ({ x: [], y: [], ids: [] }));
+  points.reference.forEach((x, k) => {
+    const set = sets[names.indexOf(points.dataset[k])];
+    set.x.push(x); set.y.push(points.forcefield[k]); set.ids.push(k);
+  });
+  return { xlabel: `${points.term} (kJ/mol)`, legends: names, sets, points };
+}
+
 /** Draw the comparison that is chosen: the force field against the reference. */
 async function comparisonPlot() {
   const ev = state.ev, option = $("#ev-plotsel").value;
   if (!ev || !option) return;
   if (!ev.sets[option]) {
     try {
-      ev.sets[option] = parseSets(await (await call(`/jobs/${ev.job}/files/${option}`)).text());
+      // The points of an energy term with the structure of each, if the
+      // result has them, as train_ff writes them; else the file of the plot
+      let made = null;
+      if (isEnergyTerm(option)) {
+        made = pointSets(await (await call(`/jobs/${ev.job}/points/${option}`)).json());
+        if (!made.sets.length) made = null;
+      }
+      ev.sets[option] = made || parseSets(await (await call(`/jobs/${ev.job}/files/${option}`)).text());
     } catch (e) { alertBox("The data could not be fetched. " + e.message); return; }
   }
-  const data = ev.sets[option];
-  if ($("#ev-plotsel").value !== option) return;
+  const data = ev.sets[option], term = Boolean(data.points);
+  if (state.ev !== ev || $("#ev-plotsel").value !== option) return;
   const all = data.sets.flatMap(set => set.x.concat(set.y));
   const lim = limits(all.length ? all : [0, 1], 0.05);
   let thinned = false;
@@ -401,15 +494,110 @@ async function comparisonPlot() {
     // Of very many points every so-maniest is drawn
     const step = Math.ceil(set.x.length / MAX_POINTS);
     thinned = thinned || step > 1;
-    const keep = (_, j) => j % step === 0;
-    series.push({ type: "points", x: set.x.filter(keep), y: set.y.filter(keep), color: SET_COLOURS[i % SET_COLOURS.length] });
+    const keep = (_, j) => j % step === 0, name = data.legends[i] || "";
+    // Training and testing have the same colour everywhere
+    const place = DATASETS.indexOf(name);
+    series.push({ type: "points", x: set.x.filter(keep), y: set.y.filter(keep), ids: set.ids ? set.ids.filter(keep) : undefined,
+                  color: SET_COLOURS[(place < 0 ? i : place) % SET_COLOURS.length], name, pickable: term });
   });
   const name = PLOT_NAMES[option] || option;
+  const marked = ev.marked && ev.marked.option === option ? { series: ev.marked.series, id: ev.marked.id } : null;
   plot("evplot", { label: `${name}: force field against reference`, xlim: lim, ylim: lim, height: 560, aspect: 1,
-                   xlabel: "Reference: " + (data.xlabel || name), ylabel: "Force field", series });
+                   xlabel: "Reference: " + (data.xlabel || name), ylabel: "Force field", series, zoom: true, marked,
+                   onPoint: term ? (i, id) => showCalculation(option, i, id) : null });
   const counts = data.sets.map((set, i) => `${set.x.length} ${data.legends[i] || "points"}`).join(", ");
-  $("#ev-plotnote").textContent = `${counts}. The dashed line is where the force field equals the reference.` +
+  $("#ev-plotnote").textContent = `${counts}. The dashed line is where the force field equals the reference. ` +
+    "Zoom with the wheel or with + and −, drag to move, double-click or All to see all points." +
+    (term ? " Click a point to see its structure and its energies." : "") +
     (thinned ? ` Of each set at most ${MAX_POINTS} points are drawn; the PDF file and the data have all.` : "");
+}
+
+/** The viewer of the structure of a calculation, made when it is first needed; null without WebGL. */
+let calcViewer = null, calcViewerTried = false;
+
+/**
+ * Show the structure and the energies of the point of a term of the interaction energy that was clicked.
+ * @param {string} option The term that is plotted.
+ * @param {number} series The series of the point in the plot.
+ * @param {number} id     The place of the point in the points of the term.
+ */
+async function showCalculation(option, series, id) {
+  const ev = state.ev, data = ev && ev.sets[option];
+  if (!data || !data.points) return;
+  const points = data.points, compound = points.compound[id], key = points.calculation[id];
+  ev.marked = { option, series, id };
+  markPoint("evplot", { series, id });
+  try {
+    // The structure comes from the molprop file that is open
+    const params = state.file ? { molprop: state.file.file } : {};
+    const told = await (await call(`/jobs/${ev.job}/compounds/${compound}/calculations/${encodeURIComponent(key)}`, { params })).json();
+    if (state.ev === ev) calculationCard(told, option);
+  } catch (e) {
+    alertBox("The structure and the energies of this point could not be fetched. " + e.message);
+  }
+}
+
+/**
+ * Fill the card with the structure and the energies of one calculation.
+ * @param {object} told   What /api/jobs/{id}/compounds/{index}/calculations/{key} gives.
+ * @param {string} option The term that is plotted.
+ */
+function calculationCard(told, option) {
+  const card = $("#ev-calc");
+  card.hidden = false;
+  $("#ev-calcname").textContent = told.name;
+  $("#ev-calcwhat").textContent = `${told.dataset}, calculation ${told.datafile}`;
+  const table = $("#ev-calctab");
+  table.textContent = "";
+  table.append(el("thead", {}, el("tr", {}, el("th", {}, "Term"), el("th", { class: "n" }, "SAPT"), el("th", { class: "n" }, "ACT"), el("th", { class: "n" }, "ACT − SAPT"))));
+  const body = el("tbody"), value = v => (v === null || v === undefined ? "–" : num(v, 4));
+  for (const e of told.energies) {
+    body.append(el("tr", { class: e.term === option ? "plotted" : "" }, el("td", {}, PLOT_NAMES[e.term] || e.term),
+      el("td", { class: "n" }, value(e.reference)), el("td", { class: "n" }, value(e.forcefield)), el("td", { class: "n" }, value(e.difference))));
+  }
+  table.append(body);
+  const stage = $("#ev-calcstage"), note = $("#ev-calcnote");
+  if (!told.atoms.length) {
+    stage.hidden = true;
+    note.textContent = told.structure_error || "Open the molprop file of this comparison to see the structure.";
+  } else {
+    stage.hidden = false;
+    const parts = new Set(told.atoms.map(a => a.fragment)).size;
+    note.textContent = `${told.atoms.length} atoms` + (parts > 1 ? ", the second compound with green carbons." : ".");
+    structureView(told);
+  }
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+/**
+ * Draw the structure of a calculation.
+ * @param {object} told The calculation, with its atoms in Angstrom.
+ */
+function structureView(told) {
+  if (!calcViewerTried) {
+    calcViewerTried = true;
+    try {
+      if (typeof $3Dmol === "undefined") throw new Error("no viewer");
+      calcViewer = $3Dmol.createViewer($("#gl3"), { backgroundColor: css("--stage"), antialias: true });
+    } catch (e) {
+      calcViewer = null;
+      $("#ev-calcstage").append(el("div", { class: "nogl" }, "The 3D view needs WebGL, which this browser does not offer here."));
+    }
+  }
+  const v = calcViewer;
+  if (!v) return;
+  v.resize();
+  v.removeAllModels();
+  v.setBackgroundColor(css("--stage"));
+  // As coordinates, from which the viewer finds the bonds
+  const xyz = `${told.atoms.length}\n${told.name}\n` + told.atoms.map(a => `${a.element} ${a.x} ${a.y} ${a.z}`).join("\n") + "\n";
+  const model = v.addModel(xyz, "xyz");
+  const look = scheme => ({ stick: { radius: 0.13, colorscheme: scheme }, sphere: { scale: 0.26, colorscheme: scheme } });
+  model.setStyle({}, look("default"));
+  const second = told.atoms.map((a, i) => (a.fragment > 0 ? i : -1)).filter(i => i >= 0);
+  if (second.length) model.setStyle({ index: second }, look("greenCarbon"));
+  v.zoomTo();
+  v.render();
 }
 
 /**
@@ -419,21 +607,29 @@ async function comparisonPlot() {
  */
 function compared(job, source = "") {
   $("#ev-source").textContent = source;
-  // In the order of the list of names, the main property first
-  const result = job.result, files = Object.keys(PLOT_NAMES).filter(name => job.files.includes(name));
-  state.ev = { job: job.id, task: job.task || "evaluate", files, sets: {} };
+  // The properties that were chosen, the first one first; of an older job all that it has
+  const result = job.result, chosen = (job.observables || []).map(describedObservable).filter(Boolean);
+  const files = chosen.length ? [...new Set(chosen.flatMap(o => o.plots))].filter(name => job.files.includes(name))
+    : Object.keys(PLOT_NAMES).filter(name => job.files.includes(name));
+  const wanted = chosen.length ? [...new Set(chosen.flatMap(o => o.statistics))] : null;
+  state.ev = { job: job.id, task: job.task || "evaluate", files, sets: {}, marked: null };
+  $("#ev-calc").hidden = true;
   const table = $("#ev-stats");
   table.textContent = "";
   table.append(el("thead", {}, el("tr", {}, el("th", {}, "Property"), el("th", {}, "Data set"), el("th", { class: "n" }, "N"),
     el("th", { class: "n" }, "RMSD"), el("th", { class: "n" }, "MSE"), el("th", { class: "n" }, "MAE"), el("th", {}, "Unit"),
     el("th", { class: "n" }, "Slope"), el("th", { class: "n" }, "R"))));
   const body = el("tbody");
-  for (const [dataset, values] of Object.entries(result.statistics)) {
-    for (const [property, v] of Object.entries(values)) {
-      body.append(el("tr", {}, el("td", {}, property), el("td", {}, dataset), el("td", { class: "n" }, String(v.N)),
-        el("td", { class: "n" }, num(v.RMSD, 4)), el("td", { class: "n" }, num(v.MSE, 4)), el("td", { class: "n" }, num(v.MAE, 4)),
-        el("td", {}, v.unit || ""), el("td", { class: "n" }, num(v.slope, 3)), el("td", { class: "n" }, num(v.Rfit, 3))));
+  const row = (property, dataset, v) => body.append(el("tr", {}, el("td", {}, PLOT_NAMES[property] || property), el("td", {}, dataset), el("td", { class: "n" }, String(v.N)),
+    el("td", { class: "n" }, num(v.RMSD, 4)), el("td", { class: "n" }, num(v.MSE, 4)), el("td", { class: "n" }, num(v.MAE, 4)),
+    el("td", {}, v.unit || ""), el("td", { class: "n" }, num(v.slope, 3)), el("td", { class: "n" }, num(v.Rfit, 3))));
+  if (wanted) {
+    // Only the properties that were chosen, in their order, and of each the data sets
+    for (const property of wanted) {
+      for (const [dataset, values] of Object.entries(result.statistics)) if (values[property]) row(property, dataset, values[property]);
     }
+  } else {
+    for (const [dataset, values] of Object.entries(result.statistics)) for (const [property, v] of Object.entries(values)) row(property, dataset, v);
   }
   table.append(body);
   $("#ev-ncomp").textContent = `${result.compounds.length} ${result.compounds.length === 1 ? "compound" : "compounds"}`;
@@ -503,19 +699,64 @@ async function compoundEnergies() {
 }
 
 /**
+ * Whether the comparison uses a selection file of the user instead of the table.
+ * @returns {boolean} True if it does.
+ */
+const ownSelection = () => Boolean(state.userSel) && $("#ev-sel").value === "file";
+
+/** Tell what the selection file of the user has, or that the table counts. */
+function selectionNote() {
+  const read = state.userSel && state.userSel.read, note = $("#ev-selnote");
+  if (!ownSelection()) {
+    note.textContent = "The compounds that are ticked in the table, for training or for testing as it says.";
+  } else {
+    note.textContent = `${read.train} for training, ${read.test} for testing, ${read.ignore} of the molprop file not used.` +
+      (read.unknown_count ? ` ${read.unknown_count} ${read.unknown_count === 1 ? "name is" : "names are"} not in the molprop file, such as ${read.unknown[0]}; train_ff leaves them out.` : "") +
+      " The table of compounds is not used.";
+  }
+  setsNote();
+}
+
+/**
+ * Use a selection file of the user for the comparison: it goes to train_ff as it is, after the server checked it.
+ * @param {File} file The file.
+ */
+async function openOwnSelection(file) {
+  alertBox("");
+  try {
+    if (file.size > 16 * 1048576) throw new Error("it is larger than 16 MB");
+    const text = await file.text();
+    const read = await (await call("/selection/read", { method: "POST", json: { described: state.file.described, text } })).json();
+    if (read.invalid) throw new Error(`${read.invalid} ${read.invalid === 1 ? "line is" : "lines are"} not the name of a compound, a bar and Train, Test or Ignore, such as “${read.first_invalid}”`);
+    if (read.train < 1) throw new Error("no compound of the molprop file is for training");
+    state.userSel = { name: file.name, text, read };
+    const option = $('#ev-sel option[value="file"]');
+    option.textContent = file.name;
+    option.hidden = option.disabled = false;
+    $("#ev-sel").value = "file";
+    selectionNote();
+  } catch (e) {
+    alertBox(`The selection file ${file.name} cannot be used: ${e.message}.`);
+  }
+}
+
+/**
  * What the comparison needs: the force field, sent to the server if it is
  * a file of the user, the molprop file and the properties.
  * @returns {Promise<object|null>} The request, null if something has to be chosen first.
  */
 async function comparison() {
-  const observables = $$("#ev-observables input[type=checkbox]").filter(b => b.checked).map(b => b.dataset.name);
+  // In the order in which they were ticked: the first is shown first
+  const checked = $$("#ev-observables input[type=checkbox]").filter(b => b.checked).map(b => b.dataset.name);
+  const observables = state.ticked.filter(name => checked.includes(name)).concat(checked.filter(name => !state.ticked.includes(name)));
   if (!observables.length) { toast("Choose at least one property to compare."); return null; }
-  const sets = chosenSets();
-  if (sets.train < 1) { toast("No compound is left for training: the table of compounds says what each is used for."); return null; }
+  const sets = chosenSets(), own = ownSelection();
+  if (!own && sets.train < 1) { toast("No compound is left for training: the table of compounds says what each is used for."); return null; }
   const forcefield = await chosenForcefield();
   if (!forcefield) { toast("Choose a force field file first."); return null; }
   const molprop = { file: state.file.file, described: state.file.described };
-  if (sets.test.length || sets.ignore.length) molprop.sets = { test: sets.test, ignore: sets.ignore };
+  if (own) molprop.selection = state.userSel.text;
+  else if (sets.test.length || sets.ignore.length) molprop.sets = { test: sets.test, ignore: sets.ignore };
   return { task: "evaluate", forcefield, observables, molprop };
 }
 
@@ -989,6 +1230,11 @@ function show(label, data) {
   state.property = "";
   state.cont = null;
   continueNote();
+  // A selection file of the user was for the file before
+  state.userSel = null;
+  const own = $('#ev-sel option[value="file"]');
+  own.hidden = own.disabled = true;
+  $("#ev-sel").value = "table";
   // The monomers, all ticked as all compounds are used. They are offered when the file has complexes.
   const counts = new Map();
   for (const m of data.molecules) for (const part of m.monomers || []) counts.set(part, (counts.get(part) || 0) + 1);
@@ -1004,6 +1250,7 @@ function show(label, data) {
   for (const name of Object.keys(data.summary.properties || {})) properties.append(el("option", { value: name }, "With " + name));
   state.ev = null;
   $("#ev-result").hidden = true;
+  $("#ev-calc").hidden = true;
   $("#ev-comp").hidden = true;
   $("#tr-run").hidden = true;
   $("#tr-result").hidden = true;
@@ -1024,7 +1271,7 @@ function show(label, data) {
   compoundTable();
   compoundDetail();
   validation();
-  setsNote();
+  selectionNote();
 }
 
 /**
@@ -1035,6 +1282,14 @@ export function startMolprops(told) {
   state.observables = told.observables || [];
   $('#ev-ff option[value="default"]').textContent = told.default_forcefield;
   $("#ev-ff").onchange = () => { offerKinds(); continueNote(); };
+  // A selection file of the user instead of the table
+  $("#ev-sel").onchange = selectionNote;
+  $("#ev-selopen").onclick = () => $("#ev-selfile").click();
+  $("#ev-selfile").onchange = e => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (file && state.file) openOwnSelection(file);
+  };
   // A file of the user, chosen with a button: a choice in the list cannot
   // open the file chooser in every browser
   $("#ev-ffopen").onclick = () => $("#ev-fffile").click();
@@ -1186,12 +1441,30 @@ export function startMolprops(told) {
   };
   $("#sel-percent").max = String(100 * state.training.max_test);
   // What the compounds are used for: one by one, or all that the table shows
-  $("#ev-observables").addEventListener("change", weightFields);
+  $("#ev-observables").addEventListener("change", e => {
+    const box = e.target.closest("input[type=checkbox]");
+    if (box) {
+      state.ticked = state.ticked.filter(name => name !== box.dataset.name);
+      if (box.checked) state.ticked.push(box.dataset.name);
+    }
+    weightFields();
+  });
+  // Zooming the plot of the comparison, and the structure of a point
+  $("#ev-zoomin").onclick = () => zoomPlot("evplot", 0.8);
+  $("#ev-zoomout").onclick = () => zoomPlot("evplot", 1.25);
+  $("#ev-zoomall").onclick = () => resetZoom("evplot");
+  $("#ev-calcclose").onclick = () => {
+    $("#ev-calc").hidden = true;
+    if (state.ev) state.ev.marked = null;
+    markPoint("evplot", null);
+  };
   $("#mpw-setbar").addEventListener("click", e => {
     const button = e.target.closest("button[data-set]");
     if (button && state.data) useFor(compoundsShown().map(shown => shown.molecule), button.dataset.set);
   });
   $("#mpw-table").addEventListener("click", e => {
+    const sorter = e.target.closest("button[data-sort]");
+    if (sorter) { sortBy(sorter.dataset.sort); return; }
     // The boxes: one compound, or all that the table shows
     const box = e.target.closest("input[data-tick]"), all = e.target.closest("input[data-all]");
     if (box) { tick([state.data.molecules[+box.dataset.tick]], box.checked); return; }
