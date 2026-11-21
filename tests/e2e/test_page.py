@@ -495,11 +495,30 @@ class PageTest(unittest.TestCase):
         self.assertEqual("6.25", self.parameter_rows()[0][2])
         self.assertFalse(self.browser.find_element(By.ID, "p-edit").is_displayed())
         self.assertIn("6.25", self.saved_file("#ff-save", "forcefield.xml", "<?xml"))
-        # The particle types can be looked at, not changed
+        # Of a particle type the charge and its width can be changed, not the mass
         self.show_parameters("@particles", "c3_s")
         rows = self.parameter_rows()
         self.assertEqual("c3_s", rows[0][0])
-        self.assertFalse(self.browser.find_elements(By.CSS_SELECTOR, "#p-table tr.pick"))
+        kinds = [row[1] for row in rows]
+        picks = self.browser.execute_script(
+            "return [...document.querySelectorAll('#p-table tbody tr')]"
+            ".map(r => r.classList.contains('pick'))")
+        self.assertEqual([kind != "mass" for kind in kinds], picks)
+        self.assertIn("charge", kinds)
+        self.browser.execute_script(
+            "document.querySelectorAll('#p-table tbody tr')[arguments[0]].click()",
+            kinds.index("charge"))
+        self.assertTrue(self.browser.find_element(By.ID, "p-edit").is_displayed())
+        self.assertIn("Particle type", self.text("#p-what"))
+        low = self.browser.find_element(By.ID, "p-min")
+        before = float(low.get_attribute("value"))
+        low.clear()
+        low.send_keys(str(before - 1.5))
+        self.click("#p-apply")
+        self.wait(lambda b: "(2 changes)" in b.find_element(By.ID, "ffchips").text)
+        self.assertEqual("", self.errors())
+        charge = self.parameter_rows()[kinds.index("charge")]
+        self.assertAlmostEqual(before - 1.5, float(charge[4].replace("\u2212", "-")), places=6)
         self.show_parameters("@particles", "no such type")
         self.assertIn("No type", self.text("#p-empty"))
 

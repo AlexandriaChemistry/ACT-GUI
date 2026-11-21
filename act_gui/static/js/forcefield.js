@@ -468,13 +468,19 @@ function rangeBar(param) {
   return el("span", { class: "range" + (out ? " out" : param.mutability === "Bounded" ? "" : " fixed") }, mark);
 }
 
+/**
+ * The parameters of a particle type that edit_ff changes: those of its charge.
+ * The mass and the reference enthalpy are properties of the element that it leaves as they are.
+ */
+const PARTICLE_PARAMETERS = ["charge", "zeta", "chargeVS", "zetaVS"];
+
 /** Fill the table of parameters. */
 function parameterTable() {
   const table = $("#p-table"), empty = $("#p-empty");
   table.textContent = "";
   empty.hidden = !!state.current;
   if (!state.current) { $("#p-count").textContent = ""; return; }
-  const lists = listsShown(), shown = lists.slice(0, MAX_LISTS), editable = state.filter !== "@particles";
+  const lists = listsShown(), shown = lists.slice(0, MAX_LISTS), particles = state.filter === "@particles";
   $("#p-count").textContent = lists.length > shown.length
     ? `the first ${shown.length} of ${lists.length} types, find a type to see others`
     : `${lists.length} ${lists.length === 1 ? "type" : "types"}`;
@@ -485,7 +491,9 @@ function parameterTable() {
   shown.forEach((list, i) => {
     list.parameters.forEach((param, j) => {
       const picked = state.picked && state.picked.identifier === list.identifier && state.picked.param.type === param.type;
-      const row = el("tr", { class: (editable ? "pick" : "") + (picked ? " sel" : ""), data: { list: String(i), param: String(j) } },
+      const editable = !particles || PARTICLE_PARAMETERS.includes(param.type);
+      const row = el("tr", { class: (editable ? "pick" : "") + (picked ? " sel" : ""), data: { list: String(i), param: String(j) },
+                             title: editable ? "" : "This parameter of a particle type cannot be changed here" },
         el("td", { class: "num" }, j === 0 ? list.identifier : ""), el("td", {}, param.type), el("td", { class: "n" }, num(param.value)),
         el("td", {}, param.unit), el("td", { class: "n" }, num(param.minimum)), el("td", { class: "n" }, num(param.maximum)),
         el("td", {}, rangeBar(param)), el("td", {}, param.mutability), el("td", { class: "n" }, String(param.ntrain)));
@@ -504,7 +512,7 @@ function editCard() {
   if (!picked) return;
   const what = $("#p-what"), param = picked.param;
   what.textContent = "";
-  for (const text of [picked.interaction, picked.identifier, param.type + (param.unit ? ` (${param.unit})` : "")]) {
+  for (const text of [picked.interaction === "@particles" ? "Particle type" : picked.interaction, picked.identifier, param.type + (param.unit ? ` (${param.unit})` : "")]) {
     what.append(el("span", { class: "chip" }, el("b", {}, text)));
   }
   $("#p-val").value = param.value; $("#p-min").value = param.minimum; $("#p-max").value = param.maximum;
@@ -514,7 +522,9 @@ function editCard() {
   else { select.prepend(el("option", { value: "" }, `Leave as it is: ${param.mutability}`)); select.value = ""; }
   $("#p-note").textContent = param.mutability === "Bounded"
     ? "A value outside the bounds is set to the nearest bound."
-    : `Training does not change this parameter (${param.mutability}). A new value or new bounds are set all the same.`;
+    : param.mutability === "ACM"
+      ? "This charge comes from the charge model for each molecule, so a value that is set here is not used."
+      : `Training does not change this parameter (${param.mutability}). A new value or new bounds are set all the same.`;
 }
 
 /**

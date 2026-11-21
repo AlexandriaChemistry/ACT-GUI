@@ -58,7 +58,9 @@ there or opened from a file:
 - *Edit and validate* lists the parameters with their value, bounds and
   mutability, changes them with `alexandria edit_ff`, and shows the
   problems that `edit_ff -validate` finds, with a button to write the force
-  field without those that writing removes.
+  field without those that writing removes. Of a particle type the charge
+  and the width of its distribution (zeta) can be changed, also those of a
+  virtual site; the mass cannot.
 
 - *Compare* lists what differs between the force field of the workspace
   and another one, the default or a file: the parameters with another
