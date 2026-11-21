@@ -325,6 +325,15 @@ class RealProgramTest(unittest.TestCase):
         length = self.parameter(job, "BONDS", "c3_b~h_b", "bondlength")
         self.assertEqual(24, length["ntrain"])
         self.assertAlmostEqual(0.9 * length["value"], length["minimum"], places=3)
+        # Only the compounds that the user chose
+        read = self.run_task({"task": "mp_describe", "molprop": molprop})
+        self.assertEqual("finished", read["status"], read["error"])
+        names = [m["iupac"] or m["name"] for m in read["result"]["molecules"]]
+        chosen = self.run_task({"task": "geometry_ff", "forcefield": forcefield, "molprop": dict(
+            molprop, described=read["id"], sets={"test": [], "ignore": names[1:]})})
+        self.assertEqual("finished", chosen["status"], chosen["error"])
+        self.assertEqual(1, chosen["result"]["compounds"])
+        self.assertLess(chosen["result"]["extracted"]["BONDS"], job["result"]["extracted"]["BONDS"])
         repaired = self.run_task({"task": "ff_repair", "forcefield": {"job": job["id"]}})
         self.assertEqual("finished", repaired["status"], repaired["error"])
         self.assertIn("validation", repaired["result"])

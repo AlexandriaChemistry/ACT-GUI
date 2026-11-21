@@ -52,7 +52,9 @@ there or opened from a file:
   form of `alexandria gen_ff -vs`; they are used when a force field is
   generated and can be saved as a file.
 - *Geometry* takes the bond lengths, angles and dihedral angles from the
-  compounds of a molprop file with `alexandria geometry_ff`.
+  compounds of a molprop file with `alexandria geometry_ff`. The file is
+  one of its own, or the file that is open in the tab *Molprop data*, and
+  then only the compounds that are ticked there are used.
 - *Edit and validate* lists the parameters with their value, bounds and
   mutability, changes them with `alexandria edit_ff`, and shows the
   problems that `edit_ff -validate` finds, with a button to write the force

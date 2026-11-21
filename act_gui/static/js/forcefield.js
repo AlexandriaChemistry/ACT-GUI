@@ -370,16 +370,40 @@ function extracted(job) {
   $("#geo-log").hidden = !job.files.includes("g");
 }
 
+/**
+ * The molprop file that the geometries are taken from, as the server finds it: a file of
+ * its own, or that of the molprop workspace with the compounds that are ticked there.
+ * @returns {object} The reference to the file, with the compounds that are not used if there are any.
+ */
+function geometrySource() {
+  const shared = state.molprop.shared ? session.molprop : null;
+  if (!shared) return { file: state.molprop.file };
+  // Without compounds that are left out, the program takes all compounds of the file itself
+  return shared.sets.ignore.length ? { file: shared.file, described: shared.described, sets: { test: [], ignore: shared.sets.ignore } } : { file: shared.file };
+}
+
+/** Tell which molprop file the geometries are taken from. */
+function geometryLabel() {
+  const shared = state.molprop && state.molprop.shared ? session.molprop : null;
+  if (state.molprop && state.molprop.shared && !shared) state.molprop = null;
+  $("#mp-name").textContent = shared
+    ? shared.label + (shared.used < shared.total ? ` · the ${shared.used} of ${shared.total} compounds that are ticked in Molprop data` : ` · all ${shared.total} compounds`)
+    : state.molprop ? state.molprop.label : "";
+  $("#mp-shared").hidden = !session.molprop || Boolean(shared);
+  $("#run-geo").disabled = !(state.current && state.molprop);
+}
+
 /** Take the bonded parameters of the force field from a molprop file. */
 async function geometry() {
   if (!state.current || !state.molprop) return;
+  if (state.molprop.shared && session.molprop.used < 1) { toast("No compound is ticked in the tab Molprop data."); return; }
   const button = $("#run-geo"), sqe = $('#geo-qalg button[aria-pressed="true"]').dataset.v === "SQE";
   button.disabled = true;
   pill("geo-pill", "Reading the compounds…");
   alertBox("");
   try {
     const options = { gen_bcc: sqe, bfactor: numberOf("geo-bfactor"), afactor: numberOf("geo-afactor"), factor: numberOf("geo-factor") };
-    let job = await runTask({ task: "geometry_ff", forcefield: state.current.ref, molprop: { file: state.molprop.file }, options });
+    let job = await runTask({ task: "geometry_ff", forcefield: state.current.ref, molprop: geometrySource(), options });
     state.geoJob = job.id;
     extracted(job);
     if (!job.result.compounds) {
@@ -632,14 +656,16 @@ export async function startForceFields(told) {
     try {
       const up = await upload(file, "molprop");
       state.molprop = { file: up.id, label: up.label };
-      $("#mp-name").textContent = up.label;
-      $("#run-geo").disabled = !state.current;
+      geometryLabel();
       alertBox("");
     } catch (err) {
-      $("#mp-name").textContent = state.molprop ? state.molprop.label : "";
+      geometryLabel();
       alertBox("The file was not accepted. " + err.message);
     }
   };
+  // The file of the molprop workspace, with the compounds that are ticked there
+  $("#mp-shared").onclick = () => { state.molprop = { shared: true }; geometryLabel(); };
+  document.addEventListener("act-molprop", geometryLabel);
   $("#run-geo").onclick = geometry;
   $("#geo-log").onclick = e => saveFile(e.currentTarget, `/jobs/${state.geoJob}/files/g`, {}, "Saving…", "geometry_ff.log");
   $("#p-filter").onchange = e => { state.filter = e.target.value; state.picked = null; parameterTable(); editCard(); };

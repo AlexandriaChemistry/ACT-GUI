@@ -36,6 +36,9 @@ MOLECULE, FORCEFIELD, MOLPROP, GENERATOR = "molecule", "forcefield", "molprop", 
 ## A selection of the compounds of the molprop file, and the properties
 ## to compare a force field on
 SELECTION, OBSERVABLES = "selection", "observables"
+## A selection of the compounds of a molprop file only when the user chose
+## some of them: without one the command uses all compounds of the file
+CHOSEN = "chosen"
 ## What is trained of a force field
 TRAINING = "training"
 
@@ -167,7 +170,7 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          fixed={"json": True},
          outputs={"o": "forcefield.xml"},
          downloads=("o", "g"),
-         needs=(FORCEFIELD, MOLPROP), forcefield="o", workspace="forcefield"),
+         needs=(FORCEFIELD, MOLPROP, CHOSEN), forcefield="o", workspace="forcefield"),
     Task(name="ff_describe", command="edit_ff",
          title="Read and check a force field",
          fixed={"json": True},
@@ -379,8 +382,10 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
         if upload is None or upload.kind != "molprop":
             raise RequestError("The molprop file is not known, upload it again")
         options["mp"] = [uploads.path(upload)]
-        if SELECTION in task.needs:
-            # All compounds of the file, by the names that edit_mp read
+        if SELECTION in task.needs or (CHOSEN in task.needs
+                                       and molprop.get("sets") is not None):
+            # All compounds of the file, by the names that edit_mp read,
+            # or those that the user chose
             job_id = molprop.get("described")
             molecules = described(job_id) if described is not None and isinstance(job_id, str) \
                 else None
