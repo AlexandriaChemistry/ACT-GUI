@@ -28,7 +28,7 @@ import hmac
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, Mapping, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -36,7 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__, cluster, cluster_api, evaluation, ffgen, openmm_package, plots
-from . import training
+from . import geometry, training
 from .cluster_queue import ClusterQueue
 from .jobs import FINISHED, JobError, JobManager
 from .settings import PACKAGE_DIR, Settings
@@ -639,9 +639,9 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         job = find_job(job_id)
         task = TASKS.get(job.task)
         path: Optional[Path] = job.files.get("json")
-        if task is None or task.digest not in (evaluation.digest, training.digest) \
+        if task is None or task.digest not in (evaluation.digest, training.digest, geometry.digest) \
                 or job.status != FINISHED or path is None or not path.is_file():
-            raise fail(404, "This calculation has no energies of compounds")
+            raise fail(404, "This calculation has no such result")
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -664,6 +664,22 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         try:
             return evaluation.compound(data, index)
         except evaluation.EvaluationError as exc:
+            raise fail(404, str(exc)) from exc
+
+    @app.get("/api/jobs/{job_id}/histograms")
+    def job_histogram(job_id: str, type: str, identifier: str) -> Mapping[str, Any]:  # pylint: disable=redefined-builtin
+        """!
+        @brief One histogram of the bond lengths, angles or dihedrals that
+        geometry_ff found, with where its values come from.
+        @param job_id     The identifier of the calculation.
+        @param type       The interaction type, such as BONDS.
+        @param identifier The identifier, such as c3_b~h_b.
+        @return See geometry.histogram().
+        """
+        data = whole_result(job_id)
+        try:
+            return geometry.histogram(data, type, identifier)
+        except geometry.GeometryError as exc:
             raise fail(404, str(exc)) from exc
 
     @app.get("/api/jobs/{job_id}/points/{term}")

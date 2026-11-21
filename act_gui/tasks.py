@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import evaluation, ffgen, training
+from . import evaluation, ffgen, geometry, training
 from .jobs import InputFile
 from .settings import Settings
 from .uploads import UploadStore
@@ -170,10 +170,12 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
     Task(name="geometry_ff", command="geometry_ff",
          title="Bonds, angles and dihedrals from a molprop file",
          options=("gen_bcc", "bfactor", "afactor", "factor"),
-         fixed={"json": True},
+         # The histograms, with for each bin where some of its values come from
+         fixed={"json": True, "samples": geometry.MAX_SAMPLES},
          outputs={"o": "forcefield.xml"},
          downloads=("o", "g"),
-         needs=(FORCEFIELD, MOLPROP, CHOSEN), forcefield="o", workspace="forcefield"),
+         needs=(FORCEFIELD, MOLPROP, CHOSEN), forcefield="o", workspace="forcefield",
+         digest=geometry.digest),
     Task(name="ff_describe", command="edit_ff",
          title="Read and check a force field",
          fixed={"json": True},

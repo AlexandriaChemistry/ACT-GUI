@@ -647,9 +647,9 @@ class ApiTest(unittest.TestCase):
         self.assertEqual([self.settings.uploads_dir / (molprop + ".xml")], options["mp"])
         self.assertEqual(self.run.calls[0]["options"]["o"], options["ff"])
         self.assertEqual(call["workdir"] / "forcefield.xml", options["o"])
-        self.assertEqual((False, 0.9, 0.95, 0.5, True),
+        self.assertEqual((False, 0.9, 0.95, 0.5, True, 50),
                          tuple(options[k] for k in ("gen_bcc", "bfactor", "afactor", "factor",
-                                                    "json")))
+                                                    "json", "samples")))
         # Its force field can be used in turn
         answer = self.client.post("/api/jobs", headers=self.headers, json={
             "task": "ff_describe", "forcefield": {"job": job["id"]}})
@@ -705,6 +705,54 @@ class ApiTest(unittest.TestCase):
             answer = self.client.post("/api/jobs", headers=self.headers, json=body)
             self.assertEqual(400, answer.status_code, body)
         self.assertEqual(1, len(self.run.calls))
+
+    def test_geometry_histograms(self):
+        """!
+        @brief The result of geometry_ff keeps which histograms there are;
+        one histogram, with where its values come from, is read from the
+        file with the whole result when the page asks for it.
+        """
+        from tests.test_geometry import RESULT  # pylint: disable=import-outside-toplevel
+
+        def run(command, *, workdir, **kwargs):
+            result = self.run(command, workdir=workdir, **kwargs)
+            if command == "geometry_ff":
+                whole = Path(workdir) / "geometry_ff.json"
+                whole.write_text(json.dumps({"geometry_ff": RESULT}))
+                result.data = RESULT
+                result.files["json"] = [whole]
+            return result
+        app = create_app(self.settings, run=run, program_info=fake_program_info)
+        self.addCleanup(app.state.jobs.shutdown)
+        client = TestClient(app)
+        forcefield = client.post("/api/uploads", params={"kind": "forcefield", "name": "f.xml"},
+                                 content=FF, headers=self.headers).json()["id"]
+        molprop = client.post("/api/uploads", params={"kind": "molprop", "name": "m.xml"},
+                              content=MP, headers=self.headers).json()["id"]
+        answer = client.post("/api/jobs", headers=self.headers, json={
+            "task": "geometry_ff", "forcefield": {"file": forcefield}, "molprop": {"file": molprop}})
+        self.assertEqual(200, answer.status_code, answer.text)
+        for _ in range(500):
+            job = client.get("/api/jobs/" + answer.json()["id"], headers=self.headers).json()
+            if job["status"] not in ("queued", "running"):
+                break
+            time.sleep(0.01)
+        self.assertEqual("finished", job["status"], job["error"])
+        self.assertEqual(["c3_b~c3_b", "c3_b~h_b"],
+                         [h["identifier"] for h in job["result"]["histograms"]["BONDS"]])
+        self.assertNotIn("bins", job["result"]["histograms"]["BONDS"][0])
+
+        def get(**params):
+            return client.get("/api/jobs/%s/histograms" % job["id"], params=params,
+                              headers=self.headers)
+        one = get(type="BONDS", identifier="c3_b~h_b")
+        self.assertEqual(200, one.status_code, one.text)
+        self.assertEqual("C2-H5", one.json()["bins"][1]["samples"][0]["names"])
+        for wrong in ({"type": "BONDS", "identifier": "x"}, {"type": "BONDS"}, {}):
+            self.assertIn(get(**wrong).status_code, (404, 422), wrong)
+        self.assertEqual(401, client.get("/api/jobs/%s/histograms" % job["id"],
+                                         params={"type": "BONDS", "identifier": "c3_b~h_b"}
+                                         ).status_code)
 
     def test_clean_molprop_file(self):
         """!

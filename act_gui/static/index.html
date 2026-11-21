@@ -274,6 +274,21 @@
         <div class="body"><p class="empty" id="geo-empty">Nothing yet. Choose a molprop file with the compounds, with a force field in this workspace.</p>
           <div class="stats" id="geo-stats" hidden><div class="stat"><span class="lab">Compounds used</span><span class="v" id="geo-ncomp">–</span></div></div>
           <div class="xscroll"><table class="data" id="geo-table"></table></div></div></div>
+      <div class="card span-all" id="geo-hist" hidden>
+        <div class="head"><h2>Histograms</h2><span class="spacer"></span>
+          <div class="field"><select id="geo-htype" aria-label="Kind of geometry"></select></div>
+          <div class="field"><select id="geo-hid" aria-label="Bond, angle or dihedral type"></select></div>
+          <span class="row tight"><button class="btn small" id="geo-zoomin" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+            <button class="btn small" id="geo-zoomout" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+            <button class="btn small" id="geo-zoomall" type="button" title="Show all of it">All</button></span></div>
+        <div class="cols plot-left">
+          <div class="body"><div class="plot" id="geoplot"></div>
+            <p class="muted fine" id="geo-histnote"></p></div>
+          <div class="body"><h3 id="geo-bintitle">Where the values come from</h3>
+            <div class="scroll flat maxh380"><table class="data" id="geo-samples"></table></div>
+            <p class="muted fine" id="geo-binnote">Click a bar to see from which compounds, calculations and atoms its values come.</p></div>
+        </div>
+      </div>
     </div>
 
     <div class="panel cols side-right" id="fftab-edit" hidden>

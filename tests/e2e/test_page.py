@@ -1833,6 +1833,37 @@ class PageTest(unittest.TestCase):
             "return window.asked")) if body.get("task") == "geometry_ff"][0]
         self.assertEqual(1, len(request["molprop"]["sets"]["ignore"]))
         self.shot("29-geometry-chosen")
+        # The histograms of the geometries, and where the values of a bar come from
+        self.wait(lambda b: b.find_element(By.ID, "geo-hist").is_displayed())
+        kinds = Select(self.browser.find_element(By.ID, "geo-htype"))
+        self.assertTrue(kinds.first_selected_option.text.startswith("Bond lengths"))
+        self.assertIn("Angles", [o.text.split(" (")[0] for o in kinds.options])
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, "#geoplot svg"))
+        self.assertIn("values in bins of 1 pm", self.text("#geo-histnote"))
+        self.browser.execute_script("document.getElementById('geoplot').scrollIntoView({ block: 'center' })")
+        place = self.browser.execute_script("""
+            const svg = document.querySelector('#geoplot svg'), box = svg.getBoundingClientRect();
+            const scale = box.width / svg.viewBox.baseVal.width;
+            const path = [...svg.querySelectorAll('g path')].filter(p => p.getAttribute('stroke-linecap') === 'round')[0];
+            const [x, y] = path.getAttribute('d').slice(1).split('h')[0].split(' ').map(Number);
+            return [x * scale - box.width / 2, y * scale - box.height / 2];""")
+        ActionChains(self.browser).move_to_element_with_offset(
+            self.browser.find_element(By.CSS_SELECTOR, "#geoplot svg"),
+            int(round(place[0])), int(round(place[1]))).click().perform()
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, "#geo-samples tbody tr"))
+        self.assertRegex(self.text("#geo-bintitle"), r"(?i)^\d+ values? around ")
+        rows = self.browser.execute_script(
+            "return [...document.querySelectorAll('#geo-samples tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        for compound, calculation, atoms, value in rows:
+            self.assertTrue(compound)
+            self.assertRegex(atoms, r"^[A-Z][a-z]?\d+-[A-Z][a-z]?\d+$")
+            self.assertTrue(value.endswith("pm"))
+        self.shot("29c-geometry-histogram")
+        # Another kind of geometry
+        kinds.select_by_value("ANGLES")
+        self.wait(lambda b: "values in bins of 0.5 degrees" in b.find_element(By.ID, "geo-histnote").text)
+        self.assertEqual("", self.errors())
         # Nothing ticked: nothing to take geometries from
         self.browser.execute_script(
             "document.querySelector('#mpw-table input[data-all]').click();"
