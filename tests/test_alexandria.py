@@ -559,6 +559,69 @@ class RealProgramTest(unittest.TestCase):
         self.assertEqual(400, odd.status_code)
         self.assertIn("even number", odd.json()["detail"])
 
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_training_that_runs_out_of_time(self):
+        """!
+        @brief A training with more iterations than there is time for stops
+        in time by itself, with its results, and the next one continues
+        from its force field.
+        """
+        import act  # pylint: disable=import-outside-toplevel
+        if not act.program_info().find_command("train_ff").has_option("maxh"):
+            self.skipTest("This alexandria has no train_ff -maxh")
+        # Calculations of eight seconds at most, of which a training gets half
+        with tempfile.TemporaryDirectory() as tmp:
+            app = create_app(Settings(data_dir=Path(tmp), token="t", job_timeout=8.0))
+            client = TestClient(app)
+            try:
+                def send(directory, name, kind):
+                    """Upload a file of the test data of ACT"""
+                    answer = client.post("/api/uploads", params={"kind": kind, "name": name},
+                                         content=(Path(TESTDATA) / directory / name).read_bytes(),
+                                         headers=self.headers)
+                    self.assertEqual(200, answer.status_code, answer.text)
+                    return answer.json()["id"]
+
+                def run(body):
+                    """Start a job and wait for it"""
+                    answer = client.post("/api/jobs", headers=self.headers, json=body)
+                    self.assertEqual(200, answer.status_code, answer.text)
+                    end = time.time() + 60
+                    while time.time() < end:
+                        job = client.get("/api/jobs/" + answer.json()["id"],
+                                         headers=self.headers).json()
+                        if job["status"] in ("finished", "failed", "cancelled"):
+                            return job
+                        time.sleep(0.05)
+                    self.fail("The job did not finish")
+                    return None
+                mp_id = send("molprop", "booze-mono.xml", "molprop")
+                described = run({"task": "mp_describe", "molprop": {"file": mp_id}})
+                self.assertEqual("finished", described["status"], described["error"])
+                body = {"task": "train",
+                        "forcefield": {"file": send("forcefields", "halgren-PG.xml",
+                                                    "forcefield")},
+                        "molprop": {"file": mp_id, "described": described["id"]},
+                        "observables": ["epot"], "training": {"fit": ["sigma", "epsilon"]},
+                        "options": {"max_iter": 100000, "seed": 7}}
+                first = run(body)
+                # Not stopped by the server: it ended by itself, with what it found
+                self.assertEqual("finished", first["status"], first["error"])
+                self.assertTrue(first["result"]["time_limit"]["reached"])
+                self.assertAlmostEqual(4.0 / 3600, first["result"]["time_limit"]["hours"],
+                                       places=5)
+                self.assertEqual({}, first["result"]["sensitivity"])
+                self.assertGreater(len(first["result"]["parameters"]), 0)
+                self.assertIn("o", first["files"])
+                # The next one goes on from there, and has time for its few iterations
+                second = run(dict(body, forcefield={"job": first["id"]},
+                                  options={"max_iter": 2, "seed": 7, "random_init": False}))
+                self.assertEqual("finished", second["status"], second["error"])
+                self.assertFalse(second["result"]["time_limit"]["reached"])
+                self.assertIn("mode", second["result"]["sensitivity"])
+            finally:
+                app.state.jobs.shutdown()
+
 
 if __name__ == "__main__":
     unittest.main()

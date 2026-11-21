@@ -739,6 +739,14 @@ function trained(job) {
   $("#tr-sens").textContent = s.n_parameters === undefined ? ""
     : `Sensitivity analysis (${s.mode}): ${s.n_parameters_converged} of ${s.n_parameters} parameters are at a minimum of χ²` +
       (s.minimum === "yes" ? ", the force field is in a local minimum." : ", the force field is not in a local minimum: more iterations may improve it.");
+  // A training that ran out of time ended in order, without that analysis
+  const limit = result.time_limit;
+  if (limit && limit.reached) {
+    $("#tr-sens").textContent = "The training stopped because its time was up, before it had done all its "
+      + "iterations or generations. This is the best force field it found; Continue training goes on from here"
+      + ($("#ev-where").hidden ? "." : ", for longer as a job on the cluster.");
+  }
+  $("#tr-sens").classList.toggle("warntext", Boolean(limit && limit.reached));
   $("#tr-diff").hidden = !state.tr.base;
   $("#tr-result").hidden = false;
 }

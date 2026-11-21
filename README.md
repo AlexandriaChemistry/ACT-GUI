@@ -139,9 +139,15 @@ the `PATH`, or the program in the environment variable `ACT_MPIEXEC`. The
 page follows the training with a plot of χ², from what
 `train_ff -progress` writes, lists the trained parameters and compares the
 trained force field with the data. The trained force field can be saved
-or opened in the force field workspace. A training on the desktop is
-stopped after the time limit of a calculation, ten minutes; long ones
-belong on the cluster, see below.
+or opened in the force field workspace. A calculation on the desktop may
+take ten minutes, and a job on the cluster the time it asks for. A training
+is told to stop before that (`train_ff -maxh`, with a tenth of the time
+left for the end of the program, two minutes at least and half an hour at
+most): it then ends in order, with the best force field it found, and the
+page says that its time was up. Long trainings belong on the cluster, see
+below. This needs an `alexandria` that has `train_ff -maxh`, also on the
+cluster; with an older one on the desktop a training is stopped at the
+limit without results, as before.
 
 *Continue training* sets the form up to train further from a training
 that is done, here or on the cluster: the next one starts from the trained
@@ -150,7 +156,8 @@ starts from the individuals that the earlier training ended with
 (`train_ff -gpin` with the file that `-gpout` wrote), which needs as many
 processes as there were individuals. Monte Carlo alone leaves no
 individuals and does not read them, so it continues from the force field
-only. *Start anew* goes back to a training from the beginning.
+only. *Start anew* goes back to a training from the beginning. A training
+that stopped because its time was up is continued in the same way.
 
 The tab Cluster, on the desktop, takes the Slurm cluster for long jobs:
 the server, your user name there and a working directory. The comparison
