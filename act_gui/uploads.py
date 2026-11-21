@@ -205,7 +205,7 @@ class UploadStore:
         @param upload_id The identifier.
         @return The upload, None if there is none with this identifier.
         """
-        if not isinstance(upload_id, str) or not _ID_PATTERN.match(upload_id):
+        if not isinstance(upload_id, str) or not _ID_PATTERN.fullmatch(upload_id):
             return None
         meta = self._dir / (upload_id + ".json")
         if not meta.is_file():

@@ -63,7 +63,7 @@ def check_name(name: Any) -> str:
     @return The name.
     @throws ClusterError if it cannot be the name of a directory.
     """
-    if not isinstance(name, str) or not _JOB_NAME.match(name):
+    if not isinstance(name, str) or not _JOB_NAME.fullmatch(name):
         raise ClusterError("'%s' cannot be the name of a job" % (name,))
     return name
 
@@ -75,7 +75,7 @@ def _check_id(slurm_id: Any) -> str:
     @return The number.
     @throws ClusterError if it is no number.
     """
-    if not isinstance(slurm_id, str) or not _SLURM_ID.match(slurm_id):
+    if not isinstance(slurm_id, str) or not _SLURM_ID.fullmatch(slurm_id):
         raise ClusterError("'%s' is not the number of a job in Slurm" % (slurm_id,))
     return slurm_id
 
@@ -88,7 +88,7 @@ def _check_files(names: Sequence[str]) -> List[str]:
     @throws ClusterError if one has a directory or a character that is not allowed.
     """
     for name in names:
-        if not isinstance(name, str) or not _FILE_NAME.match(name):
+        if not isinstance(name, str) or not _FILE_NAME.fullmatch(name):
             raise ClusterError("'%s' cannot be the name of a file of a job" % (name,))
     return list(names)
 
@@ -192,7 +192,7 @@ def submit(settings: ClusterSettings, name: str, script: str,
     # With --parsable sbatch prints the number, and the cluster after a semicolon
     words = done.stdout.decode("utf-8", errors="replace").split()
     slurm_id = words[-1].split(";")[0] if words else ""
-    if not _SLURM_ID.match(slurm_id):
+    if not _SLURM_ID.fullmatch(slurm_id):
         raise ClusterError("Slurm on %s did not give the job a number: %s"
                            % (settings.server, _text(done)))
     return slurm_id
@@ -297,7 +297,7 @@ def status_all(settings: ClusterSettings, jobs: Sequence[Sequence[str]], *,
                                % (name, settings.server, _text(done)))
         slurm = said["state"].upper()
         answer: Dict[str, Any] = {"slurm": slurm}
-        if re.match(r"^[0-9]{1,3}$", said["exit"]):
+        if re.fullmatch(r"^[0-9]{1,3}$", said["exit"]):
             # The program ended, whatever Slurm still says about the job
             answer["exit"] = int(said["exit"])
             answer["state"] = "finished" if answer["exit"] == 0 else "failed"

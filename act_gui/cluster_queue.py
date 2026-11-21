@@ -163,7 +163,7 @@ def make_plan(name: str, task: str, command: str, options: Mapping[str, Any],
                 raise ClusterError("The file for option '%s' is not there any more" % key)
             suffix = Path(local).suffix
             sent = "%s%s%s" % (key, "" if len(items) == 1 else "-%d" % (index + 1),
-                               suffix if _SUFFIX.match(suffix) else "")
+                               suffix if _SUFFIX.fullmatch(suffix) else "")
             if sent in files:
                 raise ClusterError("Two files of the job would be called %s" % sent)
             remote[local] = sent
@@ -191,7 +191,7 @@ def make_plan(name: str, task: str, command: str, options: Mapping[str, Any],
     kept = {key: Path(filename).name for key, filename in (collect or {}).items()}
     for filename in list(files) + [n for names in produced.values() for n in names] \
             + list(kept.values()):
-        if not _FILE_NAME.match(filename):
+        if not _FILE_NAME.fullmatch(filename):
             raise ClusterError("'%s' cannot be the name of a file of a job" % filename)
     script = cluster.batch_script(settings, name, words, tasks=tasks, minutes=minutes, gpu=gpu)
     return Plan(name=name, task=task, command=command, words=words, script=script,
@@ -287,7 +287,7 @@ def _names(given: Any, lists: bool) -> Dict[str, Any]:
     for key, value in given.items():
         names = value if lists else [value]
         if not isinstance(key, str) or not isinstance(names, list) \
-                or not all(isinstance(n, str) and _FILE_NAME.match(n) for n in names):
+                or not all(isinstance(n, str) and _FILE_NAME.fullmatch(n) for n in names):
             raise ValueError("not the name of a file")
     return dict(given)
 
@@ -304,7 +304,7 @@ def _from_record(content: Any) -> ClusterJob:
         raise ValueError("not an object")
     name, slurm, state = content["name"], content["slurm"], content["state"]
     cluster_jobs.check_name(name)
-    if not isinstance(slurm, str) or not re.match(r"^[0-9]{1,18}$", slurm):
+    if not isinstance(slurm, str) or not re.fullmatch(r"^[0-9]{1,18}$", slurm):
         raise ValueError("no number of Slurm")
     if state not in STATES:
         raise ValueError("unknown state")

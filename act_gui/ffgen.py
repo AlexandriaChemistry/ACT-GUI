@@ -457,7 +457,7 @@ def _sites(given: Any, chosen: List["TypeChoice"],
             if key not in ("type", "interaction", "atoms", "parameters"):
                 raise GeneratorError("A virtual site has no '%s'" % (key,))
         name = entry.get("type")
-        if not isinstance(name, str) or not _SITE_TYPE.match(name) or name in particles:
+        if not isinstance(name, str) or not _SITE_TYPE.fullmatch(name) or name in particles:
             raise GeneratorError("'%s' cannot be the name of a virtual site: use a v and up "
                                  "to 14 letters and digits, and no name of an atom type"
                                  % (name,))
