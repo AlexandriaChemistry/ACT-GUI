@@ -329,6 +329,8 @@ async function loadMolecule() {
     if (state.pendingForcefield) {
       const up = await upload(state.pendingForcefield, "forcefield");
       state.forcefield = { ref: { file: up.id }, label: up.label };
+      // Sent once: chosen again it is the same upload
+      if (state.ownForcefield && state.ownForcefield.file === state.pendingForcefield) state.ownForcefield.ref = state.forcefield.ref;
       state.pendingForcefield = null;
     }
     const job = await runJob("charges");
@@ -679,7 +681,13 @@ $("#molfile").onchange = e => {
   loadMolecule();
 };
 $("#ffsel").onchange = e => {
-  if (e.target.value === "upload") { $("#fffile").click(); return; }
+  if (e.target.value === "upload") {
+    // The file that was opened, sent once
+    const own = state.ownForcefield;
+    if (own && own.ref) { state.forcefield = { ref: own.ref, label: own.label }; state.pendingForcefield = null; }
+    else if (own) state.pendingForcefield = own.file;
+    return;
+  }
   state.pendingForcefield = null;
   // The default, or the one that was made or opened in the force field workspace
   state.forcefield = e.target.value === "workspace" && session.forcefield
@@ -695,12 +703,19 @@ document.addEventListener("act-forcefield", () => {
     else { $("#ffsel").value = "default"; state.forcefield = {}; }
   }
 });
+// A file of the user, chosen with a button: a choice in the list cannot
+// open the file chooser in every browser
+$("#ffopen").onclick = () => $("#fffile").click();
 $("#fffile").onchange = e => {
   const file = e.target.files[0];
-  if (!file) { $("#ffsel").value = "default"; return; }
+  e.target.value = "";
+  if (!file) return;
+  state.ownForcefield = { file, ref: null, label: file.name };
   state.pendingForcefield = file;
   const option = $('#ffsel option[value="upload"]');
   option.textContent = file.name;
+  option.hidden = option.disabled = false;
+  $("#ffsel").value = "upload";
 };
 $("#run-min").onclick = minimize;
 $("#run-nma").onclick = normalModes;

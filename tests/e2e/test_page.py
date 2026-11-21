@@ -356,6 +356,29 @@ class PageTest(unittest.TestCase):
             self.assertEqual(10, len(atoms))
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_2b2_forcefield_file_of_molecule(self):
+        """!
+        @brief The force field file for a molecule is opened with a button,
+        is then the choice, and can be chosen again after another.
+        """
+        self.open_page()
+        self.assertTrue(self.browser.find_element(By.ID, "ffopen").is_displayed())
+        choice = Select(self.browser.find_element(By.ID, "ffsel"))
+        self.assertFalse(self.browser.find_element(By.CSS_SELECTOR, '#ffsel option[value="upload"]').is_enabled())
+        self.browser.find_element(By.ID, "fffile").send_keys(str(Path(TESTDATA) / "forcefields" / "ACS-g1.xml"))
+        self.assertEqual("ACS-g1.xml", choice.first_selected_option.text)
+        self.click("#load")
+        self.wait(lambda b: "ACS-g1.xml" in b.find_element(By.ID, "molchips").text)
+        choice.select_by_value("default")
+        self.click("#load")
+        self.wait(lambda b: "ACS-g1.xml" not in b.find_element(By.ID, "molchips").text
+                  and "force field" in b.find_element(By.ID, "molchips").text)
+        choice.select_by_value("upload")
+        self.click("#load")
+        self.wait(lambda b: "ACS-g1.xml" in b.find_element(By.ID, "molchips").text)
+        self.assertEqual("", self.errors())
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_2c_dimer_scan(self):
         """!
         @brief The interaction energy of a water dimer at three distances,

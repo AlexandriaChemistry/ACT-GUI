@@ -32,7 +32,8 @@
         <button class="btn" id="upload" type="button">Upload molecule file…</button>
         <input class="visually-hidden" type="file" id="molfile" accept=".sdf,.pdb,.xyz" tabindex="-1" aria-hidden="true">
         <div class="field"><label for="ffsel">Force field</label>
-          <select id="ffsel"><option value="default">Default</option><option value="workspace" hidden disabled>From the force field tab</option><option value="upload">Upload force field…</option></select></div>
+          <select id="ffsel"><option value="default">Default</option><option value="workspace" hidden disabled>From the force field tab</option><option value="upload" hidden disabled></option></select></div>
+        <button class="btn" id="ffopen" type="button" title="Use a force field file from this computer">Open file…</button>
         <input class="visually-hidden" type="file" id="fffile" accept=".xml" tabindex="-1" aria-hidden="true">
         <button class="btn primary" id="load" type="button">Load molecule</button>
       </div>
