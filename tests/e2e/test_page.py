@@ -190,6 +190,21 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: b.find_element(By.ID, "status-text").text == "Not connected")
         self.assertIn("key", self.errors())
 
+    def test_1b_logo(self):
+        """!
+        @brief The header has the logo of ACT, and the page its icon.
+        """
+        self.open_page()
+        script = self.browser.execute_script
+        self.wait(lambda b: script("const i = document.querySelector('.brand img.mark');"
+                                   "return i.complete && i.naturalWidth > 0"))
+        self.assertEqual(128, script("return document.querySelector('.brand img.mark').naturalWidth"))
+        self.assertEqual(32, script("return document.querySelector('.brand img.mark').width"))
+        status = self.browser.execute_async_script("const done = arguments[0];"
+                        "fetch('/favicon.ico').then(r => done(r.status), () => done(0))")
+        self.assertEqual(200, status)
+        self.assertEqual("", self.errors())
+
     def test_2_molecule_workspace(self):
         """!
         @brief Load acetone and run the charges, the minimization, the

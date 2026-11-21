@@ -300,6 +300,12 @@ made of (`atomtypes_gui.csv`) and the predefined virtual sites, copied from
 the directory `share` of ACT-utilities. They move here for good when
 `actgui` is removed from ACT-utilities.
 
+## The logo
+
+`act_gui/static/img/act-logo.png` (in the header of the page) and
+`act_gui/static/favicon.ico` (the icon of the page, 16 to 64 pixels) are
+made from `docs/act_logo.png` of ACT.
+
 ## The default force field
 
 `act_gui/data/forcefields/ACS-pg1.xml` is a test force field of ACT. It is

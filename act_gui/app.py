@@ -212,6 +212,15 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         return FileResponse(PACKAGE_DIR / "static" / "index.html",
                             headers={"Cache-Control": "no-store"})
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> Response:
+        """!
+        @brief The icon of the page, the logo of ACT, where browsers ask for it.
+        @return The icon.
+        """
+        return FileResponse(PACKAGE_DIR / "static" / "favicon.ico",
+                            media_type="image/vnd.microsoft.icon")
+
     @app.get("/api/session")
     async def session() -> Dict[str, Any]:
         """!

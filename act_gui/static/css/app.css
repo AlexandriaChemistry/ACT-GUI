@@ -48,8 +48,8 @@ p { margin: 0; }
 /* top bar */
 .top { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 32px; padding-block: 18px 0; border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 10px; padding-bottom: 12px; }
-.mark { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: var(--accent-ink);
-  display: grid; place-items: center; font: 600 12px var(--mono); letter-spacing: .02em; }
+/* the logo of ACT */
+.mark { width: 32px; height: 32px; display: block; flex: none; }
 .brand b { font-size: 16px; font-weight: 600; }
 .brand span { color: var(--muted); font-size: 13px; }
 .top .tabs { flex: 1 1 auto; }
