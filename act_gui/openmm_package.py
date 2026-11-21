@@ -120,12 +120,15 @@ def parse_settings(steps: Any = None, dt: Any = None, temperature: Any = None) -
         else _number("temperature", temperature))
 
 
-def simulation_dat(settings: PackageSettings) -> str:
+def simulation_dat(settings: PackageSettings, platform: str = "CPU") -> str:
     """!
     @brief The settings of the simulation in the format of act_openmm.py.
     @param settings What the user chose.
+    @param platform Where OpenMM computes: CPU, or CUDA on a machine with a GPU.
     @return The text of the file simulation.dat.
     """
+    if platform not in ("CPU", "CUDA", "OpenCL", "Reference"):
+        raise PackageError("OpenMM computes on CPU, CUDA, OpenCL or Reference")
     return """# Settings of an OpenMM simulation with an Alexandria force field, read by
 # the class ActOpenMMSim (act_openmm.py of ACT-utilities). Made by the user
 # interface of ACT for one molecule in vacuum. Change what you need.
@@ -185,9 +188,9 @@ constraintTolerance              = 0.000001
 
 # Where to compute: CUDA, OpenCL, CPU or Reference. Another one is taken
 # if this one is not there.
-usePlatform                      = CPU
+usePlatform                      = {platform}
 """.format(dt=settings.dt / 1000.0, steps=settings.steps, save=settings.save_every,
-           frame=settings.frame_every, temperature=settings.temperature)
+           frame=settings.frame_every, temperature=settings.temperature, platform=platform)
 
 
 def run_script() -> str:

@@ -100,6 +100,12 @@ class ClusterJobsApiTest(unittest.TestCase):
                 result.data = {"summary": {"molecules": 1},
                                "molecules": [{"name": "w2", "iupac": "water#water"}],
                                "validation": {"checked": True, "ok": True}}
+            elif command == "gentop" and isinstance(kwargs.get("openmm"), Path):
+                # The force field for OpenMM, next to the coordinates
+                kwargs["openmm"].write_text("<ForceField/>\n")
+                result.files["openmm"] = [kwargs["openmm"]]
+                kwargs["c"].write_text("ATOM      1  C   MOL     1       0.000   0.000   0.000\n")
+                result.files["c"] = [kwargs["c"]]
             elif command == "train_ff" and kwargs.get("optimizer") in ("GA", "HYBRID"):
                 # The individuals that a training ends with
                 pool = Path(workdir) / "genepool.csv"
@@ -300,6 +306,71 @@ class ClusterJobsApiTest(unittest.TestCase):
         refused = post(name="train-2", tasks=4, minutes=60)
         self.assertEqual(400, refused.status_code)
         self.assertIn("needs 2 individuals, not 4", refused.json()["detail"])
+        self.assertEqual(0, self.logins())
+
+    def test_openmm_simulation_on_the_cluster(self):
+        """!
+        @brief The files for OpenMM that were made here are simulated on the
+        cluster with the script of the package, on a GPU if the job asks
+        for one; its output comes back and is opened as a job here.
+        """
+        made = self.client.post("/api/jobs", headers=self.headers,
+                                json={"task": "openmm", "molecule": {"smiles": "CC"}}).json()
+        for _ in range(500):
+            made = self.client.get("/api/jobs/" + made["id"], headers=self.headers).json()
+            if made["status"] not in ("queued", "running"):
+                break
+            time.sleep(0.01)
+        self.assertEqual("finished", made["status"], made["error"])
+        body = {"task": "openmm_run", "job": made["id"],
+                "simulation": {"steps": 5000, "dt": 1, "temperature": 300}}
+
+        def post(send=False, **cluster):
+            return self.client.post("/api/cluster/jobs", headers=self.headers,
+                                    json=dict(body, cluster=cluster, send=send))
+        shown = post(name="md-1", gpu=True, minutes=30).json()
+        self.assertIn("\npython3 run.py\n", shown["script"])
+        self.assertIn("#SBATCH --gres=", shown["script"])
+        self.assertEqual(["conf.pdb", "openmm.xml", "run.py", "simulation.dat"],
+                         sorted(f["name"] for f in shown["files"]))
+        self.assertLessEqual({"energy.xvg", "temperature.xvg", "final.pdb", "output.txt"},
+                             set(shown["fetch"]))
+        for wrong in (dict(body, job="nosuchjob"), dict(body, simulation={"steps": 0}),
+                      dict(body, simulation={"steps": 10, "script": "x"})):
+            answer = self.client.post("/api/cluster/jobs", headers=self.headers,
+                                      json=dict(wrong, cluster={"name": "md-2"}))
+            self.assertEqual(400, answer.status_code, wrong)
+        self.assertEqual(0, self.logins())
+        sent = post(send=True, name="md-1", gpu=True, minutes=30)
+        self.assertEqual(200, sent.status_code, sent.text)
+        checked = self.client.post("/api/cluster/jobs/check", headers=self.headers).json()
+        job = [j for j in checked["jobs"] if j["name"] == "md-1"][0]
+        self.assertEqual(("finished", True), (job["state"], job["fetched"]), job["error"])
+        opened = self.client.post("/api/cluster/jobs/md-1/open", headers=self.headers).json()
+        self.assertEqual("openmm_run", opened["task"])
+        result = self.client.get("/api/jobs/" + opened["job"], headers=self.headers).json()
+        self.assertLessEqual({"energy", "temperature", "final", "output"}, set(result["files"]))
+        told = self.client.get("/api/jobs/%s/files/output" % opened["job"], headers=self.headers)
+        # The simulation ran on the GPU
+        self.assertIn("CUDA", told.text)
+        energy = self.client.get("/api/jobs/%s/files/energy" % opened["job"], headers=self.headers)
+        self.assertIn("-12", energy.text)
+
+    def test_second_virial_on_the_cluster(self):
+        """!
+        @brief The second virial coefficient goes to the cluster as well,
+        on the processes of the job, with its plot among what comes back.
+        """
+        body = {"task": "b2", "molecule": {"smiles": "O.O"},
+                "options": {"T1": 300, "T2": 400, "dT": 50, "maxdimer": 64}}
+        answer = self.client.post("/api/cluster/jobs", headers=self.headers,
+                                  json=dict(body, cluster={"name": "virial-1", "tasks": 8}))
+        self.assertEqual(200, answer.status_code, answer.text)
+        shown = answer.json()
+        self.assertIn("#SBATCH -n 8\n", shown["script"])
+        self.assertIn("srun alexandria b2 ", shown["script"])
+        self.assertIn(" -T1 300 ", shown["script"])
+        self.assertIn("B2T.xvg", shown["fetch"])
         self.assertEqual(0, self.logins())
 
     def test_training_on_the_cluster(self):

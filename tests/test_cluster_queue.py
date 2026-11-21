@@ -29,7 +29,7 @@ from tests.test_cluster import FakeServer
 ## The options of the stand-in for the commands that write a file, with
 ## the name of the file if none is given
 OUTPUTS = {"json": "%s.json", "epotcorr": "epot_corr.xvg", "o": "out.xml", "g": "%s.log",
-           "progress": "progress.jsonl"}
+           "progress": "progress.jsonl", "b2": "B2T.xvg"}
 
 
 def fake_arguments(command, options, workdir):

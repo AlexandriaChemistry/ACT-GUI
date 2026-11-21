@@ -265,6 +265,8 @@ input.wide { width: 100%; }
 table.data tr.more td { white-space: normal; padding-top: 0; }
 table.data tr.more pre.code { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; }
 #ev-jobscript { max-height: 340px; overflow-y: auto; }
+.jobcard { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 12px; }
+.jobcard pre.code { max-height: 300px; overflow-y: auto; }
 #ev-clusteropts input[type="number"] { width: 7.5em; }
 #ev-jobname { width: 16em; }
 table.data td.mono { font-family: var(--mono); font-size: 12.5px; }

@@ -24,17 +24,17 @@ from __future__ import annotations
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import cluster_jobs
+from . import cluster_jobs, openmm_package
 from .cluster import MAX_TASKS, ClusterError, ClusterSettings
-from .cluster_queue import ACTIVE, PROGRESS, ClusterQueue, Plan, make_plan
+from .cluster_queue import ACTIVE, PROGRESS, ClusterQueue, Plan, make_plan, make_script_plan
 from .jobs import JobManager
-from .tasks import TASKS, Prepared, Task
+from .tasks import OPENMM_RESULTS, TASKS, Prepared, Task
 
 ## What a request can say about the job itself
 CHOICES = ("name", "tasks", "minutes", "gpu")
@@ -102,6 +102,8 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         @return The plan.
         """
         chosen = body.get("cluster") or {}
+        if isinstance(body, Mapping) and body.get("task") == "openmm_run":
+            return openmm_plan(body, staging, name, chosen)
         tasks = chosen.get("tasks", 1)
         if isinstance(tasks, bool) or not isinstance(tasks, int) or not 1 <= tasks <= MAX_TASKS:
             raise fail(400, "The number of processes is between 1 and %d" % MAX_TASKS)
@@ -133,6 +135,46 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
                              gpu=chosen.get("gpu", False), observables=prepared.observables)
         except (ValueError, OSError) as exc:
             # Also an option that the command does not take
+            raise fail(400, str(exc)) from exc
+
+    def openmm_plan(body: Mapping[str, Any], staging: Path, name: str,
+                    chosen: Mapping[str, Any]) -> Plan:
+        """!
+        @brief A simulation with OpenMM of the files that were made for it
+        here, run on the cluster with the script of the package.
+        @param body    The request: job, the calculation that made the files
+        for OpenMM, and simulation, its steps, dt and temperature.
+        @param staging The directory that stands for that of the job.
+        @param name    The name of the job.
+        @param chosen  What the request says about the job: minutes, gpu.
+        @return The plan.
+        """
+        source = body.get("job")
+        made = manager.get(source) if isinstance(source, str) else None
+        pdb = made.files.get("c") if made is not None else None
+        xml = made.files.get("openmm") if made is not None else None
+        if made is None or made.task != "openmm" or made.status != "finished" \
+                or pdb is None or xml is None:
+            raise fail(400, "Make the files for OpenMM of the molecule first")
+        minutes, gpu = chosen.get("minutes", 60), chosen.get("gpu", False)
+        if not isinstance(gpu, bool):
+            raise fail(400, "Whether the job needs a GPU is yes or no")
+        simulation = body.get("simulation") or {}
+        if not isinstance(simulation, Mapping) or set(simulation) - {"steps", "dt", "temperature"}:
+            raise fail(400, "The simulation has steps, dt and temperature")
+        try:
+            settings = openmm_package.parse_settings(**simulation)
+            contents = {
+                openmm_package.PDB_NAME: Path(pdb).read_bytes(),
+                openmm_package.XML_NAME: Path(xml).read_bytes(),
+                # On a node with a GPU OpenMM computes there
+                openmm_package.DAT_NAME: openmm_package.simulation_dat(
+                    settings, "CUDA" if gpu else "CPU").encode("utf-8"),
+                openmm_package.RUN_NAME: openmm_package.run_script().encode("utf-8")}
+            return make_script_plan(name, "openmm_run", ["python3", openmm_package.RUN_NAME],
+                                    contents, OPENMM_RESULTS, staging, app.state.cluster,
+                                    minutes=minutes, gpu=gpu)
+        except (openmm_package.PackageError, ClusterError, OSError) as exc:
             raise fail(400, str(exc)) from exc
 
     def handle(body: Any) -> Dict[str, Any]:

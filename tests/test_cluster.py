@@ -400,6 +400,13 @@ class FakeServer:
             # with results as train_ff gives them and that of -epotcorr
             # with two points, and fails for -fail
             "alexandria": ALEXANDRIA,
+            # Stands in for the script of an OpenMM simulation: what it writes
+            "python3": '#!/bin/sh\n'
+                       'if [ "$1" != "run.py" ]; then exit 2; fi\n'
+                       'grep usePlatform simulation.dat > output.txt\n'
+                       'printf \'@ s0 legend "Potential Energy (kJ/mole)"\\n0 -10\\n1 -12\\n\' > energy.xvg\n'
+                       'printf \'@ s0 legend "Temperature (K)"\\n0 290\\n1 300\\n\' > temperature.xvg\n'
+                       'cp conf.pdb final.pdb\n',
         }
         for name, text in programs.items():
             path = self.dir / "bin" / name

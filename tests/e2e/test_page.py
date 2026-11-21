@@ -428,6 +428,39 @@ class PageTest(unittest.TestCase):
         self.assertIn('legend "EPOT"', saved)
         self.assertEqual(3, len([line for line in saved.splitlines() if line and line[0] not in "#@"]))
 
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_2d_second_virial(self):
+        """!
+        @brief The second virial coefficient of a water dimer with SPC/E at
+        three temperatures, here; a single compound cannot have one.
+        """
+        self.open_page()
+        self.click("#load")
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, "#qtable tr.pick"))
+        self.click('#tasks button[data-tab="b2"]')
+        self.assertIn("this structure has 1", self.text("#b2-note"))
+        self.assertFalse(self.browser.find_element(By.ID, "run-b2").is_enabled())
+        self.browser.find_element(By.ID, "fffile").send_keys(str(Path(TESTDATA) / "forcefields" / "SPCE.xml"))
+        self.browser.find_element(By.ID, "molfile").send_keys(str(Path(TESTDATA) / "molecules" / "water_dimer.pdb"))
+        self.wait(lambda b: b.find_element(By.ID, "run-b2").is_enabled())
+        for field, value in (("b2-t1", "300"), ("b2-t2", "400"), ("b2-dt", "50"), ("b2-maxdimer", "16")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        self.click("#run-b2")
+        self.wait(lambda b: b.find_element(By.ID, "b2-pill").text in ("Done", "Failed"), 300)
+        self.assertEqual("Done", self.text("#b2-pill"), self.errors())
+        rows = self.browser.execute_script(
+            "return [...document.querySelectorAll('#b2-table tbody tr')].map(r => r.cells[0].textContent)")
+        self.assertEqual(["300", "350", "400"], rows)
+        self.assertIn("3 temperatures", self.text("#b2-plotnote"))
+        self.assertEqual(["Total", "Classical"], [g.text for g in self.browser.find_elements(
+            By.CSS_SELECTOR, "#b2plot g.legend")])
+        self.shot("05d-second-virial")
+        saved = self.saved_file("#b2-xvg", "B2T.xvg", "")
+        self.assertEqual(3, len([line for line in saved.splitlines()
+                                 if line.strip() and line.lstrip()[0] not in "#@&"]))
+
     def test_3_wrong_smiles_gives_a_message(self):
         """!
         @brief A string that is no molecule gives the message of the program.
@@ -2036,6 +2069,108 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").text)
         self.assertEqual({}, json.loads(self.config.read_text()))
         self.assertEqual("", self.browser.find_element(By.ID, "cl-server").get_attribute("value"))
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_d_molecule_jobs_on_the_cluster(self):
+        """!
+        @brief The second virial coefficient and a simulation with OpenMM of
+        a molecule go to the cluster; their results are shown in the
+        molecule workspace. A directory stands in for the cluster.
+        """
+        data = Path(TESTDATA)
+        self.open_page()
+        self.click('#nav button[data-view="cluster"]')
+        for field, value in (("cl-server", "good"), ("cl-user", "spoel"),
+                             ("cl-workdir", "act/jobs")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        Select(self.browser.find_element(By.ID, "cl-load")).select_by_value("none")
+        self.click("#cl-save")
+        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").text)
+        self.click('#nav button[data-view="molecule"]')
+        self.browser.find_element(By.ID, "fffile").send_keys(str(data / "forcefields" / "SPCE.xml"))
+        self.browser.find_element(By.ID, "molfile").send_keys(str(data / "molecules" / "water_dimer.pdb"))
+        self.wait(lambda b: b.find_element(By.ID, "run-b2").is_enabled())
+
+        # The second virial coefficient on four processes of the cluster
+        self.click('#tasks button[data-tab="b2"]')
+        self.assertTrue(self.browser.find_element(By.ID, "b2-where").is_displayed())
+        self.click('#b2-place button[data-v="cluster"]')
+        self.assertEqual("Show the job…", self.text("#run-b2"))
+        self.assertFalse(self.browser.find_element(By.ID, "b2-procfield").is_displayed())
+        for field, value in (("b2-jobname", "virial-1"), ("b2-tasks", "4"), ("b2-maxdimer", "16")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        self.click("#run-b2")
+        self.wait(lambda b: b.find_element(By.ID, "b2-job").is_displayed())
+        script = self.text("#b2-jobscript")
+        self.assertIn("#SBATCH -n 4", script)
+        self.assertIn("srun alexandria b2 ", script)
+        self.assertIn(" -maxdimer 16", script)
+        self.click("#b2-send")
+        self.wait(lambda b: b.find_element(By.ID, "view-cluster").is_displayed())
+        self.assertEqual("", self.errors())
+
+        # A simulation with OpenMM on a GPU of the cluster
+        self.click('#nav button[data-view="molecule"]')
+        self.click('#tasks button[data-tab="openmm"]')
+        self.click('#omm-place button[data-v="cluster"]')
+        self.assertEqual("Show the job…", self.text("#run-omm"))
+        name = self.browser.find_element(By.ID, "omm-jobname")
+        name.send_keys("md-1")
+        self.click("#omm-gpu")
+        self.click("#run-omm")
+        self.wait(lambda b: b.find_element(By.ID, "omm-job").is_displayed())
+        script = self.text("#omm-jobscript")
+        self.assertIn("python3 run.py", script)
+        self.assertIn("#SBATCH --gres=", script)
+        files = self.browser.execute_script(
+            "return [...document.querySelectorAll('#omm-jobfiles tbody tr')].map(r => r.cells[0].textContent)")
+        self.assertEqual(["conf.pdb", "openmm.xml", "run.py", "simulation.dat"], files)
+        self.shot("36-openmm-job-shown")
+        self.click("#omm-send")
+        self.wait(lambda b: b.find_element(By.ID, "view-cluster").is_displayed())
+        self.assertEqual("", self.errors())
+
+        # Both are done when the cluster is asked; their results are shown
+        def row(job):
+            return self.browser.execute_script(
+                "const r = document.querySelector('#cj-table tbody tr[data-job=\"' + arguments[0] + '\"]');"
+                "return r ? [...r.cells].map(c => c.textContent) : null", job)
+        self.wait(lambda b: row("virial-1") is not None and row("md-1") is not None)
+
+        def asked_until_done(_browser):
+            # The cluster is not asked again within a short time, as after another test
+            if row("virial-1")[2] == "Finished" and row("md-1")[2] == "Finished":
+                return True
+            if self.browser.find_element(By.ID, "cj-ask").is_enabled():
+                self.click("#cj-ask")
+            time.sleep(1)
+            return False
+        self.wait(asked_until_done, 180)
+        self.click('#cj-table tr[data-job="md-1"] button[data-act="open"]')
+        self.wait(lambda b: b.find_element(By.ID, "omm-result").is_displayed())
+        self.assertTrue(self.browser.find_element(By.ID, "tab-openmm").is_displayed())
+        self.assertIn("2 points", self.text("#omm-note"))
+        self.assertIn("md-1", self.text("#omm-resulttitle").lower())
+        self.shot("37-openmm-results")
+        self.click('#nav button[data-view="cluster"]')
+        self.click('#cj-table tr[data-job="virial-1"] button[data-act="open"]')
+        self.wait(lambda b: b.find_element(By.ID, "tab-b2").is_displayed())
+        self.wait(lambda b: b.find_element(By.ID, "b2-plotnote").text != "")
+        self.assertEqual("", self.errors())
+
+        # Take the jobs and the cluster away again
+        self.click('#nav button[data-view="cluster"]')
+        while self.browser.find_elements(By.CSS_SELECTOR, '#cj-table button[data-act="forget"]'):
+            self.click('#cj-table button[data-act="forget"]')
+            self.click('#cj-table button[data-act="forget"]')
+            time.sleep(0.3)
+        self.wait(lambda b: b.find_element(By.ID, "cj-empty").is_displayed())
+        self.click("#cl-forget")
+        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").text)
 
     def test_b_job_on_the_cluster(self):
         """!

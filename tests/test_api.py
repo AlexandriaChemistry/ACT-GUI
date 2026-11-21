@@ -232,9 +232,9 @@ class ApiTest(unittest.TestCase):
         tasks = self.client.get("/api/tasks", headers=self.headers).json()["tasks"]
         names = [task["name"] for task in tasks]
         self.assertEqual(["charges", "minimize", "nma", "simulate", "openmm", "dimer_scan",
-                          "gen_ff", "geometry_ff", "ff_describe", "ff_edit", "ff_repair",
-                          "mp_describe", "mp_clean", "evaluate", "train"], names)
-        self.assertEqual(["molecule"] * 6 + ["forcefield"] * 5 + ["molprop"] * 4,
+                          "b2", "openmm_run", "gen_ff", "geometry_ff", "ff_describe", "ff_edit",
+                          "ff_repair", "mp_describe", "mp_clean", "evaluate", "train"], names)
+        self.assertEqual(["molecule"] * 8 + ["forcefield"] * 5 + ["molprop"] * 4,
                          [task["workspace"] for task in tasks])
         # Only the training runs on several processes; the simulation, the
         # scan and the training tell how far they are
@@ -247,8 +247,12 @@ class ApiTest(unittest.TestCase):
                        "statistics": ["INTERACTION"], "plots": ["INTERACTION"]},
                       session["observables"])
         self.assertEqual(["molecule", "forcefield", "scan"], tasks[5]["needs"])
-        self.assertEqual(["generator"], tasks[6]["needs"])
-        self.assertEqual(["forcefield", "molprop", "chosen"], tasks[7]["needs"])
+        self.assertEqual(["generator"], tasks[8]["needs"])
+        self.assertEqual(["forcefield", "molprop", "chosen"], tasks[9]["needs"])
+        # The simulation with OpenMM runs on the cluster only
+        refused = self.client.post("/api/jobs", headers=self.headers, json={"task": "openmm_run"})
+        self.assertEqual(400, refused.status_code)
+        self.assertIn("cluster only", refused.json()["detail"])
         minimize = tasks[1]
         minalg = [o for o in minimize["options"] if o["name"] == "minalg"][0]
         self.assertEqual("enum", minalg["type"])
@@ -799,6 +803,43 @@ class ApiTest(unittest.TestCase):
                             json={"task": "minimize", "molecule": {"smiles": "C"}}).json()
         self.assertEqual(404, client.get("/api/jobs/%s/scan/0" % other["id"],
                                          headers=self.headers).status_code)
+
+    def test_second_virial(self):
+        """!
+        @brief b2 gets the dimer, the force field, the temperatures and the
+        number of orientations, on as many processes as asked for; the
+        page gets the coefficients by temperature.
+        """
+        from tests.test_virial import RESULT  # pylint: disable=import-outside-toplevel
+
+        def run(command, *, workdir, **kwargs):
+            result = self.run(command, workdir=workdir, **kwargs)
+            if command == "b2":
+                result.data = RESULT
+            return result
+        app = create_app(self.settings, run=run, program_info=fake_program_info)
+        self.addCleanup(app.state.jobs.shutdown)
+        client = TestClient(app)
+        body = {"task": "b2", "molecule": {"smiles": "O.O"}, "processes": 2,
+                "options": {"T1": 300, "T2": 400, "dT": 50, "maxdimer": 64}}
+        answer = client.post("/api/jobs", headers=self.headers, json=body)
+        self.assertEqual(200, answer.status_code, answer.text)
+        for _ in range(500):
+            job = client.get("/api/jobs/" + answer.json()["id"], headers=self.headers).json()
+            if job["status"] not in ("queued", "running"):
+                break
+            time.sleep(0.01)
+        self.assertEqual("finished", job["status"], job["error"])
+        call = self.run.calls[-1]
+        self.assertEqual("b2", call["command"])
+        self.assertEqual((300, 400, 50, 64, True, 2), tuple(call["options"][k] for k in (
+            "T1", "T2", "dT", "maxdimer", "json", "processes")))
+        self.assertEqual(call["workdir"] / "B2T.xvg", call["options"]["b2"])
+        self.assertEqual([300.0, 350.0], job["result"]["virial"]["temperatures"])
+        for wrong in (dict(body, options={"T1": 0}), dict(body, options={"maxdimer": 10 ** 9}),
+                      dict(body, processes=0), dict(body, options={"b2": "/tmp/x"})):
+            self.assertEqual(400, client.post("/api/jobs", headers=self.headers,
+                                              json=wrong).status_code, wrong)
 
     def test_clean_molprop_file(self):
         """!

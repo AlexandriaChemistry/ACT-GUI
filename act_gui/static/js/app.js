@@ -19,6 +19,7 @@ import { css, esc, limits, markPoint, plot, redrawPlots } from "./plot.js";
 import { startForceFields } from "./forcefield.js";
 import { startMolprops } from "./molprop.js";
 import { startCluster } from "./cluster.js";
+import { clusterChoice } from "./clusterjob.js";
 
 /* global $3Dmol */
 
@@ -197,7 +198,7 @@ function scene() {
   const titles = { charges: "Structure and charges", minimize: state.min ? "Minimized and original" : "Structure",
     modes: state.nma ? `Vibration at ${state.nma.modes[ui.mode].frequency.value.toFixed(0)} cm⁻¹` : "Structure",
     simulate: state.sim.pdb ? "Trajectory" : "Structure", openmm: "Structure",
-    scan: state.scan.pdb && picked ? `Minimized at ${picked.distance.toFixed(3)} nm` : "Structure" };
+    scan: state.scan.pdb && picked ? `Minimized at ${picked.distance.toFixed(3)} nm` : "Structure", b2: "Structure" };
   $("#scene-title").textContent = titles[ui.tab];
   if ($("#view-molecule").hidden || !state.mol) return;   // never draw into a hidden canvas
   if (!V && !triedV) { triedV = true; V = makeViewer(); }
@@ -341,6 +342,7 @@ async function loadMolecule() {
     chips(); chargeTable();
     for (const id of ["run-min", "run-nma", "run-sim", "run-omm"]) document.getElementById(id).disabled = false;
     scanForm();
+    b2Form();
     zoomed = false;
     scene();
   } catch (e) {
@@ -630,13 +632,126 @@ async function runScan() {
 }
 $("#run-scan").onclick = runScan;
 $("#stop-scan").onclick = () => { if (state.scan.running) call("/jobs/" + state.scan.running, { method: "DELETE" }).catch(() => {}); };
+
+/* ---------- second virial coefficient ---------- */
+
+/** The choice to run b2 here or on the cluster, and that of OpenMM: set below, used by the buttons. */
+let b2Cluster = null, ommCluster = null;
+b2Cluster = clusterChoice("b2", $("#b2-cluster"), {
+  onChange: () => {
+    $("#b2-procfield").hidden = b2Cluster ? b2Cluster.onCluster() : false;
+    $("#run-b2").textContent = b2Cluster && b2Cluster.onCluster() ? "Show the job…" : "Compute";
+  } });
+// The simulation with OpenMM here (a package) or on the cluster
+ommCluster = clusterChoice("omm", $("#omm-cluster"), {
+  processes: false,
+  onChange: () => { $("#run-omm").textContent = ommCluster && ommCluster.onCluster() ? "Show the job…" : "Create package"; } });
+
+/** Say whether the molecule can be a dimer for b2. */
+function b2Form() {
+  const parts = state.mol ? compoundsOf().length : 0;
+  $("#run-b2").disabled = parts !== 2;
+  $("#b2-note").textContent = !state.mol ? "" : parts === 2 ? "" : `The second virial coefficient is of a dimer of two compounds; this structure has ${parts}.`;
+  $("#b2plot").textContent = ""; $("#b2-plotnote").textContent = ""; $("#b2-table").textContent = ""; $("#b2-xvg").hidden = true;
+  pill("b2-pill", "");
+  $("#b2-procs").max = String(session.maxProcesses || 1);
+  if (Number($("#b2-procs").value) > Number($("#b2-procs").max)) $("#b2-procs").value = $("#b2-procs").max;
+}
+
+/**
+ * Show the second virial coefficient by temperature.
+ * @param {object} job    The calculation.
+ * @param {string} source Where it ran, if not here.
+ */
+function b2Result(job, source = "") {
+  const table = job.result && job.result.virial;
+  state.jobs.b2 = job.id;
+  $("#b2-xvg").hidden = false;
+  if (!table || !table.temperatures.length) { $("#b2-plotnote").textContent = "The calculation gave no coefficients."; return; }
+  const T = table.temperatures, parts = table.parts, unit = table.unit;
+  // A line through the temperatures that have a value
+  const line = (values, extra) => {
+    const kept = T.map((t, i) => [t, values[i]]).filter(([, v]) => v !== null);
+    return { type: "line", x: kept.map(k => k[0]), y: kept.map(k => k[1]), ...extra };
+  };
+  const series = [line(parts.Total, { name: "Total" }), line(parts.Classical, { name: "Classical", color: "--series2", dash: true })];
+  const all = series.flatMap(s => s.y);
+  plot("b2plot", { label: "Second virial coefficient", xlim: limits(T, 0.03), ylim: limits(all.length ? all : [0, 1], 0.08), height: 300, zoom: true,
+                   xlabel: "Temperature (K)", ylabel: `B2 (${unit})`, series });
+  $("#b2-plotnote").textContent = `${T.length} ${T.length === 1 ? "temperature" : "temperatures"}${source}. The total is the classical value with the corrections for the force and the torque.`;
+  const t = $("#b2-table");
+  t.textContent = "";
+  t.append(el("thead", {}, el("tr", {}, el("th", { class: "n" }, "T (K)"), ...Object.keys(parts).map(p => el("th", { class: "n" }, `${p} (${unit})`)))),
+    el("tbody", {}, ...T.map((temp, i) => el("tr", {}, el("td", { class: "n" }, String(temp)),
+      ...Object.values(parts).map(col => el("td", { class: "n" }, col[i] === null ? "–" : col[i].toFixed(2)))))));
+}
+
+/** Compute the second virial coefficient here, or show it as a job for the cluster. */
+async function runB2() {
+  const options = { T1: Number($("#b2-t1").value), T2: Number($("#b2-t2").value), dT: Number($("#b2-dt").value), maxdimer: Math.round(Number($("#b2-maxdimer").value)) };
+  if (!(options.T1 > 0 && options.T2 >= options.T1 && options.dT >= 0 && options.maxdimer >= 1)) { toast("Give the temperatures, from low to high, and the number of orientations."); return; }
+  const button = $("#run-b2"), stop = $("#stop-b2");
+  alertBox("");
+  if (b2Cluster.onCluster()) {
+    try {
+      const molecule = state.input.smiles ? { smiles: state.input.smiles } : { file: state.input.file };
+      await b2Cluster.show({ task: "b2", molecule, forcefield: state.forcefield.ref || {}, options });
+    } catch (e) { alertBox("The job could not be made. " + e.message); }
+    return;
+  }
+  button.disabled = true; stop.hidden = false;
+  pill("b2-pill", "Running…", "warn");
+  try {
+    const job = await runJob("b2", options, j => { state.b2job = j.id; }, { processes: Math.max(1, Math.round(Number($("#b2-procs").value))) });
+    b2Result(job);
+    pill("b2-pill", "Done", "good");
+  } catch (e) {
+    const stopped = e.message === "The calculation was stopped";
+    pill("b2-pill", stopped ? "Stopped" : "Failed", stopped ? "warn" : "bad");
+    if (!stopped) alertBox("The second virial coefficient could not be computed. " + e.message);
+  } finally { button.disabled = !state.mol || compoundsOf().length !== 2; stop.hidden = true; state.b2job = null; }
+}
+$("#run-b2").onclick = runB2;
+$("#stop-b2").onclick = () => { if (state.b2job) call("/jobs/" + state.b2job, { method: "DELETE" }).catch(() => {}); };
+$("#b2-xvg").onclick = e => { if (state.jobs.b2) saveFile(e.currentTarget, `/jobs/${state.jobs.b2}/files/b2`, {}, "Saving…", "B2T.xvg"); };
+
+/**
+ * Show a simulation with OpenMM that ran on the cluster: its energies.
+ * @param {object} job  The calculation, opened from the tab Cluster.
+ * @param {string} name The name of the job.
+ */
+async function openmmResult(job, name) {
+  $("#omm-result").hidden = false;
+  $("#omm-resulttitle").textContent = `Simulation ${name} on the cluster`;
+  try {
+    const energy = parseXvg(await (await call(`/jobs/${job.id}/files/energy`)).text());
+    const x = energy.map(r => r[0]), y = energy.map(r => r[1]);
+    plot("ommplot", { label: "Potential energy of the simulation", xlim: limits(x, 0.02), ylim: limits(y, 0.08), height: 260, zoom: true,
+                      xlabel: "Time (ps)", ylabel: "Potential energy (kJ/mol)", series: [{ type: "line", x, y }] });
+    $("#omm-note").textContent = `${energy.length} points. The output files are in the tab Cluster, under Files of the job.`;
+  } catch (e) {
+    $("#ommplot").textContent = "";
+    $("#omm-note").textContent = "The simulation wrote no energies. " + e.message;
+  }
+}
+
+// The results of a job on the cluster, from the tab Cluster
+document.addEventListener("act-show-result", e => {
+  const job = e.detail.job;
+  if (job.task !== "b2" && job.task !== "openmm_run") return;
+  $('#nav button[data-view="molecule"]').click();
+  const tab = job.task === "b2" ? "b2" : "openmm";
+  $(`#tasks button[data-tab="${tab}"]`).click();
+  if (job.task === "b2") b2Result(job, ` · job ${e.detail.name} on the cluster`);
+  else openmmResult(job, e.detail.name);
+});
 $("#scan-xvg").onclick = e => { if (state.scan.job) saveFile(e.currentTarget, `/jobs/${state.scan.job}/files/xvg`, {}, "Saving…", "dimer-scan.xvg"); };
 for (const id of ["scan-atom1", "scan-atom2"]) $("#" + id).onchange = () => { if (state.ui.tab === "scan") scene(); };
 seg($("#eseries"), v => { state.sim.series = v; energyPlot(); });
 
 /* ---------- files for OpenMM ---------- */
 
-/** Make the force field and the coordinates for OpenMM and save the archive with them. */
+/** Make the force field and the coordinates for OpenMM and save the archive with them, or simulate them on the cluster. */
 async function openmmPackage() {
   const steps = Math.round(+$("#omm-steps").value), dt = +$("#omm-dt").value, temperature = +$("#omm-temp").value;
   if (!(steps > 0) || !(dt > 0) || !(temperature >= 0)) { toast("Give the number of steps, the time step and the temperature."); return; }
@@ -647,6 +762,12 @@ async function openmmPackage() {
     if (!state.jobs.openmm) {
       button.disabled = true; pill("omm-pill", "Running…", "warn");
       state.jobs.openmm = (await runJob("openmm")).id;
+    }
+    if (ommCluster.onCluster()) {
+      // The simulation itself runs on the cluster, with the script of the package
+      pill("omm-pill", "");
+      await ommCluster.show({ task: "openmm_run", job: state.jobs.openmm, simulation: { steps, dt, temperature } });
+      return;
     }
     const saved = await saveFile(button, `/jobs/${state.jobs.openmm}/package`, { steps, dt, temperature }, "Making archive…", "act-openmm.zip");
     pill("omm-pill", saved ? "Saved" : "Failed", saved ? "good" : "bad");
@@ -744,7 +865,7 @@ try {
 $("#e-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.sim, "simulate", "e",
   state.sim.series === "T" ? "TEMPERATURE" : state.sim.series);
 
-const TABS = { charges: "tab-charges", minimize: "tab-minimize", modes: "tab-modes", simulate: "tab-simulate", openmm: "tab-openmm", scan: "tab-scan" };
+const TABS = { charges: "tab-charges", minimize: "tab-minimize", modes: "tab-modes", simulate: "tab-simulate", openmm: "tab-openmm", scan: "tab-scan", b2: "tab-b2" };
 tabs($("#tasks"), name => { state.ui.tab = name; showOnly(Object.values(TABS), TABS[name]); scene(); });
 const VIEWS = { molecule: "view-molecule", "force-field": "view-force-field", molprop: "view-molprop", cluster: "view-cluster" };
 tabs($("#nav"), name => { showOnly(Object.values(VIEWS), VIEWS[name]); if (name === "molecule") scene(); else if (V) V.stopAnimate(); });
@@ -760,6 +881,7 @@ async function start() {
     session.token = told.token;
     state.defaultForcefield = told.default_forcefield;
     session.pdf = !!told.pdf;
+    session.maxProcesses = told.max_processes || 1;
     $('#ffsel option[value="default"]').textContent = told.default_forcefield;
     $("#smiles").maxLength = told.max_smiles_length;
     $("#status-text").textContent = (told.mode === "desktop" ? "Desktop mode" : "Server") + " · version " + told.version;

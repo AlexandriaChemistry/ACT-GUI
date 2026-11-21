@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import dimerscan, evaluation, ffgen, geometry, training
+from . import dimerscan, evaluation, ffgen, geometry, training, virial
 from .jobs import InputFile
 from .settings import Settings
 from .uploads import UploadStore
@@ -43,6 +43,10 @@ CHOSEN = "chosen"
 TRAINING = "training"
 ## The settings of a scan of the distance between the compounds of a dimer
 SCAN = "scan"
+## What an OpenMM simulation of the package writes, by the name under which it is fetched
+OPENMM_RESULTS = {"energy": "energy.xvg", "temperature": "temperature.xvg", "final": "final.pdb",
+                  "trajectory": "trajectory.pdb", "output": "output.txt"}
+OPENMM_FILES = tuple(OPENMM_RESULTS)
 
 ## What the name of a parameter looks like, such as chi or bondlength
 _PARAMETER_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}$")
@@ -107,6 +111,11 @@ class Task:
     ## A job that runs the command more than once, such as a scan, by the
     ## name of the function that does it; None for one run of the command
     runner: Optional[str] = None
+    ## Whether the command runs on several processes that share the work,
+    ## without a population
+    mpi: bool = False
+    ## Whether the task runs only as a job on the cluster
+    cluster_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -171,6 +180,19 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          progress=True,
          downloads=("xvg",),
          needs=(MOLECULE, FORCEFIELD, SCAN), runner="dimer_scan"),
+    Task(name="b2", command="b2",
+         title="Second virial coefficient of a dimer",
+         options=_CHARGE_OPTIONS + ("T1", "T2", "dT", "maxdimer"),
+         fixed={"json": True},
+         outputs={"b2": "B2T.xvg"},
+         downloads=("b2", "g"),
+         plots=("b2",),
+         digest=virial.digest, cluster=True, mpi=True),
+    Task(name="openmm_run", command="run.py",
+         title="Simulation of the molecule with OpenMM",
+         downloads=OPENMM_FILES,
+         plots=("energy", "temperature"),
+         needs=(), cluster=True, cluster_only=True),
     # --- the force field workspace ---
     Task(name="gen_ff", command="gen_ff",
          title="Generate a force field",
@@ -515,6 +537,14 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
                         chosen["optimizer"], individuals, pools(earlier) if pools else None))
             except training.TrainingError as exc:
                 raise RequestError(str(exc)) from exc
+    elif task.mpi:
+        # Processes that share the work, as many as asked for, or as the job on the cluster has
+        try:
+            number = training.processes(request.get("processes") if processes is None else processes,
+                                        training.DEFAULT_OPTIMIZER,
+                                        settings.max_processes if processes is None else processes)
+        except training.TrainingError as exc:
+            raise RequestError(str(exc)) from exc
     elif request.get("processes") not in (None, 1):
         raise RequestError("%s runs on one process" % task.title)
     options.update(chosen)

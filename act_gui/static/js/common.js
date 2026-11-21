@@ -60,6 +60,7 @@ export const session = {
   forcefield: null,     // the force field of the force field workspace: { ref, label }
   molprop: null,        // the molprop file of the molprop workspace: { file, described, label, sets: { test, ignore }, used, total }
   clusterReady: false,  // whether the user has a cluster that jobs can be sent to
+  maxProcesses: 1,      // the most processes of a calculation on this computer
 };
 
 /* ---------- messages ---------- */

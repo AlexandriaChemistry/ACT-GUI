@@ -551,6 +551,8 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         except ValueError as exc:
             raise fail(400, "The request is not valid JSON") from exc
         task, prepared = prepare(body)
+        if task.cluster_only:
+            raise fail(400, "%s runs as a job on the cluster only" % task.title)
         # A scan runs the command once for each distance, as one job
         runner = functools.partial(dimerscan.run_scan, run) if task.runner == "dimer_scan" else None
         try:

@@ -65,6 +65,7 @@
           <button role="tab" data-tab="simulate" aria-selected="false">Simulate</button>
           <button role="tab" data-tab="openmm" aria-selected="false">OpenMM</button>
           <button role="tab" data-tab="scan" aria-selected="false">Dimer scan</button>
+          <button role="tab" data-tab="b2" aria-selected="false">Second virial</button>
           <span class="ink"></span>
         </nav>
 
@@ -132,6 +133,31 @@
             <button class="btn primary end" id="run-omm" type="button" disabled>Create package</button>
             <span class="spacer"></span><span class="pill" id="omm-pill" hidden></span>
           </div>
+          <div id="omm-cluster"></div>
+          <div id="omm-result" hidden>
+            <h3 id="omm-resulttitle">Simulation on the cluster</h3>
+            <div class="plot mt8" id="ommplot"></div>
+            <p class="muted fine" id="omm-note"></p>
+          </div>
+        </div>
+        <div class="body panel" id="tab-b2" hidden>
+          <p>The second virial coefficient B<sub>2</sub>(T) of a dimer, as <code>alexandria b2</code> computes it: from the interaction energy of many orientations of the two compounds at many distances, with corrections for the force and the torque. A good result needs many orientations, which the cluster can do.</p>
+          <p class="muted fine" id="b2-note"></p>
+          <div class="row top">
+            <div class="field"><label for="b2-t1">From (K)</label><input type="number" id="b2-t1" value="300" min="1" max="10000" step="10"></div>
+            <div class="field"><label for="b2-t2">To (K)</label><input type="number" id="b2-t2" value="400" min="1" max="10000" step="10"></div>
+            <div class="field"><label for="b2-dt">Step (K)</label><input type="number" id="b2-dt" value="25" min="0" max="10000" step="5"></div>
+            <div class="field"><label for="b2-maxdimer">Orientations</label><input type="number" id="b2-maxdimer" value="1024" min="1" max="10000000" step="1"></div>
+            <div class="field" id="b2-procfield"><label for="b2-procs">Processes</label><input type="number" id="b2-procs" value="1" min="1" step="1"></div>
+          </div>
+          <div id="b2-cluster"></div>
+          <div class="row"><button class="btn primary" id="run-b2" type="button" disabled>Compute</button>
+            <button class="btn" id="stop-b2" type="button" hidden>Stop</button>
+            <span class="pill" id="b2-pill" hidden></span><span class="spacer"></span>
+            <button class="btn small" id="b2-xvg" type="button" hidden>Save as xvg</button></div>
+          <div class="plot mt8" id="b2plot"></div>
+          <p class="muted fine" id="b2-plotnote"></p>
+          <div class="xscroll"><table class="data" id="b2-table"></table></div>
         </div>
         <div class="body panel" id="tab-scan" hidden>
           <p>The interaction energy of a dimer as a function of the distance between its compounds, as the script <code>dimer_scan</code> computes it. For each distance the second compound is moved along the line between the two atoms, and the dimer is minimized with these two atoms frozen. A click on a point shows that structure.</p>
