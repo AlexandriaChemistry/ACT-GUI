@@ -637,6 +637,45 @@ class PageTest(unittest.TestCase):
         self.click("#vs-list li button")
         self.assertIn("None yet", self.text("#vs-list"))
         self.assertFalse(self.browser.find_element(By.ID, "vs-save").is_displayed())
+        # Sites of a file, as this page saves them and gen_ff -vs reads them
+        sites = [{"type": "v2f1", "interaction": "VSITE2", "atoms": ["f_b", "hf_b"],
+                  "parameters": {"vs2a": {"min": -1, "max": 0.5}}},
+                 {"type": "v3ow", "interaction": "VSITE3OUTS", "atoms": ["hw_b", "ow_b", "hw_b"],
+                  "parameters": {"vs3outs_a": {"min": -0.3, "max": 0.3},
+                                 "vs3outs_c": {"min": -12, "max": 12}}}]
+        with tempfile.TemporaryDirectory() as tmp:
+            good = Path(tmp) / "my-sites.json"
+            good.write_text(json.dumps({"description": "Two sites", "virtual_sites": sites}))
+            chooser = self.browser.find_element(By.ID, "vs-file")
+            chooser.send_keys(str(good))
+            self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#vs-list li button")) == 2)
+            self.assertEqual("", self.errors())
+            listed = self.text("#vs-list")
+            self.assertIn("v2f1 · VSITE2 · f_b, hf_b · vs2a −1 to 0.5", listed)
+            self.assertIn("v3ow · VSITE3OUTS · hw_b, ow_b, hw_b", listed)
+            self.assertTrue(self.browser.find_element(By.ID, "vs-save").is_displayed())
+            # The same file again adds nothing
+            chooser.send_keys(str(good))
+            self.wait(lambda b: "were there already" in b.find_element(By.ID, "toast").text)
+            self.assertEqual(2, len(self.browser.find_elements(By.CSS_SELECTOR,
+                                                               "#vs-list li button")))
+            # What is no file with sites is told, and changes nothing
+            wrong = {"no-list.json": json.dumps({"sites": sites}),
+                     "no-json.json": "<vsites/>",
+                     "kind.json": json.dumps({"virtual_sites": [dict(sites[0],
+                                                                     interaction="VSITE9")]}),
+                     "atoms.json": json.dumps({"virtual_sites": [dict(sites[0],
+                                                                      atoms=["f_b"])]}),
+                     "bounds.json": json.dumps({"virtual_sites": [dict(
+                         sites[0], parameters={"vs2a": {"min": 2, "max": 1}})]})}
+            for name, text in wrong.items():
+                bad = Path(tmp) / name
+                bad.write_text(text)
+                chooser.send_keys(str(bad))
+                self.wait(lambda b, name=name: name in self.errors())
+                self.assertIn("could not be read", self.errors())
+            self.assertEqual(2, len(self.browser.find_elements(By.CSS_SELECTOR,
+                                                               "#vs-list li button")))
 
     def test_6_change_a_force_field_and_use_it(self):
         """!

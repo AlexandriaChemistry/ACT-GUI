@@ -50,7 +50,8 @@ there or opened from a file:
   site and the bounds of its parameters are chosen, and the site is shown
   where it would be. The definitions are on the types of the atoms, in the
   form of `alexandria gen_ff -vs`; they are used when a force field is
-  generated and can be saved as a file.
+  generated and can be saved as a file. *Open file* adds the sites of such
+  a file, one that was saved here or one that was written for `gen_ff -vs`.
 - *Geometry* takes the bond lengths, angles and dihedral angles from the
   compounds of a molprop file with `alexandria geometry_ff`. The file is
   one of its own, or the file that is open in the tab *Molprop data*, and

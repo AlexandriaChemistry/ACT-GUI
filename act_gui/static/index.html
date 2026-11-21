@@ -233,6 +233,8 @@
           <div class="row"><button class="btn primary" id="vs-add" type="button" disabled>Add to the new force field</button></div>
         </div></div>
         <div class="card"><div class="head"><h2>Sites for the new force field</h2><span class="muted" id="vs-count"></span><span class="spacer"></span>
+            <button class="btn small" id="vs-open" type="button" title="Add the sites of a file that was saved here, or that gen_ff -vs reads">Open file…</button>
+            <input class="visually-hidden" type="file" id="vs-file" accept=".json,application/json" tabindex="-1" aria-hidden="true">
             <button class="btn small" id="vs-save" type="button" hidden>Save as file</button></div>
           <div class="body"><ul class="sites" id="vs-list"></ul>
             <p class="muted fine">They are used, next to the predefined ones, when a force field is made under Generate. The file that is saved can be given to <code>alexandria gen_ff -vs</code>.</p></div></div>
