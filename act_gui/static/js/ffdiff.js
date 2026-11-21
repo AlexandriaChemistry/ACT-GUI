@@ -166,13 +166,18 @@ export function startDiff(current, told) {
   state.current = current;
   state.told = told;
   $('#fd-other option[value="default"]').textContent = told.default_forcefield;
-  $("#fd-other").onchange = e => { if (e.target.value === "upload") $("#fd-file").click(); };
+  // A file of the user, chosen with a button: a choice in the list cannot
+  // open the file chooser in every browser
+  $("#fd-open").onclick = () => $("#fd-file").click();
   $("#fd-file").onchange = e => {
     const file = e.target.files[0];
     e.target.value = "";
-    if (!file) { if (!state.pending) $("#fd-other").value = "default"; return; }
+    if (!file) return;
     state.pending = { file, id: null };
-    $('#fd-other option[value="upload"]').textContent = file.name;
+    const option = $('#fd-other option[value="upload"]');
+    option.textContent = file.name;
+    option.hidden = option.disabled = false;
+    $("#fd-other").value = "upload";
   };
   $("#run-diff").onclick = compare;
   $("#fd-all").onchange = e => { state.all = e.target.checked; table(); };
