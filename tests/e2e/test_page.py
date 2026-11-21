@@ -1278,26 +1278,39 @@ class PageTest(unittest.TestCase):
         generations.send_keys("2")
         procs.clear()
         procs.send_keys("2")
+        # The individuals: an even number of them, here more than processes,
+        # which then compute them in turn
+        individuals = self.browser.find_element(By.ID, "tr-pop")
+        self.assertEqual("", individuals.get_attribute("value"))
+        individuals.send_keys("3")
+        script("document.getElementById('run-ev').scrollIntoView()")
+        self.click("#run-ev")
+        self.wait(lambda b: "even number of individuals" in b.find_element(By.ID, "toast").text)
+        individuals.clear()
+        individuals.send_keys("4")
         script("window.asked = []")
         script("document.getElementById('run-ev').scrollIntoView()")
         self.click("#run-ev")
         self.wait(lambda b: any('"train"' in body for body in b.execute_script("return window.asked")))
         self.wait(lambda b: b.find_element(By.ID, "ev-pill").text in ("Done", "Failed"))
         self.assertEqual("Done", self.text("#ev-pill"), self.errors())
+        request = [body for body in map(json.loads, script("return window.asked"))
+                   if body.get("task") == "train"][0]
+        self.assertEqual((2, 4), (request["processes"], request["training"]["population"]))
         script("document.getElementById('tr-continue').click()")
-        self.wait(lambda b: "2 individuals" in b.find_element(By.ID, "tr-conttext").text)
-        self.assertIn("That needs 2 processes", self.text("#tr-conttext"))
+        self.wait(lambda b: "4 individuals" in b.find_element(By.ID, "tr-conttext").text)
+        self.assertIn("That needs 4 individuals", self.text("#tr-conttext"))
+        self.assertEqual("4", individuals.get_attribute("value"))
         self.assertEqual("2", procs.get_attribute("value"))
         self.shot("24c-training-continued-population")
-        if int(procs.get_attribute("max")) >= 4:
-            # Another number of processes than there are individuals
-            procs.clear()
-            procs.send_keys("4")
-            script("document.getElementById('run-ev').scrollIntoView()")
-            self.click("#run-ev")
-            self.wait(lambda b: "needs 2 processes" in b.find_element(By.ID, "toast").text)
-            procs.clear()
-            procs.send_keys("2")
+        # Another number of individuals than the training ended with
+        individuals.clear()
+        individuals.send_keys("2")
+        script("document.getElementById('run-ev').scrollIntoView()")
+        self.click("#run-ev")
+        self.wait(lambda b: "needs 4 individuals" in b.find_element(By.ID, "toast").text)
+        individuals.clear()
+        individuals.send_keys("4")
         script("window.asked = []")
         script("document.getElementById('run-ev').scrollIntoView()")
         self.click("#run-ev")
@@ -1307,10 +1320,10 @@ class PageTest(unittest.TestCase):
         request = [body for body in map(json.loads, script("return window.asked"))
                    if body.get("task") == "train"][0]
         self.assertEqual(request["forcefield"]["job"], request["training"]["continue"])
-        self.assertEqual(2, request["processes"])
+        self.assertEqual((2, 4), (request["processes"], request["training"]["population"]))
         # Monte Carlo alone leaves the individuals where they are
         optimizer.select_by_value("MCMC")
-        self.assertIn("does not use the 2 individuals", self.text("#tr-conttext"))
+        self.assertIn("does not use the 4 individuals", self.text("#tr-conttext"))
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_9c_compounds_and_weights(self):

@@ -41,20 +41,53 @@ class TrainingTest(unittest.TestCase):
 
     def test_processes(self):
         """!
-        @brief One individual for each process: within the limit, and an
-        even number for the genetic algorithm, which pairs them.
+        @brief The processes of a training: within the limit, and two at
+        least for the genetic algorithm, which hands out the individuals.
         """
         self.assertEqual(1, training.processes(None, None, 8))
         self.assertEqual(1, training.processes(1, "MCMC", 8))
         self.assertEqual(8, training.processes(8, "MCMC", 8))
         self.assertEqual(2, training.processes(2, "GA", 8))
         self.assertEqual(4, training.processes(4, "HYBRID", 4))
+        self.assertEqual(3, training.processes(3, "GA", 8))
         for value, optimizer in ((0, "MCMC"), (9, "MCMC"), (-1, None), (2.0, "MCMC"),
                                  ("2", "MCMC"), (True, "MCMC"), (1, "GA"), (1, "HYBRID"),
-                                 (3, "GA"), (5, "HYBRID"),
                                  (None, "GA"), (2, "ga"), (2, "Newton"), (2, 3)):
             with self.assertRaises(training.TrainingError, msg=repr((value, optimizer))):
                 training.processes(value, optimizer, 8)
+
+    def test_population(self):
+        """!
+        @brief The number of individuals: as many as processes unless it is
+        given; even for the genetic algorithm, which pairs them, and then
+        also more than processes, which compute them in turn; for Monte
+        Carlo alone at most as many as processes. With fewer individuals
+        than processes each gets as many processes.
+        """
+        self.assertEqual(4, training.population(None, "MCMC", 4))
+        self.assertEqual(4, training.population({"fit": ["sigma"]}, "HYBRID", 4))
+        self.assertEqual(2, training.population({"population": 2}, "MCMC", 4))
+        self.assertEqual(1, training.population({"population": 1}, "MCMC", 3))
+        self.assertEqual(8, training.population({"population": 8}, "GA", 4))
+        self.assertEqual(6, training.population({"population": 6}, "HYBRID", 2))
+        self.assertEqual(10, training.population({"population": 10}, "HYBRID", 3))
+        self.assertEqual(2, training.population({"population": 2}, "GA", 4))
+        refused = [({"population": 3}, "MCMC", 4, "multiple of 3"),
+                   ({"population": 8}, "MCMC", 4, "Monte Carlo alone"),
+                   ({"population": 3}, "GA", 8, "even"),
+                   (None, "GA", 3, "even"),
+                   ({"population": 4}, "GA", 6, "multiple of 4"),
+                   ({"population": 0}, "MCMC", 4, "between"),
+                   ({"population": -2}, "GA", 4, "between"),
+                   ({"population": "4"}, "GA", 4, "between"),
+                   ({"population": True}, "MCMC", 1, "between"),
+                   ({"population": 2.0}, "GA", 2, "between"),
+                   ({"population": training.MAX_POPULATION + 2}, "GA", 2, "between")]
+        for spec, optimizer, processes, said in refused:
+            with self.subTest(spec=spec, optimizer=optimizer, processes=processes):
+                with self.assertRaises(training.TrainingError) as caught:
+                    training.population(spec, optimizer, processes)
+                self.assertIn(said, str(caught.exception))
 
     def test_continue_from_a_population(self):
         """!
@@ -77,7 +110,7 @@ class TrainingTest(unittest.TestCase):
             with self.assertRaises(training.TrainingError) as caught:
                 training.gene_pool("HYBRID", 2, pool)
             self.assertIn("4 individuals", str(caught.exception))
-            self.assertIn("needs 4 processes", str(caught.exception))
+            self.assertIn("needs 4 individuals, not 2", str(caught.exception))
             with self.assertRaises(training.TrainingError) as caught:
                 training.gene_pool("MCMC", 4, pool)
             self.assertIn("trained force field", str(caught.exception))

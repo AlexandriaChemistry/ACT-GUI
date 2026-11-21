@@ -1142,8 +1142,15 @@ class ApiTest(unittest.TestCase):
                                          headers=self.headers).status_code)
         self.assertEqual(404, client.get("/api/jobs/nosuchjob/population",
                                          headers=self.headers).status_code)
+        # The same individuals on more processes, each with a helper
+        job = done(post(dict(further, processes=4,
+                             training={"fit": ["sigma"], "continue": hybrid["id"], "population": 2})))
+        self.assertEqual("finished", job["status"], job["error"])
+        options = self.run.calls[-1]["options"]
+        self.assertEqual((4, 2), (options["processes"], options["pop_size"]))
+        ncalls = len(self.run.calls)
         for wrong, text in (
-                (dict(further, processes=4), "needs 2 processes"),
+                (dict(further, processes=4), "needs 2 individuals, not 4"),
                 (dict(further, processes=1, options={"optimizer": "MCMC"}), "Monte Carlo alone"),
                 (dict(further, training={"fit": ["sigma"], "continue": mcmc}), "no population"),
                 (dict(further, training={"fit": ["sigma"], "continue": "nosuchjob"}),
@@ -1152,11 +1159,20 @@ class ApiTest(unittest.TestCase):
                  "no population"),
                 (dict(further, training={"fit": ["sigma"], "continue": 3}), "identifier"),
                 (dict(further, options={"optimizer": "HYBRID", "gpin": "/etc/passwd"}), ""),
-                (dict(more, processes=3), "even number")):
+                (dict(more, processes=3), "even number"),
+                (dict(more, training={"fit": ["sigma"], "population": 3}), "even number"),
+                (dict(more, processes=1, options={"optimizer": "MCMC"},
+                      training={"fit": ["sigma"], "population": 2}), "Monte Carlo alone"),
+                (dict(more, training={"fit": ["sigma"], "population": "4"}), "between")):
             answer = post(wrong)
             self.assertEqual(400, answer.status_code, wrong)
             self.assertIn(text, answer.json()["detail"])
         self.assertEqual(ncalls, len(self.run.calls))
+        # More individuals than processes, which compute them in turn
+        bigger = done(post(dict(more, training={"fit": ["sigma"], "population": 6})))
+        self.assertEqual("finished", bigger["status"], bigger["error"])
+        options = self.run.calls[-1]["options"]
+        self.assertEqual((2, 6), (options["processes"], options["pop_size"]))
 
         # The compounds for testing chosen by hand, and a property that counts double
         chosen = dict(body, weights={"inter": 2},
