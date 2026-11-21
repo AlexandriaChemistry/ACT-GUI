@@ -28,13 +28,34 @@ In development. What is there:
 The wavenumber axis of the spectrum can be reversed, to run from high to
 low as in measured spectra. The spectrum and the energies can be saved as PDF files, which
 [plotXVG](https://github.com/AlexandriaChemistry/plotXVG) makes on the
-server from the xvg files of the program.
+server from the xvg files of the program; the spectrum also as the xvg
+file itself.
+
+The tab Dimer scan does what the script `dimer_scan` of ACT-utilities
+does: for a structure of two compounds you pick an atom of each (the
+closest pair is proposed), a range of distances and whether bond lengths
+are constrained. For each distance the second compound is moved along the
+line between the two atoms and `alexandria minimize` relaxes the dimer
+with these atoms frozen. The interaction energy is plotted against the
+distance while the scan runs; a click on a point shows the minimized dimer
+at that distance. This needs an `alexandria` whose `minimize -json` has
+the interaction energies of a dimer.
+
+The tab Second virial computes the second virial coefficient of a dimer
+with `alexandria b2`, here on several processes or as a job on the
+cluster, and shows B2(T) with its classical part and the corrections for
+the force and the torque.
 
 The tab OpenMM gives an archive with which the molecule is simulated with
 OpenMM and the same force field: the coordinates and the force field file
 that `alexandria gentop -openmm` writes, the settings of the simulation, a
 script that runs it with `ActOpenMMSim` of ACT-utilities, and a text that
-says what is what.
+says what is what. With a cluster set, the simulation itself can run there:
+the same files go along, the job runs `python3 run.py` (OpenMM and
+ACT-utilities have to be there, for instance in the environment that the
+settings of the cluster load), on a GPU if the job asks for one, and what
+the script writes comes back; the potential energy is plotted when the job
+is opened.
 
 The force field workspace has one force field at a time, which is made
 there or opened from a file:
@@ -58,7 +79,11 @@ there or opened from a file:
 - *Geometry* takes the bond lengths, angles and dihedral angles from the
   compounds of a molprop file with `alexandria geometry_ff`. The file is
   one of its own, or the file that is open in the tab *Molprop data*, and
-  then only the compounds that are ticked there are used.
+  then only the compounds that are ticked there are used. The histograms
+  of the bond lengths, angles and dihedrals are shown, one type at a
+  time; a click on a bar lists from which compounds, calculations and
+  atoms its values come (`geometry_ff -samples`), to understand odd
+  values.
 - *Edit and validate* lists the parameters with their value, bounds and
   mutability, changes them with `alexandria edit_ff`, and shows the
   problems that `edit_ff -validate` finds, with a button to write the force
@@ -80,7 +105,10 @@ compounds with their formula, the compounds they consist of, the number of
 calculations and the methods, the number of values of each property, and
 the result of the validation of `alexandria edit_mp -validate`. A click on
 the header of a column sorts the table by it, a second click the other way
-around and a third gives the order of the file again.
+around and a third gives the order of the file again. Calculations that are
+in the file twice with the same results, which `train_ff` uses once, are
+reported; *Remove them and save* writes the file without them, as
+`edit_mp -validate -o` does, under the name of the file or another.
 
 With a file open, a force field (the default, the one of the force field
 workspace or an uploaded one) can be compared with its data: `alexandria
@@ -279,8 +307,9 @@ character that means something to a shell, is refused.
 ### Jobs
 
 With a cluster set, a calculation that can run there has the choice "On
-the cluster": the comparison of a force field with a molprop file, and
-the training of a force field. A training has one set of parameters for
+the cluster": the comparison of a force field with a molprop file, the
+training of a force field, the second virial coefficient and a simulation
+with OpenMM. A training has one set of parameters for
 each process of the job. You give the job a name (or leave that to the interface),
 the number of processes, a time limit and whether it needs a GPU. The
 interface then shows the job before anything is sent: the script for
@@ -297,7 +326,10 @@ state of all jobs in one login, not more often than `poll_seconds` says
 (the button Ask the cluster now asks sooner, but not within half a
 minute), and only while the page is open. When a job has ended its
 results are fetched in one more login, and Show results shows them as
-those of a calculation on your machine. A training writes how far it is
+those of a calculation on your machine. All output files come back, also
+those that the program writes under their default names without being
+asked, such as the log file of a training; Files lists them, and each can
+be saved. A training writes how far it is
 in a file in its directory; the last line of it comes along in the login
 that asks for the state, and the list shows the generation and the lowest
 χ² so far. Of what the cluster sends only these numbers are kept. After a login that did not work
