@@ -100,8 +100,11 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         tasks = chosen.get("tasks", 1)
         if isinstance(tasks, bool) or not isinstance(tasks, int) or not 1 <= tasks <= MAX_TASKS:
             raise fail(400, "The number of processes is between 1 and %d" % MAX_TASKS)
-        # A command with an individual for each process gets as many as the job has
-        task, prepared = prepare(body, tasks)
+        # A command with an individual for each process gets as many as the
+        # job has, and a training the time of the job to stop in
+        minutes = chosen.get("minutes", 60)
+        timed = isinstance(minutes, int) and not isinstance(minutes, bool) and minutes > 0
+        task, prepared = prepare(body, tasks, 60.0 * minutes if timed else None)
         if not task.cluster:
             raise fail(400, "%s runs on this computer only" % task.title)
         options = dict(prepared.options)
@@ -113,7 +116,7 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
             return make_plan(name, task.name, task.command, options, staging,
                              arguments, app.state.cluster, outputs=dict(task.outputs),
                              inputs=prepared.inputs, collect=dict(task.collect),
-                             tasks=tasks, minutes=chosen.get("minutes", 60),
+                             tasks=tasks, minutes=minutes,
                              gpu=chosen.get("gpu", False))
         except (ValueError, OSError) as exc:
             # Also an option that the command does not take

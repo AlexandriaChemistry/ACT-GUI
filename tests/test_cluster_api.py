@@ -18,6 +18,7 @@ import re
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -50,6 +51,8 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.headers = {TOKEN_HEADER: "t"}
         self.apps = []
         self.plotted = []
+        ## What the alexandria of this machine can do
+        self.program_info = fake_program_info
         forcefield = self.dir / "default.xml"
         forcefield.write_bytes(FF)
         self.options = {"data_dir": self.dir / "data", "token": "t",
@@ -110,7 +113,8 @@ class ClusterJobsApiTest(unittest.TestCase):
             return Path(pdf)
         options = dict(self.options)
         options.update(more)
-        app = create_app(Settings(**options), run=run, program_info=fake_program_info,
+        app = create_app(Settings(**options), run=run,
+                         program_info=lambda: self.program_info(),
                          plotter=plotter, arguments=fake_arguments)
         self.apps.append(app)
         return TestClient(app)
@@ -228,6 +232,35 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.assertEqual(job_id, self.client.get("/api/cluster/jobs",
                                                  headers=self.headers).json()["jobs"][0]["job"])
         self.assertEqual(3, self.logins())
+
+    def test_training_stops_in_the_time_of_the_job(self):
+        """!
+        @brief A training on the cluster is told to stop before the time
+        limit of its job, if the program knows how; a comparison is not.
+        """
+        def with_maxh():
+            info = fake_program_info()
+            options = dict(info.commands["train_ff"].options)
+            options["maxh"] = SimpleNamespace(name="maxh", type="real", default=0, values=(),
+                                              description="Help for maxh")
+            info.commands["train_ff"] = SimpleNamespace(
+                options=options, has_option=lambda name: name in options)
+            return info
+        self.program_info = with_maxh
+        body = dict(self.body, task="train", observables=["inter"],
+                    training={"fit": ["sigma"]}, options={"max_iter": 20})
+
+        def script(request, **chosen):
+            answer = self.client.post("/api/cluster/jobs", headers=self.headers,
+                                 json=dict(request, cluster=chosen, send=False))
+            self.assertEqual(200, answer.status_code, answer.text)
+            return answer.json()["script"]
+        # Two hours less a tenth, a day less half an hour, ten minutes less two
+        self.assertIn(" -maxh 1.8 ", script(body, name="t1", tasks=1, minutes=120))
+        self.assertIn(" -maxh 23.5 ", script(body, name="t1", tasks=1, minutes=1440))
+        self.assertIn(" -maxh 0.13333 ", script(body, name="t1", tasks=1, minutes=10))
+        self.assertNotIn("-maxh", script(self.body, name="c1", tasks=1, minutes=120))
+        self.assertEqual(0, self.logins())
 
     def test_training_continued_on_the_cluster(self):
         """!

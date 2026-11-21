@@ -411,12 +411,15 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         path = job.files.get("gpout")
         return path if path is not None and path.is_file() else None
 
-    def prepare(body: Any, processes: Optional[int] = None) -> Tuple[Task, Prepared]:
+    def prepare(body: Any, processes: Optional[int] = None,
+                seconds: Optional[float] = None) -> Tuple[Task, Prepared]:
         """!
         @brief Check a request for a calculation.
         @param body      The request.
         @param processes The number of processes that the command will run
         on when that is not up to the request, as for a job on a cluster.
+        @param seconds   The longest time the calculation may take when that
+        is not the limit of this computer, as for a job on a cluster.
         @return The task and the options of its command.
         """
         try:
@@ -424,15 +427,24 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
                 raise RequestError("The request must be an object")
             task = find_task(body.get("task"))
             try:
-                lacking = program_lacks(task, program_info())
+                info = program_info()
+                lacking = program_lacks(task, info)
             except Exception:  # pylint: disable=broad-except
                 # A program that cannot be asked is reported when it is started
-                lacking = None
+                info = lacking = None
             if lacking:
                 raise fail(409, lacking)
-            return task, build_request(task, body, settings, uploads, written_forcefield,
-                                       described_molprop,
-                                       processes if task.parallel else None, gene_pool)
+            prepared = build_request(task, body, settings, uploads, written_forcefield,
+                                     described_molprop,
+                                     processes if task.parallel else None, gene_pool)
+            # A training stops in time by itself and leaves its results,
+            # instead of being stopped without them, if the program can
+            limit = settings.job_timeout if seconds is None else seconds
+            command = info.commands.get(task.command) if info is not None else None
+            if task.name == "train" and limit and limit > 0 and command is not None \
+                    and command.has_option("maxh"):
+                prepared.options["maxh"] = training.max_hours(limit)
+            return task, prepared
         except RequestError as exc:
             raise fail(400, str(exc)) from exc
 

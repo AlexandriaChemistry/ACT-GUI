@@ -89,6 +89,28 @@ class TrainingTest(unittest.TestCase):
             with self.assertRaises(training.TrainingError):
                 training.gene_pool("Newton", 4, pool)
 
+    def test_time_to_train_in(self):
+        """!
+        @brief A training gets the time of its job less what the end of
+        train_ff needs: a tenth, two minutes at least, half an hour at most.
+        """
+        self.assertAlmostEqual(480 / 3600, training.max_hours(600), places=4)
+        self.assertAlmostEqual(1.8, training.max_hours(2 * 3600), places=4)
+        self.assertAlmostEqual(23.5, training.max_hours(24 * 3600), places=4)
+        # A job of a minute or two: half of it
+        self.assertAlmostEqual(30 / 3600, training.max_hours(60), places=4)
+        self.assertAlmostEqual(60 / 3600, training.max_hours(120), places=4)
+        for seconds in (1, 60, 600, 3600, 86400, 7 * 86400):
+            self.assertGreater(training.max_hours(seconds), 0)
+            self.assertLess(training.max_hours(seconds) * 3600, seconds)
+        # What the page hears of it
+        result = {"statistics": {}, "time_limit": {"limit": {"value": 1.8, "unit": "h"},
+                                                   "reached": "yes"}}
+        self.assertEqual({"reached": True, "hours": 1.8}, training.digest(result)["time_limit"])
+        result["time_limit"]["reached"] = "no"
+        self.assertFalse(training.digest(result)["time_limit"]["reached"])
+        self.assertNotIn("time_limit", training.digest({"statistics": {}}))
+
     def test_part_for_testing(self):
         """!
         @brief The part of the compounds for testing is a number up to a

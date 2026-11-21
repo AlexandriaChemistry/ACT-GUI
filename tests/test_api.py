@@ -931,6 +931,66 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(401, client.post("/api/selection",
                                           json={"described": described}).status_code)
 
+    def test_training_gets_the_time_to_stop_in(self):
+        """!
+        @brief A program that can stop a training in time (train_ff -maxh)
+        is told the time: that of a calculation on this computer, less
+        what the end of train_ff needs. An older program is not.
+        """
+        def with_maxh():
+            info = fake_program_info()
+            options = dict(info.commands["train_ff"].options)
+            options["maxh"] = SimpleNamespace(name="maxh", type="real", default=0, values=(),
+                                              description="Help for maxh")
+            info.commands["train_ff"] = SimpleNamespace(
+                options=options, has_option=lambda name: name in options)
+            return info
+
+        for program, expected in ((with_maxh, 480 / 3600), (fake_program_info, None)):
+            local = FakeRun()
+
+            def run(command, *, workdir, local=local, **kwargs):
+                result = local(command, workdir=workdir, **kwargs)
+                if command == "edit_mp":
+                    result.data = {"summary": {"molecules": 2},
+                                   "molecules": [{"name": "water"}, {"name": "methanol"}],
+                                   "validation": {"checked": True, "ok": True}}
+                return result
+            app = create_app(self.settings, run=run, program_info=program)
+            self.addCleanup(app.state.jobs.shutdown)
+            client = TestClient(app)
+            molprop = client.post("/api/uploads", params={"kind": "molprop", "name": "m.xml"},
+                                  content=MP, headers=self.headers).json()["id"]
+
+            def done(answer, client=client):
+                self.assertEqual(200, answer.status_code, answer.text)
+                for _ in range(500):
+                    job = client.get("/api/jobs/" + answer.json()["id"],
+                                     headers=self.headers).json()
+                    if job["status"] in ("finished", "failed", "cancelled"):
+                        return job
+                    time.sleep(0.01)
+                self.fail("The job did not finish")
+                return None
+            described = done(client.post("/api/jobs", headers=self.headers, json={
+                "task": "mp_describe", "molprop": {"file": molprop}}))
+            done(client.post("/api/jobs", headers=self.headers, json={
+                "task": "train", "forcefield": {"default": True},
+                "molprop": {"file": molprop, "described": described["id"]},
+                "observables": ["epot"], "training": {"fit": ["sigma"]}}))
+            options = local.calls[-1]["options"]
+            self.assertEqual("train_ff", local.calls[-1]["command"])
+            if expected is None:
+                self.assertNotIn("maxh", options)
+            else:
+                self.assertAlmostEqual(expected, options["maxh"], places=4)
+            # A comparison takes the time it takes
+            done(client.post("/api/jobs", headers=self.headers, json={
+                "task": "evaluate", "forcefield": {"default": True},
+                "molprop": {"file": molprop, "described": described["id"]},
+                "observables": ["epot"]}))
+            self.assertNotIn("maxh", local.calls[-1]["options"])
+
     def test_read_selection_file(self):
         """!
         @brief A selection file of the user is read for a molprop file,

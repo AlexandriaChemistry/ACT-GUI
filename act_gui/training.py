@@ -179,6 +179,20 @@ def gene_pool(optimizer: Any, number: int, pool: Optional["os.PathLike[str]"]) -
     return {"gpin": Path(pool)}
 
 
+def max_hours(seconds: float) -> float:
+    """!
+    @brief The time that train_ff gets to train (-maxh) in a job that may
+    take a given time. What is left is for what comes after the training:
+    the evaluation of the trained force field and writing the results. That
+    is a tenth of the time, two minutes at least and half an hour at most,
+    and never more than half of the time.
+    @param seconds The longest time the job may take.
+    @return The time in hours.
+    """
+    left = min(max(0.1 * seconds, 120.0), 1800.0, 0.5 * seconds)
+    return round((seconds - left) / 3600.0, 5)
+
+
 def digest(data: Any) -> Any:
     """!
     @brief What of the result of train_ff goes to the browser after a
@@ -188,7 +202,8 @@ def digest(data: Any) -> Any:
     @return The statistics, the outliers and the compounds as for an
     evaluation, with "parameters", a list with for each parameter its kind
     ("class"), its name and its best value with the spread over the
-    individuals, and "sensitivity", the numbers of the analysis.
+    individuals, "sensitivity", the numbers of the analysis, and, for a
+    training with a time limit, "time_limit" with whether it was reached.
     """
     if not isinstance(data, Mapping):
         return data
@@ -210,6 +225,12 @@ def digest(data: Any) -> Any:
     made["sensitivity"] = {key: value for key, value in sensitivity.items()
                            if not isinstance(value, (Mapping, list))} \
         if isinstance(sensitivity, Mapping) else {}
+    # Whether the training stopped because its time was up, see max_hours
+    limit = data.get("time_limit")
+    if isinstance(limit, Mapping):
+        hours = limit.get("limit")
+        made["time_limit"] = {"reached": limit.get("reached") == "yes",
+                              "hours": hours.get("value") if isinstance(hours, Mapping) else None}
     return made
 
 
