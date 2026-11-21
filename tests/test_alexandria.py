@@ -367,9 +367,16 @@ class RealProgramTest(unittest.TestCase):
             self.assertEqual(total, len(molecules))
             self.assertEqual(first, molecules[0]["name"])
             self.assertEqual(2 if dimers else 1, len(molecules[0]["fragments"]))
+            # The monomers of each compound, for choosing compounds by them
+            self.assertEqual(first.split("#"), molecules[0]["monomers"])
             validation = job["result"]["validation"]
             self.assertTrue(validation["checked"])
             self.assertTrue(validation["ok"])
+            # A selection file of the compounds that have the first monomer
+            chosen = self.client.post("/api/selection", headers=self.headers, json={
+                "described": job["id"], "monomers": {"names": first.split("#")[:1]}})
+            self.assertEqual(200, chosen.status_code, chosen.text)
+            self.assertEqual((molecules[0]["iupac"] or first) + "|Train\n", chosen.text)
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_evaluate_a_force_field(self):

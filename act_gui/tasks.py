@@ -190,7 +190,7 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          title="Read and check a molprop file",
          fixed={"json": True, "validate": True},
          downloads=("g",),
-         needs=(MOLPROP,), workspace="molprop"),
+         needs=(MOLPROP,), workspace="molprop", digest=evaluation.described),
     Task(name="evaluate", command="train_ff",
          title="Compare a force field with the data of a molprop file",
          fixed={"json": True, "optimize": False},
@@ -467,6 +467,34 @@ def find_task(name: Any) -> Task:
     if not isinstance(name, str) or name not in TASKS:
         raise RequestError("Unknown task '%s'" % (name,))
     return TASKS[name]
+
+
+def program_lacks(task: Task, program: Any) -> Optional[str]:
+    """!
+    @brief Whether the alexandria program can do a task at all.
+
+    The interface gives some options with every run of a task, such as the
+    one for results in JSON format. A program that does not have them is
+    older than the interface, and the user should hear that instead of the
+    name of an option that was never asked for.
+    @param task    The task.
+    @param program The description of the program from act.program_info().
+    @return What the program lacks, as a message for the user, or None if
+    it has the command and the options that the task always uses.
+    """
+    advice = (" The program is older than this interface: install a newer version of ACT.")
+    command = program.commands.get(task.command)
+    if command is None:
+        return ("The alexandria program does not have the command %s, which is needed to: %s.%s"
+                % (task.command, task.title[:1].lower() + task.title[1:], advice))
+    missing = [name for name in list(task.fixed) + list(task.outputs)
+               if not command.has_option(name)]
+    if missing:
+        return ("The alexandria program does not have the option%s %s of %s, which this "
+                "interface needs.%s"
+                % ("" if len(missing) == 1 else "s",
+                   " and ".join("-" + name for name in missing), task.command, advice))
+    return None
 
 
 def describe_task(task: Task, command_info: Optional[Any]) -> Dict[str, Any]:

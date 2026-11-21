@@ -267,3 +267,13 @@ table.data tr.more pre.code { white-space: pre-wrap; overflow-wrap: anywhere; ma
 #ev-clusteropts input[type="number"] { width: 7.5em; }
 #ev-jobname { width: 16em; }
 table.data td.mono { font-family: var(--mono); font-size: 12.5px; }
+.stack-s { display: grid; gap: 10px; min-width: 0; }
+.stack-s > .fine { margin-top: 0; }
+.monolist { display: grid; gap: 7px; padding: 10px 12px; }
+.monolist .n { color: var(--muted); font-size: 12px; margin-left: 2px; }
+.row.bottom { align-items: flex-end; }
+input.short { width: 84px; }
+table.data th.tick, table.data td.tick { width: 30px; padding-right: 0; }
+table.data td.tick input, table.data th.tick input { display: block; }
+tr.unused td:not(.tick) { opacity: .55; }
+.row.nowrap { flex-wrap: nowrap; }

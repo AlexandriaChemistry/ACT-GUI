@@ -87,6 +87,28 @@ above the table for all compounds that the table shows, which are those
 with the text that is searched for. A comparison then gives the
 statistics for both data sets.
 
+The same choices make a selection file for `train_ff -sel`, which the
+card *Selection file* saves under the name of the molprop file with the
+extension `.dat`. It has the compounds that are ticked in the table, each
+for training or for testing:
+
+- A box in front of each compound says whether it is used, and the box in
+  the header does so for all compounds that the table shows. The table can
+  be limited to the compounds that have values of one property.
+- For a file with dimers the card lists the monomers. Ticking monomers
+  chooses the dimers they are in: with the dimers A#B, A#C and B#C,
+  ticking only A gives A#B and A#C but not B#C. The other setting uses a
+  dimer only when all its monomers are ticked. The monomers are the parts
+  of the name of a compound between the # signs when there are as many as
+  the compound has molecules; otherwise the names or formulas that
+  `edit_mp` gives of those.
+- *Draw at random* uses a percentage of the ticked compounds for testing
+  and the others for training.
+
+Other programs can ask the server for the same file with a request to
+`/api/selection`, with the compounds by name or by monomer and a part for
+testing that is drawn with a seed.
+
 A force field can also be trained on the data of the file, with `alexandria
 train_ff`: you choose the kinds of parameters to train (such as `sigma`
 and `epsilon`) from those that the force field has and that are not fixed,

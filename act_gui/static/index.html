@@ -323,6 +323,7 @@
     </div>
     <div class="cols side-right" id="mpw-content" hidden>
       <div class="card"><div class="head"><h2>Compounds</h2><span class="muted" id="mpw-count"></span><span class="spacer"></span>
+          <div class="field"><select id="mpw-prop" aria-label="Show the compounds with data for a property"><option value="">All compounds</option></select></div>
           <div class="field"><input type="text" id="mpw-search" placeholder="Find name or formula" aria-label="Find a compound" spellcheck="false" autocomplete="off"></div></div>
         <div class="setbar" id="mpw-setbar"><span class="muted fine" id="mpw-sets"></span><span class="spacer"></span>
           <span class="muted fine">Use the compounds in the table for</span>
@@ -335,6 +336,24 @@
         <div class="card"><div class="head"><h2>Validation</h2><span class="spacer"></span><span class="pill" id="mpw-vpill" hidden></span></div>
           <div class="body"><ul class="list" id="mpw-vlist"></ul>
             <p class="muted fine">Checked: every calculation of a compound has the same atoms in the same order, and the compounds of a dimer are in the same order everywhere.</p></div></div>
+        <div class="card" id="sel-card"><div class="head"><h2>Selection file</h2><span class="spacer"></span>
+            <button class="btn small primary" id="sel-save" type="button">Save selection file</button></div>
+          <div class="body stack-s">
+            <p class="muted fine">A selection file tells <code>train_ff</code> which compounds it uses: those that are ticked in the table, each for training or for testing.</p>
+            <div class="stack-s" id="sel-mono" hidden>
+              <div class="row nowrap"><span class="lab">Choose by monomer</span><span class="spacer"></span>
+                <span class="row tight"><button class="btn small" id="sel-all" type="button">All</button><button class="btn small" id="sel-none" type="button">None</button></span></div>
+              <div class="row"><span class="muted fine">Use a compound when</span>
+                <div class="seg" id="sel-mode" role="group" aria-label="When a compound is used"><button type="button" aria-pressed="true" data-v="any">one of its monomers is ticked</button><button type="button" aria-pressed="false" data-v="every">all are ticked</button></div></div>
+              <input type="text" id="sel-find" placeholder="Find monomer" aria-label="Find a monomer" spellcheck="false" autocomplete="off" hidden>
+              <div class="scroll maxh250 monolist" id="sel-list"></div>
+              <p class="muted fine" id="sel-mononote"></p>
+            </div>
+            <div class="row bottom"><div class="field"><label for="sel-percent">For testing (%)</label>
+                <input class="short" type="number" id="sel-percent" min="1" step="1" value="20"></div>
+              <button class="btn small" id="sel-draw" type="button" title="Use this part of the ticked compounds for testing, drawn at random, and the others for training">Draw at random</button>
+              <button class="btn small" id="sel-clear" type="button" title="Use all ticked compounds for training, none for testing">None</button></div>
+          </div></div>
         <div class="card" id="mpw-detail" hidden><div class="head"><h2 id="mpw-dname"></h2></div>
           <div class="body"><div class="chips" id="mpw-dchips"></div>
             <div class="xscroll"><table class="data" id="mpw-dfrag"></table></div>

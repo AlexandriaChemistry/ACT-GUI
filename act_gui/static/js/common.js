@@ -147,13 +147,14 @@ export async function upload(file, kind) {
  * @param {object} params   The parameters of the request.
  * @param {string} busy     The text of the button while the file is made.
  * @param {string} fallback The name of the file if the server gives none.
+ * @param {object} json     What the file is made from, when that is more than parameters can say.
  * @returns {Promise<boolean>} Whether the file was saved.
  */
-export async function saveFile(button, path, params, busy, fallback) {
+export async function saveFile(button, path, params, busy, fallback, json = undefined) {
   const label = button.textContent;
   button.disabled = true; button.textContent = busy;
   try {
-    const answer = await call(path, { params });
+    const answer = await call(path, json === undefined ? { params } : { method: "POST", json, params });
     const named = /filename="?([^";]+)"?/.exec(answer.headers.get("content-disposition") || "");
     const name = named ? named[1] : fallback;
     const url = URL.createObjectURL(await answer.blob()), link = document.createElement("a");
