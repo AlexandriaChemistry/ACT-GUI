@@ -20,8 +20,10 @@ population; the genetic algorithm needs two at least.
 """
 from __future__ import annotations
 
+import os
 import re
-from typing import Any, Dict, List, Mapping
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional
 
 from . import evaluation
 
@@ -40,6 +42,9 @@ MAX_PARAMETERS = 50
 
 ## The largest part of the compounds that can be kept for testing
 MAX_TEST = 0.5
+
+## The largest gene pool that is read to count its individuals
+MAX_POOL_BYTES = 64 * 1024 * 1024
 
 ## The optimizers of train_ff, and whether they need more than one process
 OPTIMIZERS: Dict[str, bool] = {"MCMC": False, "HYBRID": True, "GA": True}
@@ -104,9 +109,74 @@ def processes(value: Any, optimizer: Any, largest: int) -> int:
     name = DEFAULT_OPTIMIZER if optimizer is None else optimizer
     if name not in OPTIMIZERS:
         raise TrainingError("The optimizer is one of %s" % ", ".join(OPTIMIZERS))
-    if OPTIMIZERS[name] and number < 2:
-        raise TrainingError("The optimizer %s needs at least two processes" % name)
+    if OPTIMIZERS[name] and (number < 2 or number % 2):
+        # train_ff makes the next generation from pairs of individuals
+        raise TrainingError("The optimizer %s needs an even number of processes, two at least"
+                            % name)
     return number
+
+
+def continued(spec: Any) -> Optional[str]:
+    """!
+    @brief The earlier training of which this one continues the population.
+    @param spec The choices: an object that may have "continue", the
+    identifier of the calculation.
+    @return The identifier, None if the training starts anew.
+    @throws TrainingError if it is not an identifier.
+    """
+    earlier = spec.get("continue") if isinstance(spec, Mapping) else None
+    if earlier is None:
+        return None
+    if not isinstance(earlier, str) or not earlier:
+        raise TrainingError("The training to continue is given by its identifier")
+    return earlier
+
+
+def pool_size(path: "os.PathLike[str]") -> int:
+    """!
+    @brief The number of individuals in a gene pool that train_ff wrote
+    (-gpout), which has a line for each of them.
+    @param path The file.
+    @return The number of lines that are not empty.
+    @throws TrainingError if the file cannot be read or is too large to be
+    a gene pool.
+    """
+    try:
+        if os.path.getsize(path) > MAX_POOL_BYTES:
+            raise TrainingError("The population of the earlier training is too large")
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return sum(1 for line in handle if line.strip())
+    except OSError as exc:
+        raise TrainingError("The population of the earlier training cannot be read") from exc
+
+
+def gene_pool(optimizer: Any, number: int, pool: Optional["os.PathLike[str]"]) -> Dict[str, Any]:
+    """!
+    @brief The option with which train_ff continues from the population of
+    an earlier training.
+
+    train_ff reads a gene pool for the genetic algorithm with or without
+    Monte Carlo, not for Monte Carlo alone, and the pool must have as many
+    individuals as the training has processes.
+    @param optimizer The optimizer of this training.
+    @param number    Its number of processes.
+    @param pool      The gene pool of the earlier training, None if that
+    is not known or has none.
+    @return The options.
+    @throws TrainingError if the training cannot continue from it.
+    """
+    if pool is None:
+        raise TrainingError("The training to continue is not known, or it has no population: "
+                            "a training with Monte Carlo alone has none. Start from its "
+                            "force field instead")
+    if not OPTIMIZERS.get(optimizer, False):
+        raise TrainingError("Monte Carlo alone does not continue from a population. Start "
+                            "from the trained force field instead, without random values")
+    size = pool_size(pool)
+    if size != number:
+        raise TrainingError("The earlier training had %d individuals, so this one needs %d "
+                            "processes, not %d" % (size, size, number))
+    return {"gpin": Path(pool)}
 
 
 def digest(data: Any) -> Any:

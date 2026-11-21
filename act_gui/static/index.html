@@ -374,11 +374,12 @@
         <p class="muted" id="ev-about-train" hidden>Changes parameters of a force field until it reproduces the values in the file as well as it can, and then compares the trained force field with them. The force field that is chosen stays as it is; the trained one is new.</p>
         <div class="row top">
           <div class="field"><label for="ev-ff">Force field</label>
-            <select id="ev-ff"><option value="default">Default</option><option value="workspace" hidden disabled>From the force field tab</option><option value="upload">Upload force field…</option></select></div>
+            <select id="ev-ff"><option value="default">Default</option><option value="workspace" hidden disabled>From the force field tab</option><option value="trained" hidden disabled>The trained force field</option><option value="upload">Upload force field…</option></select></div>
           <input class="visually-hidden" type="file" id="ev-fffile" accept=".xml" tabindex="-1" aria-hidden="true">
           <div class="field grow"><span class="lab" id="ev-obslab">Properties to compare</span><div class="row" id="ev-observables"></div></div>
         </div>
         <div id="tr-opts" hidden>
+          <p class="fine notice" id="tr-contnote" hidden><span id="tr-conttext"></span> <button class="btn small" id="tr-anew" type="button">Start anew</button></p>
           <div class="row top">
             <div class="field grow"><label for="tr-fit">Kinds of parameters to train</label>
               <input class="mono" type="text" id="tr-fit" placeholder="for instance: sigma epsilon" spellcheck="false" autocomplete="off" autocapitalize="off">
@@ -448,6 +449,7 @@
     </div>
     <div class="card" id="tr-result" hidden>
       <div class="head"><h2>Trained parameters</h2><span class="muted" id="tr-count"></span><span class="spacer"></span>
+        <button class="btn small" id="tr-continue" type="button" title="Train further, from this force field and, with the genetic algorithm, from the individuals this training ended with">Continue training</button>
         <button class="btn small" id="tr-diff" type="button" hidden>What changed</button>
         <button class="btn small" id="tr-use" type="button">Open in the tab Force field</button>
         <button class="btn small" id="tr-save" type="button">Save force field</button></div>

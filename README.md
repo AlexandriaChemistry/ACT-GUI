@@ -129,8 +129,8 @@ A force field can also be trained on the data of the file, with `alexandria
 train_ff`: you choose the kinds of parameters to train (such as `sigma`
 and `epsilon`) from those that the force field has and that are not fixed,
 the properties to train on with a weight for each, the optimizer (Monte Carlo, or the
-genetic algorithm with or without Monte Carlo, which needs two processes
-at least), the number of iterations and generations, and the part of the
+genetic algorithm with or without Monte Carlo, which needs an even number
+of processes), the number of iterations and generations, and the part of the
 compounds that is kept for testing, unless they were chosen in the table. `train_ff` has one set of parameters
 for each process, so the number of processes is the size of the
 population; more than one process needs `mpirun`, `mpiexec` or `srun` in
@@ -141,6 +141,15 @@ trained force field with the data. The trained force field can be saved
 or opened in the force field workspace. A training on the desktop is
 stopped after the time limit of a calculation, ten minutes; long ones
 belong on the cluster, see below.
+
+*Continue training* sets the form up to train further from a training
+that is done, here or on the cluster: the next one starts from the trained
+force field, without random values. With the genetic algorithm it also
+starts from the individuals that the earlier training ended with
+(`train_ff -gpin` with the file that `-gpout` wrote), which needs as many
+processes as there were individuals. Monte Carlo alone leaves no
+individuals and does not read them, so it continues from the force field
+only. *Start anew* goes back to a training from the beginning.
 
 The tab Cluster, on the desktop, takes the Slurm cluster for long jobs:
 the server, your user name there and a working directory. The comparison

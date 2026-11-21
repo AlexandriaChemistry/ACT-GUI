@@ -314,7 +314,8 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
                   uploads: UploadStore,
                   written: Optional[Callable[[str], Optional[Path]]] = None,
                   described: Optional[Callable[[str], Optional[Any]]] = None,
-                  processes: Optional[int] = None) -> Prepared:
+                  processes: Optional[int] = None,
+                  pools: Optional[Callable[[str], Optional[Path]]] = None) -> Prepared:
     """!
     @brief Turn a request from the browser into the options of a command.
     @param task     The task.
@@ -336,6 +337,8 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
     @param processes The number of processes that the command will run on,
     when the caller decides that, as for a job on a cluster. None to take
     it from the request, within the limit of the settings.
+    @param pools    The function that gives the gene pool that a training
+    wrote, by the identifier of the job, or None if there is none.
     @return The keyword arguments for act.run(), without the arguments of
     the run itself, and the input files that the server makes. The types of
     the values are checked later by act.
@@ -459,6 +462,15 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
         except training.TrainingError as exc:
             raise RequestError(str(exc)) from exc
         chosen["pop_size"] = number
+        if TRAINING in task.needs:
+            # The population of an earlier training, for the same number of individuals
+            try:
+                earlier = training.continued(request.get("training"))
+                if earlier is not None:
+                    options.update(training.gene_pool(
+                        chosen["optimizer"], number, pools(earlier) if pools else None))
+            except training.TrainingError as exc:
+                raise RequestError(str(exc)) from exc
     elif request.get("processes") not in (None, 1):
         raise RequestError("%s runs on one process" % task.title)
     options.update(chosen)
