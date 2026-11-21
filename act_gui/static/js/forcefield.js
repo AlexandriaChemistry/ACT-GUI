@@ -122,6 +122,16 @@ function currentLabel() {
 }
 
 /**
+ * The name that is proposed when the force field of the workspace is saved:
+ * that of the file it was opened from, marked when it was changed.
+ * @returns {string} The name of the file.
+ */
+function saveName() {
+  const c = state.current, stem = /\.xml$/i.test(c.base) ? c.base.replace(/\.xml$/i, "") : "forcefield";
+  return stem + (c.changes && stem !== "forcefield" ? "-changed" : "") + ".xml";
+}
+
+/**
  * Make a force field the one of the workspace, and show it.
  * @param {object} ref     How the server finds it: { job }, { file } or { default: true }.
  * @param {string} base    Its name.
@@ -702,7 +712,7 @@ export async function startForceFields(told) {
   startDiff(() => state.current, told);
   $("#ff-save").onclick = e => {
     const ref = state.current && state.current.ref;
-    if (ref && ref.job) saveFile(e.currentTarget, `/jobs/${ref.job}/files/o`, {}, "Saving…", "forcefield.xml");
+    if (ref && ref.job) saveFile(e.currentTarget, `/jobs/${ref.job}/files/o`, {}, "Saving…", saveName());
   };
   $("#run-gen").onclick = generate;
   $("#g-fixed-open").onclick = () => $("#g-fixed-file").click();

@@ -279,3 +279,12 @@ tr.unused td:not(.tick) { opacity: .55; }
 .row.nowrap { flex-wrap: nowrap; }
 .warntext { color: var(--warn); }
 .notice { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 8px 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); margin: 0 0 12px; }
+
+/* the dialog in which the name of a file that is saved is chosen */
+dialog.save { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink);
+  padding: 20px; width: min(440px, calc(100vw - 32px)); box-shadow: 0 12px 40px rgb(0 0 0 / 0.25); }
+dialog.save::backdrop { background: rgb(0 0 0 / 0.35); }
+dialog.save h2 { margin: 0 0 14px; font-size: 17px; }
+dialog.save input { width: 100%; box-sizing: border-box; }
+dialog.save .row.end { justify-content: flex-end; margin-top: 16px; }
+dialog.save .bad { color: var(--bad); }

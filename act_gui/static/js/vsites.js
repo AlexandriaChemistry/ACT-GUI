@@ -18,7 +18,7 @@
  *
  * All text that comes from the server is put on the page as text.
  */
-import { $, alertBox, el, num, runTask, session, toast } from "./common.js";
+import { $, alertBox, el, num, runTask, saveBlob, session, toast } from "./common.js";
 import { css } from "./plot.js";
 
 /* global $3Dmol */
@@ -475,10 +475,7 @@ export function startVsites(kinds, atomtypes, onChange = null) {
   };
   $("#vs-save").onclick = () => {
     const text = JSON.stringify({ description: "Virtual sites made in the user interface of ACT", virtual_sites: state.sites }, null, 2) + "\n";
-    const url = URL.createObjectURL(new Blob([text], { type: "application/json" })), link = el("a", { href: url, download: "vsites.json" });
-    document.body.append(link); link.click(); link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
-    toast("Saved vsites.json");
+    saveBlob(new Blob([text], { type: "application/json" }), "vsites.json");
   };
   window.addEventListener("resize", () => { if (V && !$("#fftab-vsite").hidden) { V.resize(); V.render(); } });
   siteList();

@@ -421,7 +421,7 @@ function compared(job, source = "") {
   $("#ev-source").textContent = source;
   // In the order of the list of names, the main property first
   const result = job.result, files = Object.keys(PLOT_NAMES).filter(name => job.files.includes(name));
-  state.ev = { job: job.id, files, sets: {} };
+  state.ev = { job: job.id, task: job.task || "evaluate", files, sets: {} };
   const table = $("#ev-stats");
   table.textContent = "";
   table.append(el("thead", {}, el("tr", {}, el("th", {}, "Property"), el("th", {}, "Data set"), el("th", { class: "n" }, "N"),
@@ -1083,7 +1083,11 @@ export function startMolprops(told) {
   $("#tr-optimizer").onchange = what;
   what();
   $("#tr-stop").onclick = () => { if (state.tr.running) call("/jobs/" + state.tr.running, { method: "DELETE" }).catch(() => {}); };
-  $("#tr-save").onclick = e => { if (state.tr.job) saveFile(e.currentTarget, `/jobs/${state.tr.job}/files/o`, {}, "Saving…", "trained.xml"); };
+  $("#tr-save").onclick = e => {
+    // Named after the molprop file it was trained on
+    const stem = (state.file && state.file.label || "").replace(/\.[A-Za-z0-9]+$/, "");
+    if (state.tr.job) saveFile(e.currentTarget, `/jobs/${state.tr.job}/files/o`, {}, "Saving…", (stem ? stem + "-" : "") + "trained.xml");
+  };
   $("#tr-diff").onclick = () => {
     if (!state.tr.job || !state.tr.base) return;
     document.dispatchEvent(new CustomEvent("act-open-forcefield", { detail: { ref: { job: state.tr.job }, label: "Trained force field", other: state.tr.base } }));
@@ -1125,9 +1129,16 @@ export function startMolprops(told) {
   $("#ev-plotsel").onchange = comparisonPlot;
   $("#ev-compsel").onchange = compoundEnergies;
   $("#ev-compterm").onchange = compoundEnergies;
-  $("#ev-pdf").onclick = e => { if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/plots/${$("#ev-plotsel").value}`, {}, "Making PDF…", "comparison.pdf"); };
-  $("#ev-data").onclick = e => { if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/files/${$("#ev-plotsel").value}`, {}, "Saving…", "comparison.xvg"); };
-  $("#ev-log").onclick = e => { if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/files/g`, {}, "Saving…", "train_ff.log"); };
+  // Named after what was done and what is plotted, as the server names them
+  $("#ev-pdf").onclick = e => {
+    const plotted = $("#ev-plotsel").value;
+    if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/plots/${plotted}`, {}, "Making PDF…", `${state.ev.task}-${plotted}.pdf`);
+  };
+  $("#ev-data").onclick = e => {
+    const plotted = $("#ev-plotsel").value;
+    if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/files/${plotted}`, {}, "Saving…", `${state.ev.task}-${plotted}.xvg`);
+  };
+  $("#ev-log").onclick = e => { if (state.ev) saveFile(e.currentTarget, `/jobs/${state.ev.job}/files/g`, {}, "Saving…", `${state.ev.task}.log`); };
   $("#mpw-open").onclick = () => $("#mpw-file").click();
   $("#mpw-file").onchange = async e => {
     const file = e.target.files[0];
