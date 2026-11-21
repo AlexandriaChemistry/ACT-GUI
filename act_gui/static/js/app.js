@@ -291,7 +291,7 @@ function chargeTable() {
 function resetResults() {
   state.min = null; state.nma = null; state.jobs = { nma: null, sim: null, openmm: null };
   pill("omm-pill", "");
-  $("#ir-pdf").hidden = true; $("#e-pdf").hidden = true;
+  $("#ir-pdf").hidden = true; $("#ir-xvg").hidden = true; $("#e-pdf").hidden = true;
   state.sim = { points: [], series: state.sim.series, job: null, pdb: null, nsteps: 0 };
   state.ui.focus = -1; state.ui.mode = 0;
   $("#rmsd").textContent = "–"; $("#dE").textContent = "–";
@@ -440,7 +440,7 @@ async function normalModes() {
     const job = await runJob("nma");
     state.nma = job.result;
     state.spectrum = parseXvg(await (await call(`/jobs/${job.id}/files/ir`)).text());
-    state.jobs.nma = job.id; $("#ir-pdf").hidden = !session.pdf;
+    state.jobs.nma = job.id; $("#ir-pdf").hidden = !session.pdf; $("#ir-xvg").hidden = false;
     const inten = state.nma.modes.map(m => m.intensity.value);
     state.ui.mode = inten.indexOf(Math.max(...inten));
     pill("nma-pill", `${state.nma.modes.length} modes`, "good");
@@ -580,6 +580,8 @@ $("#run-sim").onclick = simulate;
 $("#run-omm").onclick = openmmPackage;
 // The plot on paper has the series that is on the screen
 $("#ir-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.nma, "nma", "ir", "", state.ui.reverse);
+// The spectrum itself, as the program wrote it
+$("#ir-xvg").onclick = e => { if (state.jobs.nma) saveFile(e.currentTarget, `/jobs/${state.jobs.nma}/files/ir`, {}, "Saving…", "nma-ir.xvg"); };
 
 /**
  * Set the direction of the wavenumber axis of the spectrum, on the screen

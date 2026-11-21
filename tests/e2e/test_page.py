@@ -269,8 +269,13 @@ class PageTest(unittest.TestCase):
         self.assertIn("sel", self.browser.find_element(
             By.CSS_SELECTOR, "#modetable tr.pick").get_attribute("class"))
         self.shot("04-modes")
-        # The spectrum on paper
+        # The spectrum on paper, and as data
         self.saved_pdf("ir-pdf", "nma-ir.pdf")
+        spectrum = self.saved_file("#ir-xvg", "nma-ir.xvg", "")
+        points = [line.split() for line in spectrum.splitlines()
+                  if line.strip() and line.lstrip()[0] not in "#@&"]
+        self.assertGreater(len(points), 100)
+        self.assertTrue(all(len(point) == 2 for point in points))
         # The wavenumbers from high to low, on the screen and on paper
 
         def tick(label):
