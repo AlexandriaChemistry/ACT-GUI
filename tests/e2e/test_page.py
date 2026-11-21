@@ -677,6 +677,71 @@ class PageTest(unittest.TestCase):
             self.assertEqual(2, len(self.browser.find_elements(By.CSS_SELECTOR,
                                                                "#vs-list li button")))
 
+    def test_5c_fixed_parameters(self):
+        """!
+        @brief Parameters of a file, as actgui read them, are fixed at their
+        value in the force field that is made; a file that is not one is
+        told, and a parameter that a type does not have stops the generator.
+        """
+        self.open_force_fields()
+        self.click('#fftabs button[data-tab="gen"]')
+        # Without the sites of the test before
+        self.click('#fftabs button[data-tab="vsite"]')
+        while self.browser.find_elements(By.CSS_SELECTOR, "#vs-list li button"):
+            self.click("#vs-list li button")
+        self.click('#fftabs button[data-tab="gen"]')
+        self.click("#g-none")
+        for name in ("hc", "c3"):
+            self.click('#g-types input[data-name="%s"][data-key="on"]' % name)
+        with tempfile.TemporaryDirectory() as tmp:
+            good = Path(tmp) / "fixed.csv"
+            good.write_text("# interaction|potential|atomtype|parameter|value|unit\n"
+                            "VANDERWAALS|WANG_BUCKINGHAM|c3|sigma|0.35|nm\n"
+                            "VANDERWAALS|WANG_BUCKINGHAM|oh|sigma|0.3|nm\n")
+            chooser = self.browser.find_element(By.ID, "g-fixed-file")
+            chooser.send_keys(str(good))
+            self.wait(lambda b: "fixed.csv: 2 parameters" in b.find_element(By.ID, "g-fixed").text)
+            self.assertEqual("", self.errors())
+            # What is no such file is told, and changes nothing
+            bad = Path(tmp) / "bad.csv"
+            bad.write_text("VANDERWAALS|WANG_BUCKINGHAM|c3|sigma|small|nm\n")
+            chooser.send_keys(str(bad))
+            self.wait(lambda b: "bad.csv" in self.errors())
+            self.assertIn("not a number", self.errors())
+            self.assertEqual(1, len(self.browser.find_elements(By.CSS_SELECTOR, "#g-fixed li")))
+            self.click("#run-gen")
+            self.wait(lambda b: b.find_element(By.ID, "gen-pill").text in ("Done", "Failed"))
+            self.assertEqual("", self.errors())
+            table = self.saved_file("#g-save-f", "atomtypes.csv", "#atomtype|")
+            lines = table.splitlines()
+            header = lines[0].split("|")
+            rows = {line.split("|")[0]: dict(zip(header, line.split("|"))) for line in lines[1:]}
+            self.assertEqual(["hc", "c3"], list(rows))
+            self.assertEqual(("0.35", "0.35", "Fixed"),
+                             tuple(rows["c3"]["VANDERWAALS:sigma:" + k] for k in ("min", "max", "mut")))
+            self.assertEqual("Bounded", rows["hc"]["VANDERWAALS:sigma:mut"])
+            # The force field has it so
+            self.click('#fftabs button[data-tab="edit"]')
+            self.show_parameters("VANDERWAALS", "c3")
+            # Only c3 is shown, its name is on its first row
+            self.wait(lambda b: self.parameter_rows() and self.parameter_rows()[0][0] == "c3")
+            sigma = [r for r in self.parameter_rows() if r[1] == "sigma"][0]
+            self.assertEqual("0.35", sigma[2])
+            self.assertIn("Fixed", sigma)
+            # A parameter that the type does not have
+            self.click('#fftabs button[data-tab="gen"]')
+            other = Path(tmp) / "kappa.csv"
+            other.write_text("VANDERWAALS|WANG_BUCKINGHAM|hc|kappa|1|nm\n")
+            chooser.send_keys(str(other))
+            self.wait(lambda b: "kappa.csv: 1 parameter" in b.find_element(By.ID, "g-fixed").text)
+            self.click("#run-gen")
+            self.wait(lambda b: b.find_element(By.ID, "gen-pill").text == "Failed")
+            self.assertIn("kappa", self.errors())
+        # Taking the files off the list
+        while self.browser.find_elements(By.CSS_SELECTOR, "#g-fixed li button"):
+            self.click("#g-fixed li button")
+        self.assertEqual("", self.text("#g-fixed"))
+
     def test_6_change_a_force_field_and_use_it(self):
         """!
         @brief The default force field is opened, one parameter is fixed,

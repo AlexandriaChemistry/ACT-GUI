@@ -430,6 +430,66 @@ class GeneratorTest(unittest.TestCase):
         # Without sites nothing changes
         self.assertEqual((), self.choices().sites)
 
+    def test_fixed_parameters(self):
+        """!
+        @brief Parameters of the user, as the file of actgui gave them, are
+        fixed at their value; those of types that are not selected are left
+        out, as actgui did.
+        """
+        fixed = [{"interaction": "VANDERWAALS", "type": "c3", "parameter": "sigma",
+                  "value": 0.35, "unit": "nm"},
+                 {"interaction": "ELECTRONEGATIVITYEQUALIZATION", "type": "c3",
+                  "parameter": "chi", "value": 7.5, "unit": ""},
+                 {"interaction": "", "type": "hc", "parameter": "q", "value": -0.1, "unit": "e"},
+                 {"interaction": "VANDERWAALS", "type": "oh", "parameter": "sigma",
+                  "value": 0.3, "unit": "nm"}]
+        chosen = self.choices(fixed=fixed)
+        self.assertEqual(4, len(chosen.fixed))
+        rows = table_of(ffgen.build(chosen, self.types).atomtypes)
+        self.assertEqual(("0.35", "0.35", "Fixed", "nm", "True"),
+                         tuple(rows["c3"]["VANDERWAALS:sigma:" + k] for k in
+                               ("min", "max", "mut", "unit", "nonneg")))
+        # Without a unit the unit of the table
+        self.assertEqual(("7.5", "7.5", "Fixed", "eV/e"),
+                         tuple(rows["c3"]["ELECTRONEGATIVITYEQUALIZATION:chi:" + k] for k in
+                               ("min", "max", "mut", "unit")))
+        # A negative value may be negative
+        self.assertEqual(("-0.1", "-0.1", "Fixed", "False"),
+                         tuple(rows["hc"][":q:" + k] for k in ("min", "max", "mut", "nonneg")))
+        # The rest is as without them
+        plain = table_of(ffgen.build(self.choices(), self.types).atomtypes)
+        self.assertEqual(plain["Na+"], rows["Na+"])
+        self.assertEqual(plain["c3"]["VANDERWAALS:epsilon:mut"], rows["c3"]["VANDERWAALS:epsilon:mut"])
+        self.assertEqual((), self.choices().fixed)
+
+    def test_fixed_parameters_that_are_refused(self):
+        """!
+        @brief A fixed parameter names a parameter that the selected type
+        has, in its unit, with a value that is a number, once.
+        """
+        good = {"interaction": "VANDERWAALS", "type": "c3", "parameter": "sigma",
+                "value": 0.35, "unit": "nm"}
+        refused = [
+            ("not a list", "fixed"),
+            ([dict(good, value="0.35")], "number"),
+            ([dict(good, value=float("nan"))], "number"),
+            ([dict(good, value=True)], "number"),
+            ([dict(good, parameter="sigma|x")], "parameter"),
+            ([dict(good, type="c3\n")], "type"),
+            ([dict(good, interaction=3)], "interaction"),
+            ([dict(good, unit="Angstrom")], "unit"),
+            ([dict(good, other=1)], "other"),
+            ([good, dict(good, value=0.4)], "twice"),
+            ([dict(good, parameter="kappa")], "kappa"),
+            ([dict(good, interaction="POLARIZATION", parameter="alpha")], "alpha"),
+            ([good] * (ffgen.MAX_FIXED + 1), "At most"),
+        ]
+        for fixed, said in refused:
+            with self.subTest(said=said):
+                with self.assertRaises(ffgen.GeneratorError) as caught:
+                    ffgen.build(self.choices(fixed=fixed), self.types)
+                self.assertIn(said, str(caught.exception))
+
     def test_sites_that_are_refused(self):
         """!
         @brief A site must be complete, of a known kind, on atoms that are

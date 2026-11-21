@@ -42,7 +42,10 @@ there or opened from a file:
 - *Generate* makes a new force field with `alexandria gen_ff` from a few
   choices: the charge model, the potentials with their combination rules,
   the atom types and which of them get a shell or a second charge, and
-  predefined virtual sites. It does what the program `actgui` of
+  predefined virtual sites. Parameters with a known value are fixed at
+  that value from files with a line
+  `interaction|potential|atom type|parameter|value|unit` for each, as
+  `actgui` read them. It does what the program `actgui` of
   ACT-utilities did. The table of atom types and the virtual sites that
   `gen_ff` got can be saved as well.
 - *Virtual sites* defines sites by point and click: two, three or four
