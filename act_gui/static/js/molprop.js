@@ -1009,14 +1009,21 @@ function show(label, data) {
 export function startMolprops(told) {
   state.observables = told.observables || [];
   $('#ev-ff option[value="default"]').textContent = told.default_forcefield;
-  $("#ev-ff").onchange = e => { if (e.target.value === "upload") $("#ev-fffile").click(); offerKinds(); continueNote(); };
+  $("#ev-ff").onchange = () => { offerKinds(); continueNote(); };
+  // A file of the user, chosen with a button: a choice in the list cannot
+  // open the file chooser in every browser
+  $("#ev-ffopen").onclick = () => $("#ev-fffile").click();
   $("#ev-fffile").onchange = e => {
     const file = e.target.files[0];
     e.target.value = "";
-    if (!file) { if (!state.pendingFF) $("#ev-ff").value = "default"; return; }
+    if (!file) return;
     state.pendingFF = { file, id: null };
-    $('#ev-ff option[value="upload"]').textContent = file.name;
+    const option = $('#ev-ff option[value="upload"]');
+    option.textContent = file.name;
+    option.hidden = option.disabled = false;
+    $("#ev-ff").value = "upload";
     offerKinds();
+    continueNote();
   };
   // The kinds of parameters to train: by a click or typed
   $("#tr-kinds").addEventListener("click", e => {

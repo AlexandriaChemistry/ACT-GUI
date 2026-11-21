@@ -302,7 +302,8 @@
       <div class="card">
         <div class="bar">
           <div class="field"><label for="fd-other">Compare the force field of this workspace with</label>
-            <select id="fd-other"><option value="default">Default</option><option value="given" hidden disabled></option><option value="upload">Upload force field…</option></select></div>
+            <select id="fd-other"><option value="default">Default</option><option value="given" hidden disabled></option><option value="upload" hidden disabled></option></select></div>
+          <button class="btn" id="fd-open" type="button" title="Compare with a force field file from this computer">Open file…</button>
           <input class="visually-hidden" type="file" id="fd-file" accept=".xml" tabindex="-1" aria-hidden="true">
           <button class="btn primary" id="run-diff" type="button">Compare</button>
           <span class="pill" id="fd-pill" hidden></span>
@@ -381,7 +382,8 @@
         <p class="muted" id="ev-about-train" hidden>Changes parameters of a force field until it reproduces the values in the file as well as it can, and then compares the trained force field with them. The force field that is chosen stays as it is; the trained one is new.</p>
         <div class="row top">
           <div class="field"><label for="ev-ff">Force field</label>
-            <select id="ev-ff"><option value="default">Default</option><option value="workspace" hidden disabled>From the force field tab</option><option value="trained" hidden disabled>The trained force field</option><option value="upload">Upload force field…</option></select></div>
+            <select id="ev-ff"><option value="default">Default</option><option value="workspace" hidden disabled>From the force field tab</option><option value="trained" hidden disabled>The trained force field</option><option value="upload" hidden disabled></option></select></div>
+          <div class="field"><span class="lab">&nbsp;</span><button class="btn" id="ev-ffopen" type="button" title="Use a force field file from this computer, such as one that was saved in the force field tab">Open file…</button></div>
           <input class="visually-hidden" type="file" id="ev-fffile" accept=".xml" tabindex="-1" aria-hidden="true">
           <div class="field grow"><span class="lab" id="ev-obslab">Properties to compare</span><div class="row" id="ev-observables"></div></div>
         </div>

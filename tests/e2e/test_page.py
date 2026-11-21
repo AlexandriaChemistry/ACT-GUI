@@ -795,10 +795,14 @@ class PageTest(unittest.TestCase):
         self.assertEqual("training: Bounded and Fixed", found[0][7])
         self.shot("14b-ff-compared")
         if os.path.isdir(TESTDATA):
-            # With another force field, of which the file is chosen
+            # With another force field, of which the file is chosen with a
+            # button, and then is the choice
+            self.assertTrue(self.browser.find_element(By.ID, "fd-open").is_displayed())
             self.browser.find_element(By.ID, "fd-file").send_keys(
                 str(Path(TESTDATA) / "forcefields" / "ACS-g1.xml"))
-            Select(self.browser.find_element(By.ID, "fd-other")).select_by_value("upload")
+            self.assertEqual("upload", Select(self.browser.find_element(
+                By.ID, "fd-other")).first_selected_option.get_attribute("value"))
+            self.assertEqual("ACS-g1.xml", self.text('#fd-other option[value="upload"]'))
             self.click("#run-diff")
             self.wait(lambda b: b.find_element(By.ID, "fd-pill").text == "Done")
             self.assertEqual("", self.errors())
@@ -952,12 +956,24 @@ class PageTest(unittest.TestCase):
         self.assertIn("elec", offered)
         self.assertNotIn("epot", offered)
         self.click('#ev-observables input[data-name="elec"]')
-        # The force field of the test data, since the default is for other compounds
+        # The force field of the test data, since the default is for other
+        # compounds. The file is chosen with a button, as a choice in the list
+        # cannot open the file chooser in every browser, and is then chosen.
+        choice = Select(self.browser.find_element(By.ID, "ev-ff"))
+        upload_option = '#ev-ff option[value="upload"]'
+        self.assertFalse(self.browser.find_element(By.CSS_SELECTOR, upload_option).is_enabled())
+        self.assertTrue(self.browser.find_element(By.ID, "ev-ffopen").is_displayed())
+        self.browser.find_element(By.ID, "ev-fffile").send_keys(
+            str(data / "forcefields" / "ACS-g1.xml"))
+        self.assertEqual("upload", choice.first_selected_option.get_attribute("value"))
+        self.assertEqual("ACS-g1.xml", self.browser.find_element(By.CSS_SELECTOR, upload_option).text)
+        # Another file takes its place; after another choice it can be chosen again
         self.browser.find_element(By.ID, "ev-fffile").send_keys(
             str(data / "forcefields" / "ACS-pol.xml"))
-        Select(self.browser.find_element(By.ID, "ev-ff")).select_by_value("upload")
-        self.assertEqual("ACS-pol.xml", self.browser.find_element(
-            By.CSS_SELECTOR, '#ev-ff option[value="upload"]').text)
+        self.assertEqual("ACS-pol.xml", self.browser.find_element(By.CSS_SELECTOR, upload_option).text)
+        choice.select_by_value("default")
+        choice.select_by_value("upload")
+        self.assertEqual("ACS-pol.xml", choice.first_selected_option.text)
         self.assertFalse(self.browser.find_element(By.ID, "ev-result").is_displayed())
         self.click("#run-ev")
         self.wait(lambda b: b.find_element(By.ID, "ev-pill").text == "Done")
