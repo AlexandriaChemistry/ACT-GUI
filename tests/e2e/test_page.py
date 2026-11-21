@@ -1517,6 +1517,34 @@ class PageTest(unittest.TestCase):
         self.assertEqual(0, len(self.browser.find_elements(By.CSS_SELECTOR, "#evplot circle.marked")))
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_8b_calculations_twice(self):
+        """!
+        @brief A molprop file with a calculation that is there twice: the
+        validation says so, and the file is saved without it, under the
+        name of the file or another.
+        """
+        original = (Path(TESTDATA) / "molprop" / "water-forces.xml").read_text()
+        begin, end = original.index("<experiment "), original.index("</experiment>") + 13
+        with tempfile.TemporaryDirectory() as tmp:
+            twice = Path(tmp) / "twice.xml"
+            twice.write_text(original[:end] + "\n    " + original[begin:end] + original[end:])
+            self.open_page()
+            self.click('#nav button[data-view="molprop"]')
+            self.browser.find_element(By.ID, "mpw-file").send_keys(str(twice))
+            self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        self.wait(lambda b: "twice" in b.find_element(By.ID, "mpw-vlist").text)
+        told = self.text("#mpw-vlist")
+        self.assertIn("1 calculation is in the file twice", told)
+        self.assertIn("in 1 compound: water", told)
+        self.assertEqual("Valid, with duplicates", self.text("#mpw-vpill"))
+        self.shot("29b-calculations-twice")
+        # Saved without it, under the name of the file or another
+        saved = self.saved_file("#mpw-clean", "twice.xml", "<?xml", rename="water-once.xml")
+        self.assertEqual(original.count("<experiment "), saved.count("<experiment "))
+        self.assertIn('molname="water"', saved)
+        self.assertEqual("", self.errors())
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_9c_compounds_and_weights(self):
         """!
         @brief The user says in the table what each compound is used for:

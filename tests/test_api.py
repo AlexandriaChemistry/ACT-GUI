@@ -233,8 +233,8 @@ class ApiTest(unittest.TestCase):
         names = [task["name"] for task in tasks]
         self.assertEqual(["charges", "minimize", "nma", "simulate", "openmm", "gen_ff",
                           "geometry_ff", "ff_describe", "ff_edit", "ff_repair",
-                          "mp_describe", "evaluate", "train"], names)
-        self.assertEqual(["molecule"] * 5 + ["forcefield"] * 5 + ["molprop"] * 3,
+                          "mp_describe", "mp_clean", "evaluate", "train"], names)
+        self.assertEqual(["molecule"] * 5 + ["forcefield"] * 5 + ["molprop"] * 4,
                          [task["workspace"] for task in tasks])
         # Only the training runs on several processes, and tells how far it is
         self.assertEqual(["train"], [task["name"] for task in tasks if task["parallel"]])
@@ -702,6 +702,31 @@ class ApiTest(unittest.TestCase):
              "options": {"validate": False}},
         ]
         for body in wrong:
+            answer = self.client.post("/api/jobs", headers=self.headers, json=body)
+            self.assertEqual(400, answer.status_code, body)
+        self.assertEqual(1, len(self.run.calls))
+
+    def test_clean_molprop_file(self):
+        """!
+        @brief edit_mp writes the molprop file as it validated it: without
+        the calculations that are there twice, with the names of the file.
+        The file can be fetched; nothing else can be asked for.
+        """
+        molprop = self.upload("mols.xml", "molprop", MP).json()["id"]
+        answer = self.client.post("/api/jobs", headers=self.headers, json={
+            "task": "mp_clean", "molprop": {"file": molprop}})
+        self.assertEqual(200, answer.status_code, answer.text)
+        job = self.wait(answer.json()["id"])
+        call = self.run.calls[0]
+        self.assertEqual("edit_mp", call["command"])
+        self.assertEqual({"mp": [self.settings.uploads_dir / (molprop + ".xml")],
+                          "validate": True, "molinfo": False,
+                          "o": call["workdir"] / "cleaned.xml"}, call["options"])
+        self.assertEqual("finished", job["status"], job["error"])
+        for body in ({"task": "mp_clean"},
+                     {"task": "mp_clean", "molprop": {"file": molprop}, "options": {"o": "/tmp/x"}},
+                     {"task": "mp_clean", "molprop": {"file": molprop},
+                      "options": {"validate": False}}):
             answer = self.client.post("/api/jobs", headers=self.headers, json=body)
             self.assertEqual(400, answer.status_code, body)
         self.assertEqual(1, len(self.run.calls))

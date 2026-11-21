@@ -201,6 +201,15 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          fixed={"json": True, "validate": True, "molinfo": False},
          downloads=("g",),
          needs=(MOLPROP,), workspace="molprop", digest=evaluation.described),
+    Task(name="mp_clean", command="edit_mp",
+         title="Write a molprop file without calculations that are there twice",
+         # As it is validated: the calculations that are there twice with
+         # the same results once, as train_ff uses them, and the names of
+         # the file
+         fixed={"validate": True, "molinfo": False},
+         outputs={"o": "cleaned.xml"},
+         downloads=("o", "g"),
+         needs=(MOLPROP,), workspace="molprop"),
     Task(name="evaluate", command="train_ff",
          title="Compare a force field with the data of a molprop file",
          fixed={"json": True, "optimize": False},

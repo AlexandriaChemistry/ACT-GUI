@@ -14,7 +14,7 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, $$, alertBox, call, el, num, pill, runTask, saveFile, seg, session, toast, upload } from "./common.js";
+import { $, $$, alertBox, call, el, num, pill, runTask, saveFile, saveMade, seg, session, toast, upload } from "./common.js";
 import { css, limits, markPoint, plot, resetZoom, zoomPlot } from "./plot.js";
 
 /** What the workspace knows. */
@@ -374,6 +374,31 @@ function validation() {
     if ((result.messages || []).length > MAX_MESSAGES) list.append(el("li", { class: "more" }, `and ${result.messages.length - MAX_MESSAGES} more messages`));
     pill("mpw-vpill", `${result.problems} ${result.problems === 1 ? "problem" : "problems"}`, "bad");
   }
+  // Calculations that are there twice: no problem, train_ff uses them once, but the file can do without them
+  const twice = result.duplicates || 0, names = result.with_duplicates || [];
+  if (twice > 0) {
+    item("!", "wr", `${twice} ${twice === 1 ? "calculation is" : "calculations are"} in the file twice, with the same results, in ` +
+         `${names.length} ${names.length === 1 ? "compound" : "compounds"}: ` + names.slice(0, 20).join(", ") + (names.length > 20 ? " and others" : "") +
+         ". train_ff uses each once. ",
+         el("button", { class: "btn small", type: "button", id: "mpw-clean" }, "Remove them and save…"));
+    if (result.ok) pill("mpw-vpill", "Valid, with duplicates", "warn");
+  }
+}
+
+/**
+ * Save the molprop file without the calculations that are there twice, as edit_mp writes it after the validation.
+ * @param {Element} button The button that was pressed.
+ */
+async function saveCleaned(button) {
+  const file = state.file;
+  if (!file) return;
+  alertBox("");
+  // The name of the file it came from, which may be kept or changed
+  const saved = await saveMade(button, file.label || "molprop.xml", "Removing…", async () => {
+    const job = await runTask({ task: "mp_clean", molprop: { file: file.file } });
+    return (await call(`/jobs/${job.id}/files/o`)).blob();
+  });
+  if (saved) toast("Saved without the calculations that were there twice. Open the saved file to work with it.");
 }
 
 /* ---------- comparing a force field ---------- */
@@ -1418,6 +1443,7 @@ export function startMolprops(told) {
     } finally { button.disabled = false; }
   };
   $("#mpw-search").oninput = e => { state.query = e.target.value; compoundTable(); };
+  $("#mpw-vlist").addEventListener("click", e => { if (e.target.closest("#mpw-clean")) saveCleaned(e.target.closest("#mpw-clean")); });
   $("#mpw-prop").onchange = e => { state.property = e.target.value; compoundTable(); };
   // The selection file: compounds by monomer, a part for testing, and the file itself
   $("#sel-list").addEventListener("change", e => {
