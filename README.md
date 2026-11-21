@@ -104,10 +104,22 @@ for training or for testing:
   `edit_mp` gives of those.
 - *Draw at random* uses a percentage of the ticked compounds for testing
   and the others for training.
+- *Open* reads a selection file that exists already, as `alexandria` reads
+  it: a line has the name of a compound, a bar and `Train`, `Test` or
+  `Ignore`, and the two compounds of a dimer may be in the other order
+  than in the molprop file. The table then says what the file says;
+  compounds of the molprop file that the selection does not have are not
+  used. The page tells which names of the selection are not in the molprop
+  file and how many lines were not understood.
+
+A comparison or a training, on this computer or on the cluster, uses what
+the table says at that moment, so a selection that was opened or made here
+is the one that `train_ff` gets.
 
 Other programs can ask the server for the same file with a request to
 `/api/selection`, with the compounds by name or by monomer and a part for
-testing that is drawn with a seed.
+testing that is drawn with a seed, and have a selection file read with a
+request to `/api/selection/read`.
 
 A force field can also be trained on the data of the file, with `alexandria
 train_ff`: you choose the kinds of parameters to train (such as `sigma`

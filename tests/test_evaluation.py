@@ -193,6 +193,52 @@ class EvaluationTest(unittest.TestCase):
             with self.assertRaises(evaluation.EvaluationError, msg=repr(spec)):
                 evaluation.selection_file(molecules, spec)
 
+    def test_read_selection(self):
+        """!
+        @brief A selection file of the user says what each compound of the
+        molprop file is used for, as alexandria reads it.
+        """
+        molecules = [{"name": "w2", "iupac": "water#water"}, {"name": "methanol#water"},
+                     {"iupac": "ethanol"}, {"name": "propanol"}]
+        read = evaluation.read_selection(
+            molecules, "water#water|Train\nmethanol#water|Test\nethanol|Ignore\n")
+        self.assertEqual({"test": ["methanol#water"], "ignore": ["ethanol", "propanol"]},
+                         read["sets"])
+        self.assertEqual((1, 1, 2), (read["train"], read["test"], read["ignore"]))
+        self.assertEqual(([], 0, 0, ""), (read["unknown"], read["unknown_count"],
+                                          read["invalid"], read["first_invalid"]))
+        # What is read is what a selection for a job is made from
+        self.assertEqual("water#water|Train\nmethanol#water|Test\n",
+                         evaluation.selection(molecules, sets=read["sets"]))
+        # The compounds of a dimer in the other order, spaces, empty lines
+        # and line ends of another system; the first line of a compound counts
+        read = evaluation.read_selection(
+            molecules, "\r\n water#methanol | Test \r\n\r\nwater#methanol|Train\r\n"
+            "propanol|Train\r\nwater#water|Train")
+        self.assertEqual({"test": ["methanol#water"], "ignore": ["ethanol"]}, read["sets"])
+        # What cannot be used is told
+        read = evaluation.read_selection(
+            molecules, "ethanol|Train\nacetone|Train\nacetone|Test\nbutanol|Test\n"
+            "propanol|train\nno bar\na|b|c\n|Train\nw2|Train\n")
+        self.assertEqual(["water#water", "methanol#water", "propanol"], read["sets"]["ignore"])
+        self.assertEqual((["acetone", "butanol", "w2"], 3), (read["unknown"],
+                                                             read["unknown_count"]))
+        self.assertEqual((4, "propanol|train"), (read["invalid"], read["first_invalid"]))
+        many = "".join("x%d|Train\n" % i for i in range(50)) + "ethanol|Test\n"
+        read = evaluation.read_selection(molecules, many)
+        self.assertEqual((evaluation.MAX_UNKNOWN, 50), (len(read["unknown"]),
+                                                        read["unknown_count"]))
+        # A file for other compounds, or no selection file at all
+        for wrong in ("acetone|Train\n", "", "<molecules>\n</molecules>\n", None, 3,
+                      b"ethanol|Train\n", "x" * (evaluation.MAX_SELECTION_SIZE + 1)):
+            with self.assertRaises(evaluation.EvaluationError, msg=repr(wrong)[:40]):
+                evaluation.read_selection(molecules, wrong)
+        with self.assertRaises(evaluation.EvaluationError) as caught:
+            evaluation.read_selection(molecules, "ethanol,Train\n")
+        self.assertIn("ethanol,Train", str(caught.exception))
+        with self.assertRaises(evaluation.EvaluationError):
+            evaluation.read_selection([], "ethanol|Train\n")
+
     def test_weights(self):
         """!
         @brief A property can weigh more or less than the others in a

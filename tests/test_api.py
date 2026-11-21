@@ -878,6 +878,64 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(401, client.post("/api/selection",
                                           json={"described": described}).status_code)
 
+    def test_read_selection_file(self):
+        """!
+        @brief A selection file of the user is read for a molprop file,
+        and a calculation with what was read gets the same selection.
+        """
+        client, _ = self.evaluation_app()
+
+        def done(answer):
+            self.assertEqual(200, answer.status_code, answer.text)
+            for _ in range(500):
+                job = client.get("/api/jobs/" + answer.json()["id"], headers=self.headers).json()
+                if job["status"] in ("finished", "failed", "cancelled"):
+                    return job
+                time.sleep(0.01)
+            self.fail("The job did not finish")
+            return None
+        molprop = client.post("/api/uploads", params={"kind": "molprop", "name": "mols.xml"},
+                              content=MP, headers=self.headers).json()["id"]
+        described = done(client.post("/api/jobs", headers=self.headers, json={
+            "task": "mp_describe", "molprop": {"file": molprop}}))["id"]
+
+        def read(text, job=described):
+            return client.post("/api/selection/read", headers=self.headers,
+                               json={"described": job, "text": text})
+        answer = read("methanol#water|Test\nwater#water|Train\nacetone|Train\n")
+        self.assertEqual(200, answer.status_code, answer.text)
+        told = answer.json()
+        self.assertEqual({"test": ["methanol#water"], "ignore": []}, told["sets"])
+        self.assertEqual((1, 1, 0, ["acetone"], 1, 0),
+                         tuple(told[key] for key in ("train", "test", "ignore", "unknown",
+                                                     "unknown_count", "invalid")))
+        # A comparison with it, on this computer
+        job = done(client.post("/api/jobs", headers=self.headers, json={
+            "task": "evaluate", "forcefield": {"default": True}, "observables": ["inter"],
+            "molprop": {"file": molprop, "described": described, "sets": told["sets"]}}))
+        self.assertEqual("finished", job["status"], job["error"])
+        self.assertEqual("water#water|Train\nmethanol#water|Test\n",
+                         self.run.calls[-1]["options"]["sel"].read_text())
+        # And the same file again when it is saved
+        saved = client.post("/api/selection", headers=self.headers,
+                            json={"described": described, "sets": told["sets"]})
+        self.assertEqual("water#water|Train\nmethanol#water|Test\n", saved.text)
+        self.assertEqual({"test": [], "ignore": ["methanol#water"]},
+                         read("water#water|Train\n").json()["sets"])
+        for wrong in ("acetone|Train\n", "", 3, None, ["water#water|Train"]):
+            self.assertEqual(400, read(wrong).status_code, wrong)
+        for wrong in ("nosuchjob", 3, None):
+            self.assertEqual(400, read("water#water|Train\n", wrong).status_code, wrong)
+        self.assertEqual(400, client.post("/api/selection/read", headers=self.headers,
+                                          json=["x"]).status_code)
+        self.assertEqual(401, client.post("/api/selection/read", json={
+            "described": described, "text": "water#water|Train\n"}).status_code)
+        # Not more than a selection file can be
+        self.assertEqual(413, client.post(
+            "/api/selection/read", content=b"{}",
+            headers=dict(self.headers, **{"Content-Length": str(10 ** 9),
+                                          "Content-Type": "application/json"})).status_code)
+
     def test_train_force_field(self):
         """!
         @brief train_ff gets what an evaluation gets, with the kinds of

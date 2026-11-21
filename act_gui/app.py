@@ -452,6 +452,40 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         return Response(text, media_type="text/plain; charset=utf-8",
                         headers={"Content-Disposition": "attachment"})
 
+    @app.post("/api/selection/read")
+    async def read_selection(request: Request) -> Dict[str, Any]:
+        """!
+        @brief Read a selection file of the user for a molprop file that
+        was read: what each compound of the molprop file is used for.
+        @param request The request, with a JSON object: "described", the
+        job that read the molprop file, and "text", the content of the
+        selection file.
+        @return The compounds for testing and those that are not used, as
+        a request for a calculation or for a selection file takes them,
+        and what of the selection file could not be used.
+        """
+        # Not more than a selection file can be, whatever is sent
+        try:
+            length = int(request.headers.get("content-length", "0"))
+        except ValueError:
+            length = 0
+        if length > 4 * evaluation.MAX_SELECTION_SIZE + 4096:
+            raise fail(413, "The selection file is too large")
+        try:
+            body = await request.json()
+        except ValueError as exc:
+            raise fail(400, "The request is not valid JSON") from exc
+        if not isinstance(body, dict):
+            raise fail(400, "The request must be an object")
+        job_id = body.get("described")
+        molecules = described_molprop(job_id) if isinstance(job_id, str) else None
+        if molecules is None:
+            raise fail(400, "The molprop file has to be read before it is used, open it again")
+        try:
+            return evaluation.read_selection(molecules, body.get("text"))
+        except evaluation.EvaluationError as exc:
+            raise fail(400, str(exc)) from exc
+
     @app.post("/api/jobs")
     async def submit(request: Request) -> Dict[str, Any]:
         """!
