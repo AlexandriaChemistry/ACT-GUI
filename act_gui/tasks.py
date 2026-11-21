@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import evaluation, ffgen, geometry, training
+from . import dimerscan, evaluation, ffgen, geometry, training
 from .jobs import InputFile
 from .settings import Settings
 from .uploads import UploadStore
@@ -41,6 +41,8 @@ SELECTION, OBSERVABLES = "selection", "observables"
 CHOSEN = "chosen"
 ## What is trained of a force field
 TRAINING = "training"
+## The settings of a scan of the distance between the compounds of a dimer
+SCAN = "scan"
 
 ## What the name of a parameter looks like, such as chi or bondlength
 _PARAMETER_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}$")
@@ -102,6 +104,9 @@ class Task:
     ## Whether the command runs on several processes, with an individual
     ## of the population of train_ff for each
     parallel: bool = False
+    ## A job that runs the command more than once, such as a scan, by the
+    ## name of the function that does it; None for one run of the command
+    runner: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -160,6 +165,12 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          outputs={"openmm": "openmm.xml", "c": "conf.pdb"},
          downloads=("openmm", "c", "g"),
          package=True),
+    Task(name="dimer_scan", command="minimize",
+         title="Interaction energy as a function of the distance in a dimer",
+         options=_CHARGE_OPTIONS,
+         progress=True,
+         downloads=("xvg",),
+         needs=(MOLECULE, FORCEFIELD, SCAN), runner="dimer_scan"),
     # --- the force field workspace ---
     Task(name="gen_ff", command="gen_ff",
          title="Generate a force field",
@@ -424,6 +435,12 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
                 inputs["sel"] = [InputFile("selection.dat", text)]
             except (evaluation.EvaluationError, training.TrainingError) as exc:
                 raise RequestError(str(exc)) from exc
+
+    if SCAN in task.needs:
+        try:
+            options["scan"] = dimerscan.settings(request.get("scan"))
+        except dimerscan.DimerScanError as exc:
+            raise RequestError(str(exc)) from exc
 
     observables: Tuple[str, ...] = ()
     if OBSERVABLES in task.needs:

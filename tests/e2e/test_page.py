@@ -355,6 +355,56 @@ class PageTest(unittest.TestCase):
                      if line.startswith(("ATOM", "HETATM"))]
             self.assertEqual(10, len(atoms))
 
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_2c_dimer_scan(self):
+        """!
+        @brief The interaction energy of a water dimer at three distances,
+        with the atoms that are closest chosen; a click on a point shows the
+        minimized dimer, and the energies can be saved.
+        """
+        self.open_page()
+        # A single compound cannot be scanned
+        self.click("#load")
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, "#qtable tr.pick"))
+        self.click('#tasks button[data-tab="scan"]')
+        self.assertIn("needs a structure of two compounds", self.text("#scan-note"))
+        self.assertFalse(self.browser.find_element(By.ID, "run-scan").is_enabled())
+        self.browser.find_element(By.ID, "molfile").send_keys(
+            str(Path(TESTDATA) / "molecules" / "water_dimer.pdb"))
+        self.wait(lambda b: "compounds of 3 and 3 atoms" in b.find_element(By.ID, "scan-note").text)
+        # The closest atoms, a hydrogen of the first and the oxygen of the second
+        first = Select(self.browser.find_element(By.ID, "scan-atom1"))
+        second = Select(self.browser.find_element(By.ID, "scan-atom2"))
+        self.assertEqual(["1", "2", "3"], [o.get_attribute("value") for o in first.options])
+        self.assertEqual(["4", "5", "6"], [o.get_attribute("value") for o in second.options])
+        self.assertEqual(("3", "4"), (first.first_selected_option.get_attribute("value"),
+                                      second.first_selected_option.get_attribute("value")))
+        for field, value in (("scan-rmin", "0.25"), ("scan-rmax", "0.35"), ("scan-step", "0.05")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        self.click("#run-scan")
+        self.wait(lambda b: b.find_element(By.ID, "scan-pill").text in ("Done", "Failed"), 300)
+        self.assertEqual("Done", self.text("#scan-pill"), self.errors())
+        self.assertIn("3 distances", self.text("#scan-plotnote"))
+        # A click on the point at the shortest distance shows that structure
+        self.browser.execute_script("document.getElementById('scanplot').scrollIntoView({ block: 'center' })")
+        place = self.browser.execute_script("""
+            const svg = document.querySelector('#scanplot svg'), box = svg.getBoundingClientRect();
+            const scale = box.width / svg.viewBox.baseVal.width;
+            const path = [...svg.querySelectorAll('g path')].filter(p => p.getAttribute('stroke-linecap') === 'round')[0];
+            const [x, y] = path.getAttribute('d').slice(1).split('h')[0].split(' ').map(Number);
+            return [x * scale - box.width / 2, y * scale - box.height / 2];""")
+        ActionChains(self.browser).move_to_element_with_offset(
+            self.browser.find_element(By.CSS_SELECTOR, "#scanplot svg"),
+            int(round(place[0])), int(round(place[1]))).click().perform()
+        self.wait(lambda b: "Minimized at 0.250 nm" in b.find_element(By.ID, "scene-title").text)
+        self.assertEqual("", self.errors())
+        self.shot("05c-dimer-scan")
+        saved = self.saved_file("#scan-xvg", "dimer-scan.xvg", "@")
+        self.assertIn('legend "EPOT"', saved)
+        self.assertEqual(3, len([line for line in saved.splitlines() if line and line[0] not in "#@"]))
+
     def test_3_wrong_smiles_gives_a_message(self):
         """!
         @brief A string that is no molecule gives the message of the program.

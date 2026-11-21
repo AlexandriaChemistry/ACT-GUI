@@ -14,8 +14,8 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, $$, alertBox, call, fmt, moveInk, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
-import { css, esc, limits, plot, redrawPlots } from "./plot.js";
+import { $, $$, alertBox, call, el, fmt, moveInk, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
+import { css, esc, limits, markPoint, plot, redrawPlots } from "./plot.js";
 import { startForceFields } from "./forcefield.js";
 import { startMolprops } from "./molprop.js";
 import { startCluster } from "./cluster.js";
@@ -35,6 +35,7 @@ const state = {
   min: null,            // result of the minimization
   nma: null,            // result of the normal mode analysis
   sim: { points: [], series: "EPOT", job: null, pdb: null, nsteps: 0 },
+  scan: { parts: [], points: [], job: null, running: null, picked: -1, pdb: null },  // the scan of a dimer: its compounds, points and the structure shown
   ui: { style: "ball", colour: "charge", labels: true, tab: "charges", focus: -1, ghost: true, mode: 0,
         reverse: false },   // reverse: wavenumbers from high to low in the spectrum
 };
@@ -49,10 +50,10 @@ const state = {
  * @returns {Promise<object>} The job when it has finished.
  * @throws {Error} If the calculation failed or was stopped.
  */
-function runJob(task, options = {}, onUpdate = null) {
+function runJob(task, options = {}, onUpdate = null, extra = {}) {
   const molecule = state.input.smiles ? { smiles: state.input.smiles } : { file: state.input.file };
   const forcefield = state.forcefield.ref || {};
-  return runTask({ task, molecule, forcefield, options }, onUpdate);
+  return runTask({ task, molecule, forcefield, options, ...extra }, onUpdate);
 }
 
 /**
@@ -192,9 +193,11 @@ function labelAtoms(xyz) {
 function scene() {
   const ui = state.ui;
   $("#qlegend").hidden = ui.colour !== "charge" || !state.mol;
+  const picked = state.scan.points[state.scan.picked];
   const titles = { charges: "Structure and charges", minimize: state.min ? "Minimized and original" : "Structure",
     modes: state.nma ? `Vibration at ${state.nma.modes[ui.mode].frequency.value.toFixed(0)} cm⁻¹` : "Structure",
-    simulate: state.sim.pdb ? "Trajectory" : "Structure", openmm: "Structure" };
+    simulate: state.sim.pdb ? "Trajectory" : "Structure", openmm: "Structure",
+    scan: state.scan.pdb && picked ? `Minimized at ${picked.distance.toFixed(3)} nm` : "Structure" };
   $("#scene-title").textContent = titles[ui.tab];
   if ($("#view-molecule").hidden || !state.mol) return;   // never draw into a hidden canvas
   if (!V && !triedV) { triedV = true; V = makeViewer(); }
@@ -224,6 +227,12 @@ function scene() {
     m.addAtoms(viewerAtoms(atomCoords(x.after)));
     m.setStyle({}, styleSpec());
     labelAtoms(atomCoords(x.after));
+  } else if (ui.tab === "scan" && state.scan.pdb) {
+    // The minimized dimer at the distance that was clicked
+    const m = V.addModel(state.scan.pdb, "pdb", { keepH: true });
+    m.selectedAtoms({}).forEach((at, i) => { if (state.mol.atoms[i]) at.properties = { ...at.properties, charge: state.mol.atoms[i].q }; });
+    m.setStyle({}, styleSpec());
+    scanAtoms(m.selectedAtoms({}).map(at => [at.x, at.y, at.z]));
   } else if (ui.tab === "simulate" && state.sim.pdb) {
     // The viewer leaves out the hydrogen atoms of a pdb file unless told otherwise
     const m = V.addModelsAsFrames(state.sim.pdb, "pdb", { keepH: true });
@@ -243,6 +252,7 @@ function scene() {
       const c = state.xyz[ui.focus];
       V.addSphere({ center: { x: c[0], y: c[1], z: c[2] }, radius: 0.62, color: css("--accent"), opacity: 0.35 });
     }
+    if (ui.tab === "scan") scanAtoms(state.xyz);
   }
   if (!zoomed) { V.zoomTo(); V.zoom($("#gl").clientWidth < 500 ? 0.9 : 1.15); zoomed = true; }
   V.render();
@@ -328,6 +338,7 @@ async function loadMolecule() {
     resetResults();
     chips(); chargeTable();
     for (const id of ["run-min", "run-nma", "run-sim", "run-omm"]) document.getElementById(id).disabled = false;
+    scanForm();
     zoomed = false;
     scene();
   } catch (e) {
@@ -502,6 +513,123 @@ async function simulate() {
   } finally { button.disabled = false; stop.hidden = true; state.sim.job = null; }
 }
 $("#stop-sim").onclick = () => { if (state.sim.job) call("/jobs/" + state.sim.job, { method: "DELETE" }).catch(() => {}); };
+
+/* ---------- scan of the distance in a dimer ---------- */
+
+/**
+ * The compounds of the molecule: the atoms that bonds connect, the first compound first.
+ * @returns {number[][]} For each compound the places of its atoms.
+ */
+function compoundsOf() {
+  const n = state.mol.atoms.length, group = Array.from({ length: n }, (_, i) => i);
+  const find = i => (group[i] === i ? i : (group[i] = find(group[i])));
+  for (const [i, j] of state.mol.bonds) group[find(i)] = find(j);
+  const parts = new Map();
+  for (let i = 0; i < n; i++) {
+    const g = find(i);
+    if (!parts.has(g)) parts.set(g, []);
+    parts.get(g).push(i);
+  }
+  return [...parts.values()];
+}
+
+/** Offer the atoms of the two compounds, the closest pair first chosen, or say why no scan can be done. */
+function scanForm() {
+  const parts = state.mol ? compoundsOf() : [];
+  state.scan = { parts, points: [], job: null, running: null, picked: -1, pdb: null };
+  $("#scanplot").textContent = ""; $("#scan-plotnote").textContent = ""; $("#scan-xvg").hidden = true; pill("scan-pill", "");
+  const ok = parts.length === 2;
+  $("#run-scan").disabled = !ok;
+  $("#scan-note").textContent = !state.mol ? "" : ok ? `The dimer has compounds of ${parts[0].length} and ${parts[1].length} atoms.`
+    : `A scan needs a structure of two compounds; this one has ${parts.length}. Load a dimer, for instance a pdb file with both compounds.`;
+  for (const [k, id] of [[0, "scan-atom1"], [1, "scan-atom2"]]) {
+    const select = $("#" + id);
+    select.textContent = "";
+    for (const i of parts[k] || []) select.append(el("option", { value: String(i + 1) }, `${state.mol.atoms[i].elem}${i + 1} (${state.mol.atoms[i].type})`));
+  }
+  if (!ok) return;
+  // The closest pair of atoms, as the script takes it
+  let best = [parts[0][0], parts[1][0]], d2 = Infinity;
+  for (const i of parts[0]) for (const j of parts[1]) {
+    const d = state.xyz[i].reduce((s, v, k) => s + (v - state.xyz[j][k]) ** 2, 0);
+    if (d < d2) { d2 = d; best = [i, j]; }
+  }
+  $("#scan-atom1").value = String(best[0] + 1);
+  $("#scan-atom2").value = String(best[1] + 1);
+}
+
+/**
+ * Mark the two atoms of the scan in the viewer.
+ * @param {number[][]} xyz The positions of the atoms in Å.
+ */
+function scanAtoms(xyz) {
+  for (const id of ["scan-atom1", "scan-atom2"]) {
+    const c = xyz[Number($("#" + id).value) - 1];
+    if (c) V.addSphere({ center: { x: c[0], y: c[1], z: c[2] }, radius: 0.62, color: css("--accent"), opacity: 0.35 });
+  }
+}
+
+/** Draw the interaction energy against the distance, as far as the scan is. */
+function scanPlot() {
+  const done = state.scan.points.filter(p => p.energies && p.energies.EPOT !== undefined);
+  if (!done.length) { $("#scanplot").textContent = ""; return; }
+  const x = done.map(p => p.distance), y = done.map(p => p.energies.EPOT);
+  const marked = state.scan.picked >= 0 ? { series: 1, id: state.scan.picked } : null;
+  plot("scanplot", { label: "Interaction energy against distance", xlim: limits(x, 0.04), ylim: limits(y, 0.1), height: 300,
+                     xlabel: "Distance (nm)", ylabel: "Interaction energy (kJ/mol)", zoom: true, marked,
+                     series: [{ type: "line", x, y }, { type: "points", x, y, ids: done.map(p => p.index), size: 7, pickable: true }],
+                     onPoint: (_, index) => scanStructure(index) });
+  const failed = state.scan.points.length - done.length;
+  $("#scan-plotnote").textContent = `${done.length} ${done.length === 1 ? "distance" : "distances"}` +
+    (failed ? `, ${failed} of which the minimization failed` : "") + ". Click a point to see the minimized dimer at that distance.";
+}
+
+/**
+ * Show the minimized dimer of a point of the scan.
+ * @param {number} index The place of the distance.
+ */
+async function scanStructure(index) {
+  const job = state.scan.job;
+  if (!job) return;
+  try {
+    const pdb = await (await call(`/jobs/${job}/scan/${index}`)).text();
+    if (state.scan.job !== job) return;
+    state.scan.picked = index; state.scan.pdb = pdb;
+    markPoint("scanplot", { series: 1, id: index });
+    scene();
+  } catch (e) { alertBox("The structure at this distance could not be fetched. " + e.message); }
+}
+
+/** Run the scan and follow it. */
+async function runScan() {
+  const scan = { atom1: Number($("#scan-atom1").value), atom2: Number($("#scan-atom2").value), rmin: Number($("#scan-rmin").value),
+                 rmax: Number($("#scan-rmax").value), step: Number($("#scan-step").value), constrain: $("#scan-constrain").checked };
+  if (!(scan.rmin > 0 && scan.rmax > scan.rmin && scan.step > 0)) { toast("Give the distances: from, to and the step, in nm."); return; }
+  const button = $("#run-scan"), stop = $("#stop-scan");
+  button.disabled = true; stop.hidden = false; alertBox("");
+  Object.assign(state.scan, { points: [], job: null, picked: -1, pdb: null });
+  $("#scan-xvg").hidden = true;
+  scanPlot(); scene();
+  pill("scan-pill", "Running…", "warn");
+  try {
+    const job = await runJob("dimer_scan", {}, j => {
+      state.scan.job = j.id; state.scan.running = j.id;
+      if (j.progress.length) { state.scan.points.push(...j.progress); scanPlot(); }
+    }, { scan });
+    state.scan.points = job.result.points;
+    scanPlot();
+    $("#scan-xvg").hidden = false;
+    pill("scan-pill", "Done", "good");
+  } catch (e) {
+    const stopped = e.message === "The calculation was stopped";
+    pill("scan-pill", stopped ? "Stopped" : "Failed", stopped ? "warn" : "bad");
+    if (!stopped) alertBox("The scan failed. " + e.message);
+  } finally { button.disabled = state.scan.parts.length !== 2; stop.hidden = true; state.scan.running = null; }
+}
+$("#run-scan").onclick = runScan;
+$("#stop-scan").onclick = () => { if (state.scan.running) call("/jobs/" + state.scan.running, { method: "DELETE" }).catch(() => {}); };
+$("#scan-xvg").onclick = e => { if (state.scan.job) saveFile(e.currentTarget, `/jobs/${state.scan.job}/files/xvg`, {}, "Saving…", "dimer-scan.xvg"); };
+for (const id of ["scan-atom1", "scan-atom2"]) $("#" + id).onchange = () => { if (state.ui.tab === "scan") scene(); };
 seg($("#eseries"), v => { state.sim.series = v; energyPlot(); });
 
 /* ---------- files for OpenMM ---------- */
@@ -601,7 +729,7 @@ try {
 $("#e-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.sim, "simulate", "e",
   state.sim.series === "T" ? "TEMPERATURE" : state.sim.series);
 
-const TABS = { charges: "tab-charges", minimize: "tab-minimize", modes: "tab-modes", simulate: "tab-simulate", openmm: "tab-openmm" };
+const TABS = { charges: "tab-charges", minimize: "tab-minimize", modes: "tab-modes", simulate: "tab-simulate", openmm: "tab-openmm", scan: "tab-scan" };
 tabs($("#tasks"), name => { state.ui.tab = name; showOnly(Object.values(TABS), TABS[name]); scene(); });
 const VIEWS = { molecule: "view-molecule", "force-field": "view-force-field", molprop: "view-molprop", cluster: "view-cluster" };
 tabs($("#nav"), name => { showOnly(Object.values(VIEWS), VIEWS[name]); if (name === "molecule") scene(); else if (V) V.stopAnimate(); });

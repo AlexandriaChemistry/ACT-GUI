@@ -231,22 +231,24 @@ class ApiTest(unittest.TestCase):
         self.assertIn("ACS-pg1", session["default_forcefield"])
         tasks = self.client.get("/api/tasks", headers=self.headers).json()["tasks"]
         names = [task["name"] for task in tasks]
-        self.assertEqual(["charges", "minimize", "nma", "simulate", "openmm", "gen_ff",
-                          "geometry_ff", "ff_describe", "ff_edit", "ff_repair",
+        self.assertEqual(["charges", "minimize", "nma", "simulate", "openmm", "dimer_scan",
+                          "gen_ff", "geometry_ff", "ff_describe", "ff_edit", "ff_repair",
                           "mp_describe", "mp_clean", "evaluate", "train"], names)
-        self.assertEqual(["molecule"] * 5 + ["forcefield"] * 5 + ["molprop"] * 4,
+        self.assertEqual(["molecule"] * 6 + ["forcefield"] * 5 + ["molprop"] * 4,
                          [task["workspace"] for task in tasks])
-        # Only the training runs on several processes, and tells how far it is
+        # Only the training runs on several processes; the simulation, the
+        # scan and the training tell how far they are
         self.assertEqual(["train"], [task["name"] for task in tasks if task["parallel"]])
-        self.assertEqual(["simulate", "train"],
+        self.assertEqual(["simulate", "dimer_scan", "train"],
                          [task["name"] for task in tasks if task["progress"]])
         self.assertEqual(self.settings.max_processes, session["max_processes"])
         self.assertEqual("MCMC", session["training"]["default_optimizer"])
         self.assertIn({"name": "inter", "label": "Interaction energy", "dimer": True,
                        "statistics": ["INTERACTION"], "plots": ["INTERACTION"]},
                       session["observables"])
-        self.assertEqual(["generator"], tasks[5]["needs"])
-        self.assertEqual(["forcefield", "molprop", "chosen"], tasks[6]["needs"])
+        self.assertEqual(["molecule", "forcefield", "scan"], tasks[5]["needs"])
+        self.assertEqual(["generator"], tasks[6]["needs"])
+        self.assertEqual(["forcefield", "molprop", "chosen"], tasks[7]["needs"])
         minimize = tasks[1]
         minalg = [o for o in minimize["options"] if o["name"] == "minalg"][0]
         self.assertEqual("enum", minalg["type"])
@@ -753,6 +755,50 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(401, client.get("/api/jobs/%s/histograms" % job["id"],
                                          params={"type": "BONDS", "identifier": "c3_b~h_b"}
                                          ).status_code)
+
+    def test_dimer_scan(self):
+        """!
+        @brief A scan of the distance in a dimer is one job: gentop, then a
+        minimization for each distance, each point reported as progress;
+        the structure of a point and the energies as xvg can be fetched.
+        """
+        from tests.test_dimerscan import FakeAlexandria  # pylint: disable=import-outside-toplevel
+        alexandria = FakeAlexandria()
+        app = create_app(self.settings, run=alexandria, program_info=fake_program_info)
+        self.addCleanup(app.state.jobs.shutdown)
+        client = TestClient(app)
+        body = {"task": "dimer_scan", "molecule": {"smiles": "O.O"},
+                "scan": {"atom1": 1, "atom2": 4, "rmin": 0.25, "rmax": 0.29, "step": 0.01},
+                "options": {"qalg": "SQE"}}
+        answer = client.post("/api/jobs", headers=self.headers, json=body)
+        self.assertEqual(200, answer.status_code, answer.text)
+        for _ in range(500):
+            job = client.get("/api/jobs/" + answer.json()["id"], headers=self.headers).json()
+            if job["status"] not in ("queued", "running"):
+                break
+            time.sleep(0.01)
+        self.assertEqual("finished", job["status"], job["error"])
+        self.assertEqual(["gentop"] + ["minimize"] * 5, [call[0] for call in alexandria.calls])
+        self.assertEqual(5, len(job["result"]["points"]))
+        self.assertEqual(job["result"]["points"], job["progress"])
+        self.assertIn("xvg", job["files"])
+        structure = client.get("/api/jobs/%s/scan/2" % job["id"], headers=self.headers)
+        self.assertEqual(200, structure.status_code)
+        self.assertIn("ATOM      4", structure.text)
+        self.assertEqual(404, client.get("/api/jobs/%s/scan/7" % job["id"],
+                                         headers=self.headers).status_code)
+        xvg = client.get("/api/jobs/%s/files/xvg" % job["id"], headers=self.headers)
+        self.assertEqual(200, xvg.status_code)
+        self.assertIn('legend "EPOT"', xvg.text)
+        for wrong in (dict(body, scan={"atom1": 1}), {k: v for k, v in body.items() if k != "scan"},
+                      dict(body, scan=dict(body["scan"], step=0)),
+                      dict(body, options={"freeze": "/etc/passwd"})):
+            self.assertEqual(400, client.post("/api/jobs", headers=self.headers,
+                                              json=wrong).status_code, wrong)
+        other = client.post("/api/jobs", headers=self.headers,
+                            json={"task": "minimize", "molecule": {"smiles": "C"}}).json()
+        self.assertEqual(404, client.get("/api/jobs/%s/scan/0" % other["id"],
+                                         headers=self.headers).status_code)
 
     def test_clean_molprop_file(self):
         """!
