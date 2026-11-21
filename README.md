@@ -172,6 +172,16 @@ the server, your user name there and a working directory. The comparison
 can then run as a job on the cluster, and the tab lists the jobs, see
 below.
 
+Files are saved under a name that the user chooses, starting from a name
+that the page proposes: a force field after the file it was opened from
+(with `-changed` when it was changed), a trained force field and a
+selection after the molprop file, plots and data after what they show.
+Chrome and Edge show the dialog of the system, with the folder; other
+browsers, such as Firefox, Safari and DuckDuckGo, do not let a page do
+that, so the page asks for the name and the browser puts the file in its
+folder for downloads, or asks where when it is set to ask for each
+download.
+
 Not there yet: the server for several users.
 
 The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in

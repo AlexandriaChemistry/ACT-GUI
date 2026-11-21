@@ -59,15 +59,18 @@ function runJob(task, options = {}, onUpdate = null) {
  * Save a plot as a PDF file, made by plotXVG on the server.
  * @param {Element} button The button that was pressed.
  * @param {string} jobId   The job that has the data.
+ * @param {string} task    The task of the job, for the name of the file.
  * @param {string} option  The option of the command that wrote the data.
  * @param {string} series  The series to plot, all if empty.
  * @param {boolean} reverse Whether the x-axis runs from large to small values.
  */
-function savePdf(button, jobId, option, series = "", reverse = false) {
+function savePdf(button, jobId, task, option, series = "", reverse = false) {
   const params = {};
   if (series) params.series = series;
   if (reverse) params.reverse = "true";
-  if (jobId) saveFile(button, `/jobs/${jobId}/plots/${option}`, params, "Making PDF…", option + ".pdf");
+  // The name tells what is plotted, as the server names it
+  const name = [task, option, ...(series ? series.split(",") : []), ...(reverse ? ["reversed"] : [])].join("-") + ".pdf";
+  if (jobId) saveFile(button, `/jobs/${jobId}/plots/${option}`, params, "Making PDF…", name);
 }
 
 /* ---------- the molecule ---------- */
@@ -576,7 +579,7 @@ $("#run-nma").onclick = normalModes;
 $("#run-sim").onclick = simulate;
 $("#run-omm").onclick = openmmPackage;
 // The plot on paper has the series that is on the screen
-$("#ir-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.nma, "ir", "", state.ui.reverse);
+$("#ir-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.nma, "nma", "ir", "", state.ui.reverse);
 
 /**
  * Set the direction of the wavenumber axis of the spectrum, on the screen
@@ -593,7 +596,7 @@ $("#ir-flip").onclick = () => reverseSpectrum(!state.ui.reverse);
 try {
   if (localStorage.getItem("act-spectrum-reverse") === "1") reverseSpectrum(true);
 } catch (e) { /* no storage */ }
-$("#e-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.sim, "e",
+$("#e-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.sim, "simulate", "e",
   state.sim.series === "T" ? "TEMPERATURE" : state.sim.series);
 
 const TABS = { charges: "tab-charges", minimize: "tab-minimize", modes: "tab-modes", simulate: "tab-simulate", openmm: "tab-openmm" };

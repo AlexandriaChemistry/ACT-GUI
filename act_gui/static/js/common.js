@@ -152,22 +152,109 @@ export async function upload(file, kind) {
  * @returns {Promise<boolean>} Whether the file was saved.
  */
 export async function saveFile(button, path, params, busy, fallback, json = undefined) {
+  // Where it goes is asked first, while the click of the user still counts
+  const where = await askWhere(fallback);
+  if (!where) return false;
   const label = button.textContent;
   button.disabled = true; button.textContent = busy;
   try {
     const answer = await call(path, json === undefined ? { params } : { method: "POST", json, params });
-    const named = /filename="?([^";]+)"?/.exec(answer.headers.get("content-disposition") || "");
-    const name = named ? named[1] : fallback;
-    const url = URL.createObjectURL(await answer.blob()), link = document.createElement("a");
-    link.href = url; link.download = name;
-    document.body.append(link); link.click(); link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
-    toast("Saved " + name);
+    await store(where, await answer.blob());
     return true;
   } catch (e) {
     alertBox("The file could not be saved. " + e.message);
     return false;
   } finally { button.disabled = false; button.textContent = label; }
+}
+
+/**
+ * Save a file that the page made itself, under a name and in a place that the user chooses.
+ * @param {Blob} blob        The content.
+ * @param {string} suggested The name that is proposed.
+ * @returns {Promise<boolean>} Whether it was saved; false if the user did not want to.
+ */
+export async function saveBlob(blob, suggested) {
+  const where = await askWhere(suggested);
+  if (!where) return false;
+  try {
+    await store(where, blob);
+    return true;
+  } catch (e) {
+    alertBox("The file could not be saved. " + e.message);
+    return false;
+  }
+}
+
+/**
+ * A name of a file without a directory and without characters that file systems refuse.
+ * @param {string} text What the user typed.
+ * @returns {string} The name, empty if nothing is left.
+ */
+export function fileName(text) {
+  return String(text).replace(/[\\/:*?"<>|\u0000-\u001f]/g, "").trim().replace(/^\.+/, "");
+}
+
+/**
+ * Ask the user where a file goes. Browsers that let a page offer the dialog of
+ * the system (Chrome, Edge) show it, with the folder and the name; the others
+ * get a dialog of the page for the name, and save in the folder that the
+ * browser uses for downloads, or ask where if it is set to ask.
+ * @param {string} suggested The name that is proposed.
+ * @returns {Promise<{name: string, handle: (object|undefined)}|null>} The choice, null if the user did not want to save.
+ */
+async function askWhere(suggested) {
+  if (typeof window.showSaveFilePicker === "function") {
+    try {
+      const handle = await window.showSaveFilePicker({ suggestedName: suggested });
+      return { name: handle.name, handle };
+    } catch (e) {
+      if (e.name === "AbortError") return null;
+      // Not allowed here, for instance without a secure address: the dialog of the page
+    }
+  }
+  const dialog = $("#save-dialog"), box = $("#save-name");
+  box.value = suggested;
+  $("#save-error").hidden = true;
+  return new Promise(resolve => {
+    const done = value => {
+      dialog.onclose = null;
+      $("#save-form").onsubmit = null;
+      if (dialog.open) dialog.close();
+      resolve(value);
+    };
+    $("#save-form").onsubmit = e => {
+      e.preventDefault();
+      if (e.submitter && e.submitter.value === "cancel") { done(null); return; }
+      const name = fileName(box.value);
+      if (!name) { $("#save-error").hidden = false; box.focus(); return; }
+      done({ name });
+    };
+    dialog.onclose = () => done(null);
+    dialog.showModal();
+    // The name without its extension is selected, ready to be typed over
+    const dot = suggested.lastIndexOf(".");
+    box.focus();
+    box.setSelectionRange(0, dot > 0 ? dot : suggested.length);
+  });
+}
+
+/**
+ * Write a file where the user chose.
+ * @param {{name: string, handle: (object|undefined)}} where The choice of askWhere.
+ * @param {Blob} blob The content.
+ */
+async function store(where, blob) {
+  if (where.handle) {
+    const out = await where.handle.createWritable();
+    await out.write(blob);
+    await out.close();
+  } else {
+    const url = URL.createObjectURL(blob), link = document.createElement("a");
+    link.href = url; link.download = where.name;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
+  toast("Saved " + where.name);
 }
 
 /* ---------- tabs and buttons ---------- */

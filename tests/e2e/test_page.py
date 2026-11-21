@@ -131,8 +131,11 @@ class PageTest(unittest.TestCase):
             self.assertFalse(element.is_displayed())
             return
         self.assertTrue(element.is_displayed())
-        element.click()
         target = self.downloads / name
+        if target.exists():
+            target.unlink()
+        element.click()
+        self.confirm_save(name)
 
         def complete(_browser):
             return (target.is_file() and target.stat().st_size > 2000
@@ -314,8 +317,11 @@ class PageTest(unittest.TestCase):
         steps.clear()
         steps.send_keys("2500")
         self.shot("05b-openmm")
-        self.click("#run-omm")
         target = self.downloads / "act-openmm.zip"
+        if target.exists():
+            target.unlink()
+        self.click("#run-omm")
+        self.confirm_save("act-openmm.zip")
         self.wait(lambda b: b.find_element(By.ID, "omm-pill").text == "Saved")
         self.wait(lambda b: target.is_file() and not list(self.downloads.glob("*.part")))
         self.assertEqual("", self.errors())
@@ -367,18 +373,48 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#g-types tbody tr")) > 50)
         self.assertEqual("", self.errors())
 
-    def saved_file(self, selector, name, start):
+    def confirm_save(self, name, rename=None):
         """!
-        @brief Press a button that saves a file and check the file.
+        @brief Answer the dialog in which the name of a file that is saved
+        is chosen.
+        @param name   The name the dialog should propose.
+        @param rename Another name to type, None to take the one proposed.
+        """
+        self.wait(lambda b: b.find_element(By.ID, "save-dialog").get_attribute("open") is not None)
+        box = self.browser.find_element(By.ID, "save-name")
+        self.assertEqual(name, box.get_attribute("value"))
+        if rename:
+            box.clear()
+            box.send_keys(rename)
+        self.click('#save-form button[value="save"]')
+
+    def confirm_cancel(self):
+        """!
+        @brief Cancel the dialog of a file that is saved: it closes, and no
+        file is saved.
+        """
+        self.wait(lambda b: b.find_element(By.ID, "save-dialog").get_attribute("open") is not None)
+        before = sorted(p.name for p in self.downloads.iterdir())
+        self.click('#save-form button[value="cancel"]')
+        self.wait(lambda b: b.find_element(By.ID, "save-dialog").get_attribute("open") is None)
+        self.assertEqual(before, sorted(p.name for p in self.downloads.iterdir()))
+
+    def saved_file(self, selector, name, start, rename=None):
+        """!
+        @brief Press a button that saves a file, take or change the name
+        that the dialog proposes, and check the file.
         @param selector The CSS selector of the button.
-        @param name     The name the file should get.
+        @param name     The name the dialog should propose.
         @param start    What the file starts with.
+        @param rename   Another name to type in the dialog, None to take the
+        one that is proposed.
         @return The text of the file.
         """
-        target = self.downloads / name
+        target = self.downloads / (rename or name)
         if target.exists():
             target.unlink()
         self.click(selector)
+        self.confirm_save(name, rename)
         self.wait(lambda b: target.is_file() and target.stat().st_size > 0
                   and not list(self.downloads.glob("*.part")))
         text = target.read_text(errors="replace")
@@ -466,7 +502,11 @@ class PageTest(unittest.TestCase):
         table = self.saved_file("#g-save-f", "atomtypes.csv", "#atomtype|")
         self.assertEqual(["v2f1", "v2cl1", "v2br1", "v2i1", "hc", "c3", "c3_s", "o1", "cl"],
                          [line.split("|")[0] for line in table.splitlines()[1:]])
-        self.saved_file("#g-save-vs", "vsites.json", "{")
+        # The name that is proposed can be changed, and a save can be cancelled
+        self.saved_file("#g-save-vs", "vsites.json", "{", rename="halogen-sites.json")
+        self.click("#g-save-vs")
+        self.confirm_cancel()
+        self.assertEqual("", self.errors())
 
         # Its parameters, and a change of one of them
         self.click('#fftabs button[data-tab="edit"]')
@@ -878,8 +918,12 @@ class PageTest(unittest.TestCase):
         self.assertEqual("0", self.text("#geo-ncomp"))
         self.assertIn("New force field", self.text("#ffchips"))
         self.assertNotIn("change", self.text("#ffchips"))
-        log = self.downloads / "geometry_ff-g.log"
+        # The log, while the page still says what went wrong
+        log = self.downloads / "geometry_ff.log"
+        if log.exists():
+            log.unlink()
         self.click("#geo-log")
+        self.confirm_save("geometry_ff.log")
         self.wait(lambda b: log.is_file() and log.stat().st_size > 0)
         self.assertIn("Cannot find atomtype", log.read_text(errors="replace"))
 
@@ -1029,12 +1073,15 @@ class PageTest(unittest.TestCase):
         # The files
         saved = self.saved_file("#ev-data", "evaluate-COULOMB.xvg", "#")
         self.assertIn('legend "Train"', saved)
-        log = self.saved_file("#ev-log", "evaluate-g.log", "")
+        log = self.saved_file("#ev-log", "evaluate.log", "")
         self.assertIn("train_ff", log)
         from act_gui import plots  # pylint: disable=import-outside-toplevel
         if plots.available():
             target = self.downloads / "evaluate-COULOMB.pdf"
+            if target.exists():
+                target.unlink()
             self.click("#ev-pdf")
+            self.confirm_save("evaluate-COULOMB.pdf")
             self.wait(lambda b: target.is_file() and target.stat().st_size > 2000
                       and not list(self.downloads.glob("*.part")))
             self.assertTrue(target.read_bytes().startswith(b"%PDF"))
@@ -1507,6 +1554,8 @@ class PageTest(unittest.TestCase):
                " if (String(url).includes('/api/selection')) answer.clone().text()"
                ".then(text => window.saved.push(text)); return answer; });")
         self.click("#sel-save")
+        # Named after the molprop file
+        self.confirm_save("booze-inter.dat")
         self.wait(lambda b: len(b.execute_script("return window.saved")) == 1)
         self.wait(lambda b: "Saved booze-inter.dat" in b.find_element(By.ID, "toast").text)
         self.assertEqual("", self.errors())
@@ -1943,7 +1992,8 @@ class PageTest(unittest.TestCase):
         self.assertGreaterEqual(len(self.browser.find_elements(
             By.CSS_SELECTOR, "#trplot svg path, #trplot svg polyline")), 1)
         self.assertIn("job train-1 on the cluster, the trained force field", self.text("#ev-source"))
-        saved = self.saved_file("#tr-save", "trained.xml", "<alexandria_chemistry")
+        # Named after the molprop file it was trained on
+        saved = self.saved_file("#tr-save", "booze-mono-trained.xml", "<alexandria_chemistry")
         self.assertIn("alexandria_chemistry", saved)
         self.shot("35-cluster-training-results")
         self.assertEqual(logins + 3, len(self.cluster.calls()))

@@ -563,6 +563,17 @@
   </section>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<dialog class="save" id="save-dialog" aria-labelledby="save-title">
+  <form id="save-form" method="dialog">
+    <h2 id="save-title">Save as</h2>
+    <div class="field"><label for="save-name">File name</label>
+      <input class="mono" type="text" id="save-name" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
+    <p class="fine bad" id="save-error" hidden>Give a name for the file.</p>
+    <p class="muted fine">The browser puts the file in its folder for downloads. To choose the folder each time, set the browser to ask where to save each file.</p>
+    <div class="row end"><button class="btn" type="submit" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" type="submit" value="save">Save</button></div>
+  </form>
+</dialog>
 <script src="/static/vendor/3Dmol-min.js"></script>
 <script type="module" src="/static/js/app.js"></script>
 </body>
