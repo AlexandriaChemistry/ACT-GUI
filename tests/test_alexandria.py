@@ -513,6 +513,52 @@ class RealProgramTest(unittest.TestCase):
         self.assertEqual("finished", again["status"], again["error"])
         self.assertGreater(again["result"]["statistics"]["Train"]["Potential energy"]["N"], 0)
 
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_continue_a_training(self):
+        """!
+        @brief A training with the genetic algorithm ends with a
+        population, and the next training starts from its individuals.
+        """
+        import act  # pylint: disable=import-outside-toplevel
+        try:
+            act.config.launcher_words(2)
+        except act.ActError:
+            self.skipTest("No launcher for several processes")
+
+        def send(directory, name, kind):
+            """Upload a file of the test data of ACT"""
+            answer = self.client.post("/api/uploads", params={"kind": kind, "name": name},
+                                      content=(Path(TESTDATA) / directory / name).read_bytes(),
+                                      headers=self.headers)
+            self.assertEqual(200, answer.status_code, answer.text)
+            return answer.json()["id"]
+        mp_id = send("molprop", "booze-mono.xml", "molprop")
+        described = self.run_task({"task": "mp_describe", "molprop": {"file": mp_id}})
+        self.assertEqual("finished", described["status"], described["error"])
+        body = {"task": "train", "processes": 2,
+                "forcefield": {"file": send("forcefields", "halgren-PG.xml", "forcefield")},
+                "molprop": {"file": mp_id, "described": described["id"]},
+                "observables": ["epot"], "training": {"fit": ["sigma", "epsilon"]},
+                "options": {"optimizer": "HYBRID", "max_generations": 2, "max_iter": 3,
+                            "seed": 7}}
+        first = self.run_task(body)
+        self.assertEqual("finished", first["status"], first["error"])
+        self.assertIn("gpout", first["files"])
+        told = self.client.get("/api/jobs/%s/population" % first["id"], headers=self.headers)
+        self.assertEqual({"individuals": 2}, told.json())
+        further = dict(body, forcefield={"job": first["id"]},
+                       training={"fit": ["sigma", "epsilon"], "continue": first["id"]},
+                       options=dict(body["options"], random_init=False))
+        second = self.run_task(further)
+        self.assertEqual("finished", second["status"], second["error"])
+        log = self.client.get("/api/jobs/%s/files/g" % second["id"], headers=self.headers)
+        self.assertIn("Read gene pool with 2 individuals", log.text)
+        self.assertGreater(len(second["result"]["parameters"]), 0)
+        # An odd number of individuals is refused here, not by an assertion of the program
+        odd = self.client.post("/api/jobs", headers=self.headers, json=dict(body, processes=3))
+        self.assertEqual(400, odd.status_code)
+        self.assertIn("even number", odd.json()["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

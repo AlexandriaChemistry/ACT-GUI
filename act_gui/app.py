@@ -398,6 +398,19 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         result = job.result
         return result.get("molecules") if isinstance(result, dict) else None
 
+    def gene_pool(job_id: str) -> Optional[Path]:
+        """!
+        @brief The population that a training wrote at its end.
+        @param job_id The identifier of the job.
+        @return The file, None if there is no such job, if it is not done,
+        if it was no training or if it wrote none, as Monte Carlo alone.
+        """
+        job = manager.get(job_id)
+        if job is None or job.task != "train" or job.status != FINISHED:
+            return None
+        path = job.files.get("gpout")
+        return path if path is not None and path.is_file() else None
+
     def prepare(body: Any, processes: Optional[int] = None) -> Tuple[Task, Prepared]:
         """!
         @brief Check a request for a calculation.
@@ -419,7 +432,7 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
                 raise fail(409, lacking)
             return task, build_request(task, body, settings, uploads, written_forcefield,
                                        described_molprop,
-                                       processes if task.parallel else None)
+                                       processes if task.parallel else None, gene_pool)
         except RequestError as exc:
             raise fail(400, str(exc)) from exc
 
@@ -485,6 +498,23 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             return evaluation.read_selection(molecules, body.get("text"))
         except evaluation.EvaluationError as exc:
             raise fail(400, str(exc)) from exc
+
+    @app.get("/api/jobs/{job_id}/population")
+    async def population(job_id: str) -> Dict[str, Any]:
+        """!
+        @brief The population that a training ended with, from which
+        another training can continue.
+        @param job_id The identifier of the training.
+        @return The number of individuals, which is the number of
+        processes that a training needs to continue from it.
+        """
+        pool = gene_pool(job_id)
+        if pool is None:
+            raise fail(404, "This calculation has no population to continue from")
+        try:
+            return {"individuals": training.pool_size(pool)}
+        except training.TrainingError as exc:
+            raise fail(500, str(exc)) from exc
 
     @app.post("/api/jobs")
     async def submit(request: Request) -> Dict[str, Any]:

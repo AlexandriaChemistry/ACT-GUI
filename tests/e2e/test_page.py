@@ -637,6 +637,45 @@ class PageTest(unittest.TestCase):
         self.click("#vs-list li button")
         self.assertIn("None yet", self.text("#vs-list"))
         self.assertFalse(self.browser.find_element(By.ID, "vs-save").is_displayed())
+        # Sites of a file, as this page saves them and gen_ff -vs reads them
+        sites = [{"type": "v2f1", "interaction": "VSITE2", "atoms": ["f_b", "hf_b"],
+                  "parameters": {"vs2a": {"min": -1, "max": 0.5}}},
+                 {"type": "v3ow", "interaction": "VSITE3OUTS", "atoms": ["hw_b", "ow_b", "hw_b"],
+                  "parameters": {"vs3outs_a": {"min": -0.3, "max": 0.3},
+                                 "vs3outs_c": {"min": -12, "max": 12}}}]
+        with tempfile.TemporaryDirectory() as tmp:
+            good = Path(tmp) / "my-sites.json"
+            good.write_text(json.dumps({"description": "Two sites", "virtual_sites": sites}))
+            chooser = self.browser.find_element(By.ID, "vs-file")
+            chooser.send_keys(str(good))
+            self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#vs-list li button")) == 2)
+            self.assertEqual("", self.errors())
+            listed = self.text("#vs-list")
+            self.assertIn("v2f1 · VSITE2 · f_b, hf_b · vs2a −1 to 0.5", listed)
+            self.assertIn("v3ow · VSITE3OUTS · hw_b, ow_b, hw_b", listed)
+            self.assertTrue(self.browser.find_element(By.ID, "vs-save").is_displayed())
+            # The same file again adds nothing
+            chooser.send_keys(str(good))
+            self.wait(lambda b: "were there already" in b.find_element(By.ID, "toast").text)
+            self.assertEqual(2, len(self.browser.find_elements(By.CSS_SELECTOR,
+                                                               "#vs-list li button")))
+            # What is no file with sites is told, and changes nothing
+            wrong = {"no-list.json": json.dumps({"sites": sites}),
+                     "no-json.json": "<vsites/>",
+                     "kind.json": json.dumps({"virtual_sites": [dict(sites[0],
+                                                                     interaction="VSITE9")]}),
+                     "atoms.json": json.dumps({"virtual_sites": [dict(sites[0],
+                                                                      atoms=["f_b"])]}),
+                     "bounds.json": json.dumps({"virtual_sites": [dict(
+                         sites[0], parameters={"vs2a": {"min": 2, "max": 1}})]})}
+            for name, text in wrong.items():
+                bad = Path(tmp) / name
+                bad.write_text(text)
+                chooser.send_keys(str(bad))
+                self.wait(lambda b, name=name: name in self.errors())
+                self.assertIn("could not be read", self.errors())
+            self.assertEqual(2, len(self.browser.find_elements(By.CSS_SELECTOR,
+                                                               "#vs-list li button")))
 
     def test_6_change_a_force_field_and_use_it(self):
         """!
@@ -964,7 +1003,7 @@ class PageTest(unittest.TestCase):
         optimizer.select_by_value("HYBRID")
         self.assertTrue(self.browser.find_element(By.ID, "tr-genfield").is_displayed())
         self.assertGreaterEqual(int(self.browser.find_element(By.ID, "tr-procs").get_attribute("value")), 2)
-        self.assertIn("two at least", self.text("#tr-note"))
+        self.assertIn("an even number", self.text("#tr-note"))
         optimizer.select_by_value("MCMC")
         procs = self.browser.find_element(By.ID, "tr-procs")
         procs.clear()
@@ -1069,6 +1108,128 @@ class PageTest(unittest.TestCase):
         self.click('#ev-what button[data-v="compare"]')
         self.assertFalse(self.browser.find_element(By.ID, "tr-opts").is_displayed())
         self.assertEqual("Compare", self.text("#run-ev"))
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_9bb_continue_a_training(self):
+        """!
+        @brief After a training the next one continues from the trained
+        force field, without random values, and can start anew.
+        """
+        data = Path(TESTDATA)
+        self.open_page()
+        self.click('#nav button[data-view="molprop"]')
+        self.browser.find_element(By.ID, "mpw-file").send_keys(str(data / "molprop" / "booze-mono.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        self.click('#ev-what button[data-v="train"]')
+        self.browser.find_element(By.ID, "ev-fffile").send_keys(
+            str(data / "forcefields" / "halgren-PG.xml"))
+        choice = Select(self.browser.find_element(By.ID, "ev-ff"))
+        choice.select_by_value("upload")
+        self.assertFalse(self.browser.find_element(By.ID, "tr-contnote").is_displayed())
+        fit = self.browser.find_element(By.ID, "tr-fit")
+        fit.send_keys("sigma epsilon")
+        iterations = self.browser.find_element(By.ID, "tr-iter")
+        iterations.clear()
+        iterations.send_keys("3")
+        script = self.browser.execute_script
+        script("window.asked = []; const send = window.fetch;"
+               "window.fetch = (url, init) => { if (init && typeof init.body === 'string')"
+               " window.asked.push(init.body); return send(url, init); };")
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text in ("Done", "Failed"))
+        self.assertEqual("Done", self.text("#ev-pill"), self.errors())
+        random = self.browser.find_element(By.ID, "tr-random")
+        self.assertTrue(random.is_selected())
+
+        # Further from where this training ended
+        script("document.getElementById('tr-continue').click()")
+        self.wait(lambda b: b.find_element(By.ID, "tr-contnote").is_displayed())
+        self.assertEqual("trained", choice.first_selected_option.get_attribute("value"))
+        self.assertIn("The trained force field of the training that ended at",
+                      choice.first_selected_option.text)
+        self.assertFalse(random.is_selected())
+        note = self.text("#tr-conttext")
+        self.assertIn("from its trained force field", note)
+        self.assertNotIn("individuals", note)
+        # The genetic algorithm would need individuals, which Monte Carlo alone does not leave
+        optimizer = Select(self.browser.find_element(By.ID, "tr-optimizer"))
+        optimizer.select_by_value("HYBRID")
+        self.assertIn("no individuals to continue from", self.text("#tr-conttext"))
+        optimizer.select_by_value("MCMC")
+        self.shot("24b-training-continued")
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#tr-kinds button")) > 0)
+        script("document.getElementById('run-ev').scrollIntoView()")
+        self.click("#run-ev")
+        self.wait(lambda b: len([body for body in b.execute_script("return window.asked")
+                                 if '"train"' in body]) == 2)
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text in ("Done", "Failed"))
+        self.assertEqual("Done", self.text("#ev-pill"), self.errors())
+        requests = [body for body in map(json.loads, script("return window.asked"))
+                    if body.get("task") == "train"]
+        self.assertIn("file", requests[0]["forcefield"])
+        self.assertIn("job", requests[1]["forcefield"])
+        self.assertFalse(requests[1]["options"]["random_init"])
+        self.assertNotIn("continue", requests[1]["training"])
+        # What changed is told against the force field it continued from
+        self.assertTrue(self.browser.find_element(By.ID, "tr-diff").is_displayed())
+
+        # Or anew
+        script("document.getElementById('ev-card').scrollIntoView()")
+        script("document.getElementById('tr-anew').click()")
+        self.assertFalse(self.browser.find_element(By.ID, "tr-contnote").is_displayed())
+        self.assertEqual("default", choice.first_selected_option.get_attribute("value"))
+        self.assertTrue(random.is_selected())
+
+        # With the genetic algorithm the individuals go along, where
+        # several processes can be started
+        import act  # pylint: disable=import-outside-toplevel
+        try:
+            act.config.launcher_words(2)
+        except act.ActError:
+            return
+        procs = self.browser.find_element(By.ID, "tr-procs")
+        if int(procs.get_attribute("max")) < 2:
+            return
+        choice.select_by_value("upload")
+        optimizer.select_by_value("HYBRID")
+        generations = self.browser.find_element(By.ID, "tr-gen")
+        generations.clear()
+        generations.send_keys("2")
+        procs.clear()
+        procs.send_keys("2")
+        script("window.asked = []")
+        script("document.getElementById('run-ev').scrollIntoView()")
+        self.click("#run-ev")
+        self.wait(lambda b: any('"train"' in body for body in b.execute_script("return window.asked")))
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text in ("Done", "Failed"))
+        self.assertEqual("Done", self.text("#ev-pill"), self.errors())
+        script("document.getElementById('tr-continue').click()")
+        self.wait(lambda b: "2 individuals" in b.find_element(By.ID, "tr-conttext").text)
+        self.assertIn("That needs 2 processes", self.text("#tr-conttext"))
+        self.assertEqual("2", procs.get_attribute("value"))
+        self.shot("24c-training-continued-population")
+        if int(procs.get_attribute("max")) >= 4:
+            # Another number of processes than there are individuals
+            procs.clear()
+            procs.send_keys("4")
+            script("document.getElementById('run-ev').scrollIntoView()")
+            self.click("#run-ev")
+            self.wait(lambda b: "needs 2 processes" in b.find_element(By.ID, "toast").text)
+            procs.clear()
+            procs.send_keys("2")
+        script("window.asked = []")
+        script("document.getElementById('run-ev').scrollIntoView()")
+        self.click("#run-ev")
+        self.wait(lambda b: any('"train"' in body for body in b.execute_script("return window.asked")))
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text in ("Done", "Failed"))
+        self.assertEqual("Done", self.text("#ev-pill"), self.errors())
+        request = [body for body in map(json.loads, script("return window.asked"))
+                   if body.get("task") == "train"][0]
+        self.assertEqual(request["forcefield"]["job"], request["training"]["continue"])
+        self.assertEqual(2, request["processes"])
+        # Monte Carlo alone leaves the individuals where they are
+        optimizer.select_by_value("MCMC")
+        self.assertIn("does not use the 2 individuals", self.text("#tr-conttext"))
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_9c_compounds_and_weights(self):

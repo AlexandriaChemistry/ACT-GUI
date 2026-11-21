@@ -322,6 +322,61 @@ function siteList() {
   if (state.onChange) state.onChange();
 }
 
+/** The largest file with virtual sites that is read. */
+const MAX_SITE_FILE = 1048576;
+
+/**
+ * The virtual sites of a file as gen_ff -vs reads it, which is also what this page saves.
+ * @param {string} text The content of the file.
+ * @returns {object[]} The sites, with nothing in them but what was checked.
+ * @throws {Error} With what is wrong, for the user.
+ */
+function sitesOfFile(text) {
+  let data;
+  try { data = JSON.parse(text); } catch (e) { throw new Error("it is not a JSON file"); }
+  const listed = Array.isArray(data) ? data : data && data.virtual_sites;
+  if (!Array.isArray(listed) || !listed.length) throw new Error('it has no list "virtual_sites"');
+  return listed.map((entry, i) => {
+    const where = `site ${i + 1}`;
+    if (!entry || typeof entry !== "object") throw new Error(`${where} is not an object`);
+    const { type, interaction, atoms, parameters } = entry;
+    if (typeof type !== "string" || !/^v[A-Za-z0-9]{1,14}$/.test(type)) throw new Error(`${where} has no name of a site type, a v and up to 14 letters and digits`);
+    const kind = state.kinds.find(k => k.name === interaction);
+    if (!kind) throw new Error(`${type} is of a kind that is not known: ${String(interaction).slice(0, 20)}`);
+    if (!Array.isArray(atoms) || atoms.length !== kind.atoms || !atoms.every(a => typeof a === "string" && /^[A-Za-z0-9+_-]{1,20}$/.test(a))) {
+      throw new Error(`${type} of kind ${kind.name} needs ${kind.atoms} atoms`);
+    }
+    const bounds = {};
+    for (const param of kind.parameters) {
+      const b = parameters && parameters[param];
+      if (!b || typeof b.min !== "number" || typeof b.max !== "number" || !isFinite(b.min) || !isFinite(b.max) || b.min > b.max) {
+        throw new Error(`${type} needs a min and a max for ${param}`);
+      }
+      bounds[param] = { min: b.min, max: b.max };
+    }
+    return { type, interaction: kind.name, atoms: [...atoms], parameters: bounds };
+  });
+}
+
+/**
+ * Add the sites of a file to those for the new force field.
+ * @param {File} file The file.
+ */
+async function openSites(file) {
+  alertBox("");
+  try {
+    if (file.size > MAX_SITE_FILE) throw new Error("it is larger than 1 MB");
+    const same = (a, b) => a.type === b.type && a.interaction === b.interaction && a.atoms.join(" ") === b.atoms.join(" ");
+    const read = sitesOfFile(await file.text()), fresh = read.filter(site => !state.sites.some(old => same(old, site)));
+    state.sites.push(...fresh);
+    siteList();
+    toast(fresh.length === read.length ? `Added ${fresh.length} ${fresh.length === 1 ? "site" : "sites"} of ${file.name}`
+      : `Added ${fresh.length} of the ${read.length} sites of ${file.name}; the others were there already`);
+  } catch (e) {
+    alertBox(`The sites of ${file.name} could not be read: ${e.message}.`);
+  }
+}
+
 /** Add the site of the form to the sites for the new force field. */
 function addSite() {
   const kind = state.kinds.find(k => k.name === $("#vs-kind").value), name = $("#vs-type").value.trim();
@@ -412,6 +467,12 @@ export function startVsites(kinds, atomtypes, onChange = null) {
     state.sites.splice(+button.dataset.remove, 1);
     siteList();
   });
+  $("#vs-open").onclick = () => $("#vs-file").click();
+  $("#vs-file").onchange = e => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (file) openSites(file);
+  };
   $("#vs-save").onclick = () => {
     const text = JSON.stringify({ description: "Virtual sites made in the user interface of ACT", virtual_sites: state.sites }, null, 2) + "\n";
     const url = URL.createObjectURL(new Blob([text], { type: "application/json" })), link = el("a", { href: url, download: "vsites.json" });

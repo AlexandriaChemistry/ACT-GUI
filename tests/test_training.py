@@ -11,7 +11,9 @@
 @brief Tests of what is made for, and kept of, the training of a force
 field with alexandria train_ff.
 """
+import tempfile
 import unittest
+from pathlib import Path
 
 from act_gui import evaluation, training
 
@@ -39,8 +41,8 @@ class TrainingTest(unittest.TestCase):
 
     def test_processes(self):
         """!
-        @brief One individual for each process: within the limit, and two
-        at least for the genetic algorithm.
+        @brief One individual for each process: within the limit, and an
+        even number for the genetic algorithm, which pairs them.
         """
         self.assertEqual(1, training.processes(None, None, 8))
         self.assertEqual(1, training.processes(1, "MCMC", 8))
@@ -49,9 +51,43 @@ class TrainingTest(unittest.TestCase):
         self.assertEqual(4, training.processes(4, "HYBRID", 4))
         for value, optimizer in ((0, "MCMC"), (9, "MCMC"), (-1, None), (2.0, "MCMC"),
                                  ("2", "MCMC"), (True, "MCMC"), (1, "GA"), (1, "HYBRID"),
+                                 (3, "GA"), (5, "HYBRID"),
                                  (None, "GA"), (2, "ga"), (2, "Newton"), (2, 3)):
             with self.assertRaises(training.TrainingError, msg=repr((value, optimizer))):
                 training.processes(value, optimizer, 8)
+
+    def test_continue_from_a_population(self):
+        """!
+        @brief A training continues from the gene pool of an earlier one
+        when the optimizer has a population of the same size.
+        """
+        self.assertIsNone(training.continued({"fit": ["sigma"]}))
+        self.assertIsNone(training.continued(None))
+        self.assertEqual("abc", training.continued({"continue": "abc"}))
+        for wrong in (3, "", ["abc"], True):
+            with self.assertRaises(training.TrainingError, msg=repr(wrong)):
+                training.continued({"continue": wrong})
+        with tempfile.TemporaryDirectory() as tmp:
+            pool = Path(tmp) / "genepool.csv"
+            pool.write_text(" 1.0 2.0\n 3.0 4.0\n\n 5.0 6.0\n 7.0 8.0\n")
+            self.assertEqual(4, training.pool_size(pool))
+            self.assertEqual({"gpin": pool}, training.gene_pool("HYBRID", 4, pool))
+            self.assertEqual({"gpin": pool}, training.gene_pool("GA", 4, str(pool)))
+            # Another number of individuals, an optimizer without them, no pool
+            with self.assertRaises(training.TrainingError) as caught:
+                training.gene_pool("HYBRID", 2, pool)
+            self.assertIn("4 individuals", str(caught.exception))
+            self.assertIn("needs 4 processes", str(caught.exception))
+            with self.assertRaises(training.TrainingError) as caught:
+                training.gene_pool("MCMC", 4, pool)
+            self.assertIn("trained force field", str(caught.exception))
+            with self.assertRaises(training.TrainingError) as caught:
+                training.gene_pool("GA", 4, None)
+            self.assertIn("no population", str(caught.exception))
+            with self.assertRaises(training.TrainingError):
+                training.gene_pool("GA", 4, Path(tmp) / "gone.csv")
+            with self.assertRaises(training.TrainingError):
+                training.gene_pool("Newton", 4, pool)
 
     def test_part_for_testing(self):
         """!

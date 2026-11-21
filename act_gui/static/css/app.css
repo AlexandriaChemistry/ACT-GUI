@@ -278,3 +278,4 @@ table.data td.tick input, table.data th.tick input { display: block; }
 tr.unused td:not(.tick) { opacity: .55; }
 .row.nowrap { flex-wrap: nowrap; }
 .warntext { color: var(--warn); }
+.notice { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 8px 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); margin: 0 0 12px; }

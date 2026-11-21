@@ -97,6 +97,11 @@ class ClusterJobsApiTest(unittest.TestCase):
                 result.data = {"summary": {"molecules": 1},
                                "molecules": [{"name": "w2", "iupac": "water#water"}],
                                "validation": {"checked": True, "ok": True}}
+            elif command == "train_ff" and kwargs.get("optimizer") in ("GA", "HYBRID"):
+                # The individuals that a training ends with
+                pool = Path(workdir) / "genepool.csv"
+                pool.write_text(" 0.3 1.0\n" * kwargs.get("pop_size", 1))
+                result.files["gpout"] = [pool]
             return result
 
         def plotter(xvg, pdf, series=(), reverse_x=False, **extra):
@@ -224,6 +229,44 @@ class ClusterJobsApiTest(unittest.TestCase):
                                                  headers=self.headers).json()["jobs"][0]["job"])
         self.assertEqual(3, self.logins())
 
+    def test_training_continued_on_the_cluster(self):
+        """!
+        @brief A training on the cluster continues one that is done: its
+        force field and its individuals go along with the job.
+        """
+        body = dict(self.body, task="train", observables=["inter"],
+                    training={"fit": ["sigma"]}, processes=2,
+                    options={"optimizer": "HYBRID", "max_generations": 2, "max_iter": 5})
+        first = self.client.post("/api/jobs", headers=self.headers, json=body)
+        self.assertEqual(200, first.status_code, first.text)
+        first = first.json()["id"]
+        for _ in range(500):
+            job = self.client.get("/api/jobs/" + first, headers=self.headers).json()
+            if job["status"] != "running" and job["status"] != "queued":
+                break
+            time.sleep(0.01)
+        self.assertEqual("finished", job["status"], job["error"])
+        further = dict(body, forcefield={"job": first},
+                       training={"fit": ["sigma"], "continue": first})
+        further.pop("processes")
+
+        def post(**chosen):
+            return self.client.post("/api/cluster/jobs", headers=self.headers,
+                                    json=dict(further, cluster=chosen, send=False))
+        answer = post(name="train-2", tasks=2, minutes=60)
+        self.assertEqual(200, answer.status_code, answer.text)
+        shown = answer.json()
+        self.assertEqual(["ff.xml", "gpin.csv", "mp.xml", "selection.dat"],
+                         sorted(entry["name"] for entry in shown["files"]))
+        self.assertIn(" -gpin gpin.csv", shown["script"])
+        self.assertIn(" -pop_size 2 ", shown["script"])
+        self.assertNotIn(str(self.dir), answer.text)
+        # As many processes as the earlier training had individuals
+        refused = post(name="train-2", tasks=4, minutes=60)
+        self.assertEqual(400, refused.status_code)
+        self.assertIn("needs 2 processes", refused.json()["detail"])
+        self.assertEqual(0, self.logins())
+
     def test_training_on_the_cluster(self):
         """!
         @brief A training has an individual for each process of the job
@@ -252,7 +295,7 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.assertIn("-pop_size 2 ", shown["script"])
         refused = post(name="train-1", tasks=1)
         self.assertEqual(400, refused.status_code)
-        self.assertIn("two processes", refused.json()["detail"])
+        self.assertIn("even number of processes", refused.json()["detail"])
         for tasks in (0, "4", 5000, True):
             self.assertEqual(400, post(name="train-1", tasks=tasks).status_code, tasks)
         self.assertEqual(0, self.logins())

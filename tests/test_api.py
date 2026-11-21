@@ -756,6 +756,12 @@ class ApiTest(unittest.TestCase):
                     "interaction_energies": {"c": {"INTERACTION": {"QM": -20, "ACT": -19}},
                                              "d": {"INTERACTION": {"QM": -5, "ACT": -6}}}}}}}))
                 result.files["json"] = [whole]
+                if kwargs.get("optimize") is not False \
+                        and kwargs.get("optimizer") in ("GA", "HYBRID"):
+                    # The individuals that the training ended with
+                    pool = Path(workdir) / "genepool.csv"
+                    pool.write_text(" 0.3 1.0\n" * kwargs.get("pop_size", 1))
+                    result.files["gpout"] = [pool]
                 if kwargs.get("optimize") is not False:
                     # A training
                     result.data["parameters"] = {"0": {"class": "sigma", "name": "ow",
@@ -1054,6 +1060,43 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(["Test", "Train"],
                          sorted(line.split("|")[1]
                                 for line in options["sel"].read_text().splitlines()))
+
+        # The next training continues from the individuals of this one
+        hybrid = job
+        answer = client.get("/api/jobs/%s/population" % hybrid["id"], headers=self.headers)
+        self.assertEqual({"individuals": 2}, answer.json())
+        further = dict(more, forcefield={"job": hybrid["id"]},
+                       training={"fit": ["sigma"], "continue": hybrid["id"]})
+        job = done(post(further))
+        self.assertEqual("finished", job["status"], job["error"])
+        options = self.run.calls[-1]["options"]
+        pool = self.run.calls[-2]["workdir"] / "genepool.csv"
+        self.assertEqual((pool, self.run.calls[-2]["workdir"] / "trained.xml", 2),
+                         (options["gpin"], options["ff"], options["pop_size"]))
+        # Not with another number of individuals, not with Monte Carlo
+        # alone, and not from a training that has no population
+        ncalls = len(self.run.calls)
+        mcmc = [j for j in client.get("/api/jobs", headers=self.headers).json()["jobs"]
+                if j["task"] == "train"][-1]["id"]
+        self.assertEqual(404, client.get("/api/jobs/%s/population" % mcmc,
+                                         headers=self.headers).status_code)
+        self.assertEqual(404, client.get("/api/jobs/nosuchjob/population",
+                                         headers=self.headers).status_code)
+        for wrong, text in (
+                (dict(further, processes=4), "needs 2 processes"),
+                (dict(further, processes=1, options={"optimizer": "MCMC"}), "Monte Carlo alone"),
+                (dict(further, training={"fit": ["sigma"], "continue": mcmc}), "no population"),
+                (dict(further, training={"fit": ["sigma"], "continue": "nosuchjob"}),
+                 "no population"),
+                (dict(further, training={"fit": ["sigma"], "continue": described["id"]}),
+                 "no population"),
+                (dict(further, training={"fit": ["sigma"], "continue": 3}), "identifier"),
+                (dict(further, options={"optimizer": "HYBRID", "gpin": "/etc/passwd"}), ""),
+                (dict(more, processes=3), "even number")):
+            answer = post(wrong)
+            self.assertEqual(400, answer.status_code, wrong)
+            self.assertIn(text, answer.json()["detail"])
+        self.assertEqual(ncalls, len(self.run.calls))
 
         # The compounds for testing chosen by hand, and a property that counts double
         chosen = dict(body, weights={"inter": 2},

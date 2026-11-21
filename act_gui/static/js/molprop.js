@@ -34,6 +34,7 @@ const state = {
   limits: {},     // the smallest and largest values of options, by task
   tr: { points: [], job: null, running: null },  // the training: its progress, the job when it is done and while it runs
   sets: new Map(),  // what compounds are used for, by their name in the selection: test or ignore; the others are for training
+  cont: null,     // the training that the next one continues: { job, label, individuals }, individuals 0 without a population
   kinds: { key: "", list: [] },  // the kinds of parameters that the force field with this reference offers
   kindsAsked: 0,  // counts the times the kinds were asked for, to drop answers that come too late
 };
@@ -525,6 +526,7 @@ async function comparison() {
 async function chosenForcefield() {
   const choice = $("#ev-ff").value;
   if (choice === "workspace" && session.forcefield) return session.forcefield.ref;
+  if (choice === "trained" && state.cont) return { job: state.cont.job };
   if (choice !== "upload") return { default: true };
   if (!state.pendingFF) return null;
   if (!state.pendingFF.id) {
@@ -645,8 +647,9 @@ function trainingRequest(body) {
   // On the cluster the job has the processes, which are asked for with the job
   const cluster = onCluster(), most = cluster ? Number($("#ev-tasks").max) : state.maxProcesses;
   const processes = whole(cluster ? "#ev-tasks" : "#tr-procs", chosen.parallel ? 2 : 1, most);
-  if (processes === null) {
-    toast(chosen.parallel ? `${chosen.name} needs between 2 and ${most} processes.` : `Give between 1 and ${most} processes.`);
+  if (processes === null || (chosen.parallel && processes % 2)) {
+    // The genetic algorithm makes the next generation from pairs of individuals
+    toast(chosen.parallel ? `${chosen.name} needs an even number of processes, between 2 and ${most}.` : `Give between 1 and ${most} processes.`);
     return null;
   }
   // Compounds for testing that were chosen by hand are in the request already
@@ -660,6 +663,14 @@ function trainingRequest(body) {
   }
   if (Object.keys(weights).length) body = { ...body, weights };
   const request = { ...body, task: "train", options, training: { fit, test: percent / 100 } };
+  // The individuals of the training that is continued, for an optimizer that has a population
+  if (continues() && chosen.parallel && state.cont.individuals) {
+    if (processes !== state.cont.individuals) {
+      toast(`The training that is continued ended with ${state.cont.individuals} individuals, so this one needs ${state.cont.individuals} processes.`);
+      return null;
+    }
+    request.training.continue = state.cont.job;
+  }
   return cluster ? request : { ...request, processes };
 }
 
@@ -711,6 +722,8 @@ function trainingPlot() {
 function trained(job) {
   const result = job.result, table = $("#tr-params"), spread = result.parameters.some(p => p.stdev);
   state.tr.job = job.id;
+  // What to call it when another training continues it
+  if (!state.tr.name) state.tr.name = "the training that ended at " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   table.textContent = "";
   const heads = ["Kind", "Name", "Best"].concat(spread ? ["Mean", "Standard deviation", "Lowest", "Highest"] : []);
   table.append(el("thead", {}, el("tr", {}, ...heads.map((h, i) => el("th", i > 1 ? { class: "n" } : {}, h)))));
@@ -728,6 +741,49 @@ function trained(job) {
       (s.minimum === "yes" ? ", the force field is in a local minimum." : ", the force field is not in a local minimum: more iterations may improve it.");
   $("#tr-diff").hidden = !state.tr.base;
   $("#tr-result").hidden = false;
+}
+
+/**
+ * Whether the next training continues an earlier one: its trained force field is chosen.
+ * @returns {boolean} True if it does.
+ */
+const continues = () => Boolean(state.cont) && $("#ev-ff").value === "trained";
+
+/** Tell what the next training continues from, or that it starts anew. */
+function continueNote() {
+  const on = continues(), chosen = optimizer(), option = $('#ev-ff option[value="trained"]');
+  option.hidden = option.disabled = !state.cont;
+  if (!state.cont && $("#ev-ff").value === "trained") $("#ev-ff").value = "default";
+  $("#tr-contnote").hidden = !on;
+  if (!on) return;
+  const n = state.cont.individuals;
+  $("#tr-conttext").textContent = `Continues ${state.cont.label}: from its trained force field` + (
+    chosen.parallel
+      ? (n ? `, and from the ${n} individuals it ended with. That needs ${n} processes.` : ". It has no individuals to continue from, as it was done with Monte Carlo alone.")
+      : (n ? `. Monte Carlo alone does not use the ${n} individuals it ended with; ${state.training.optimizers.filter(o => o.parallel).map(o => o.name).join(" and ")} do.` : "."));
+}
+
+/**
+ * Set the form up to train further from a training that is done.
+ * @param {string} job   The training.
+ * @param {string} label What to call it.
+ */
+async function continueTraining(job, label) {
+  let individuals = 0;
+  // A training with a population tells how many individuals it has; Monte Carlo alone has none
+  try { individuals = (await (await call(`/jobs/${job}/population`)).json()).individuals; } catch (e) { individuals = 0; }
+  state.cont = { job, label, individuals };
+  $('#ev-ff option[value="trained"]').textContent = "The trained force field of " + label;
+  $('#ev-ff option[value="trained"]').hidden = $('#ev-ff option[value="trained"]').disabled = false;
+  $("#ev-ff").value = "trained";
+  // Further from where it is, not from random values
+  $("#tr-random").checked = false;
+  const chosen = optimizer();
+  if (chosen.parallel && individuals) $(onCluster() ? "#ev-tasks" : "#tr-procs").value = String(individuals);
+  if (!training()) $('#ev-what button[data-v="train"]').click();
+  what();
+  $("#ev-card").scrollIntoView({ behavior: "smooth", block: "start" });
+  toast("The next training continues " + label);
 }
 
 /**
@@ -768,10 +824,11 @@ function what() {
   $("#tr-genfield").hidden = !chosen.parallel;
   if (chosen.parallel && Number($("#tr-procs").value) < 2) $("#tr-procs").value = Math.min(4, state.maxProcesses);
   $("#tr-note").textContent = chosen.parallel
-    ? `${chosen.name} has one set of parameters, an individual, for each process, and needs two at least. Each generation every individual does the Monte Carlo iterations${chosen.name === "GA" ? " (not used by GA)" : ""}.`
+    ? `${chosen.name} has one set of parameters, an individual, for each process, and needs an even number of them. Each generation every individual does the Monte Carlo iterations${chosen.name === "GA" ? " (not used by GA)" : ""}.`
     : "With more than one process each has its own Monte Carlo chain, and the best of them is kept.";
   places();
   offerKinds();
+  continueNote();
 }
 
 /**
@@ -897,6 +954,8 @@ function show(label, data) {
   state.picked = -1;
   state.sets = new Map();
   state.property = "";
+  state.cont = null;
+  continueNote();
   // The monomers, all ticked as all compounds are used. They are offered when the file has complexes.
   const counts = new Map();
   for (const m of data.molecules) for (const part of m.monomers || []) counts.set(part, (counts.get(part) || 0) + 1);
@@ -942,7 +1001,7 @@ function show(label, data) {
 export function startMolprops(told) {
   state.observables = told.observables || [];
   $('#ev-ff option[value="default"]').textContent = told.default_forcefield;
-  $("#ev-ff").onchange = e => { if (e.target.value === "upload") $("#ev-fffile").click(); offerKinds(); };
+  $("#ev-ff").onchange = e => { if (e.target.value === "upload") $("#ev-fffile").click(); offerKinds(); continueNote(); };
   $("#ev-fffile").onchange = e => {
     const file = e.target.files[0];
     e.target.value = "";
@@ -989,6 +1048,8 @@ export function startMolprops(told) {
     if (!state.tr.job || !state.tr.base) return;
     document.dispatchEvent(new CustomEvent("act-open-forcefield", { detail: { ref: { job: state.tr.job }, label: "Trained force field", other: state.tr.base } }));
   };
+  $("#tr-continue").onclick = () => { if (state.tr.job) continueTraining(state.tr.job, state.tr.name); };
+  $("#tr-anew").onclick = () => { state.cont = null; $("#ev-ff").value = "default"; $("#tr-random").checked = true; continueNote(); offerKinds(); };
   $("#tr-use").onclick = () => {
     if (state.tr.job) document.dispatchEvent(new CustomEvent("act-open-forcefield", { detail: { ref: { job: state.tr.job }, label: "Trained force field" } }));
   };
@@ -1006,7 +1067,7 @@ export function startMolprops(told) {
     $("#tr-result").hidden = true;
     if (train) {
       // How the training went, from what it reported on the cluster
-      state.tr = { points: job.progress || [], job: null, running: null };
+      state.tr = { points: job.progress || [], job: null, running: null, name: "job " + e.detail.name };
       $("#tr-stop").hidden = true;
       $("#trplot").textContent = ""; $("#tr-plotnote").textContent = ""; $("#tr-status").textContent = "";
       $("#tr-bar").style.width = "100%";
