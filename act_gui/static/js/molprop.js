@@ -21,6 +21,8 @@ import { limits, plot } from "./plot.js";
 const state = {
   data: null,     // the file as edit_mp describes it: summary, molecules and validation
   query: "",      // the text that the name or the formula of a compound must contain
+  property: "",   // the property that a compound in the table must have values of, empty for any
+  mono: { counts: new Map(), chosen: new Set(), every: false, query: "" },  // the monomers of the file with the number of compounds each is in, and those that are ticked
   picked: -1,     // the compound of which the details are shown
   file: null,     // the molprop file on the server: { file, described, label }
   observables: [],  // the properties that a force field can be compared on
@@ -75,7 +77,8 @@ function countTable(table, heads, counts) {
  */
 function compoundsShown() {
   const query = state.query.trim().toLowerCase();
-  const all = state.data.molecules.map((molecule, index) => ({ index, molecule }));
+  let all = state.data.molecules.map((molecule, index) => ({ index, molecule }));
+  if (state.property) all = all.filter(({ molecule: m }) => (m.properties || {})[state.property] > 0);
   return query ? all.filter(({ molecule: m }) => (m.name + " " + m.iupac + " " + m.formula).toLowerCase().includes(query)) : all;
 }
 
@@ -88,12 +91,17 @@ function compoundTable() {
     : `${found.length} ${found.length === 1 ? "compound" : "compounds"}`;
   $("#mpw-empty").hidden = shown.length > 0;
   if (!shown.length) return;
-  table.append(el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Used for"), el("th", {}, "Formula"), el("th", { class: "n" }, "Atoms"),
+  // The box in the header is for all compounds that the table shows
+  const used = found.filter(({ molecule }) => state.sets.get(selectionName(molecule)) !== "ignore").length;
+  const all = el("input", { type: "checkbox", checked: used === found.length, indeterminate: used > 0 && used < found.length,
+                            data: { all: "1" }, title: "Use all compounds that the table shows, or none of them", "aria-label": "Use all compounds that the table shows" });
+  table.append(el("thead", {}, el("tr", {}, el("th", { class: "tick" }, all), el("th", {}, "Name"), el("th", {}, "Used for"), el("th", {}, "Formula"), el("th", { class: "n" }, "Atoms"),
     el("th", { class: "n" }, "Charge"), el("th", { class: "n" }, "Compounds"), el("th", { class: "n" }, "Calculations"), el("th", {}, "Methods"))));
   const body = el("tbody"), invalid = new Set(state.data.validation.invalid || []);
   for (const { index, molecule: m } of shown) {
     const bad = invalid.has(m.name) || invalid.has(m.iupac), set = state.sets.get(selectionName(m)) || "train";
-    body.append(el("tr", { class: "pick" + (index === state.picked ? " sel" : ""), data: { i: String(index) } },
+    body.append(el("tr", { class: "pick" + (index === state.picked ? " sel" : "") + (set === "ignore" ? " unused" : ""), data: { i: String(index) } },
+      el("td", { class: "tick" }, el("input", { type: "checkbox", checked: set !== "ignore", data: { tick: String(index) }, "aria-label": "Use " + (m.name || m.iupac) })),
       el("td", {}, m.name || m.iupac, bad ? el("span", { class: "pill bad ml8" }, "problem") : ""),
       el("td", {}, el("button", { class: "btn small use " + set, type: "button", data: { use: String(index) }, title: "Click to change: training, testing or not used" }, SET_NAMES[set])),
       el("td", { class: "num" }, m.formula),
@@ -127,6 +135,7 @@ function setsNote() {
   // Compounds for testing are chosen by hand or drawn as a part, not both
   $("#tr-test").disabled = byHand;
   $("#tr-testnote").hidden = !byHand;
+  if (!$("#sel-mono").hidden) monomerList();
 }
 
 /**
@@ -140,6 +149,90 @@ function useFor(molecules, set) {
   }
   compoundTable();
   setsNote();
+}
+
+/**
+ * Use compounds, or do not use them. Those that are used already stay for what they are used for.
+ * @param {object[]} molecules The compounds.
+ * @param {boolean} on         Whether they are used.
+ */
+function tick(molecules, on) {
+  for (const m of molecules) {
+    const name = selectionName(m);
+    if (!on) state.sets.set(name, "ignore"); else if (state.sets.get(name) === "ignore") state.sets.delete(name);
+  }
+  compoundTable();
+  setsNote();
+}
+
+/* ---------- the selection file ---------- */
+
+/** List the monomers of the file, each with a box that tells whether it is ticked. */
+function monomerList() {
+  const host = $("#sel-list"), query = state.mono.query.trim().toLowerCase();
+  host.textContent = "";
+  const names = [...state.mono.counts.keys()].sort((a, b) => a.localeCompare(b));
+  for (const name of names) {
+    if (query && !name.toLowerCase().includes(query)) continue;
+    host.append(el("label", { class: "check" }, el("input", { type: "checkbox", checked: state.mono.chosen.has(name), data: { mono: name } }),
+      name, el("span", { class: "n" }, String(state.mono.counts.get(name)))));
+  }
+  if (!host.children.length) host.append(el("span", { class: "muted fine" }, "No monomer with this text."));
+  const sets = chosenSets(), total = state.mono.counts.size, n = state.mono.chosen.size;
+  $("#sel-mononote").textContent = `${n} of ${total} ${total === 1 ? "monomer" : "monomers"} ticked, `
+    + `${sets.train + sets.test.length} of ${sets.train + sets.test.length + sets.ignore.length} compounds are used. After a monomer: the number of compounds it is in.`;
+}
+
+/**
+ * Use the compounds that the ticked monomers choose, and no others: a compound with one
+ * ticked monomer, or only those of which all monomers are ticked.
+ */
+function byMonomer() {
+  const { chosen, every } = state.mono;
+  for (const m of state.data.molecules) {
+    const parts = m.monomers || [], name = selectionName(m);
+    const used = parts.length > 0 && (every ? parts.every(part => chosen.has(part)) : parts.some(part => chosen.has(part)));
+    if (!used) state.sets.set(name, "ignore"); else if (state.sets.get(name) === "ignore") state.sets.delete(name);
+  }
+  compoundTable();
+  setsNote();
+}
+
+/** Use a part of the compounds that are ticked for testing, drawn at random, and the others for training. */
+function drawTesting() {
+  const percent = Number($("#sel-percent").value), most = 100 * state.training.max_test;
+  if (!(percent > 0 && percent <= most)) { toast(`Give the part for testing as a percentage, at most ${most}.`); return; }
+  const names = [...new Set(state.data.molecules.map(selectionName))].filter(name => state.sets.get(name) !== "ignore");
+  if (names.length < 2) { toast("Tick at least two compounds: one for training and one for testing."); return; }
+  const number = Math.min(names.length - 1, Math.max(1, Math.round(percent / 100 * names.length)));
+  for (let i = 0; i < number; i++) {
+    const j = i + Math.floor(Math.random() * (names.length - i));
+    [names[i], names[j]] = [names[j], names[i]];
+  }
+  names.forEach((name, i) => { if (i < number) state.sets.set(name, "test"); else state.sets.delete(name); });
+  compoundTable();
+  setsNote();
+  toast(`${number} of ${names.length} compounds are for testing`);
+}
+
+/** Use all compounds that are ticked for training. */
+function noTesting() {
+  for (const [name, set] of [...state.sets]) if (set === "test") state.sets.delete(name);
+  compoundTable();
+  setsNote();
+}
+
+/**
+ * Save the selection file with the compounds that are ticked.
+ * @param {Element} button The button that was pressed.
+ */
+function saveSelection(button) {
+  const sets = chosenSets();
+  if (sets.train < 1) { toast("No compound is for training: tick compounds in the table first."); return; }
+  alertBox("");
+  // The file is named after the molprop file it belongs to
+  const name = (state.file.label || "selection").replace(/\.[A-Za-z0-9]+$/, "") + ".dat";
+  saveFile(button, "/selection", {}, "Saving…", name, { described: state.file.described, sets: { test: sets.test, ignore: sets.ignore } });
 }
 
 /** Show the details of the compound that was picked, or hide them. */
@@ -763,6 +856,19 @@ function show(label, data) {
   state.data = data;
   state.picked = -1;
   state.sets = new Map();
+  state.property = "";
+  // The monomers, all ticked as all compounds are used. They are offered when the file has complexes.
+  const counts = new Map();
+  for (const m of data.molecules) for (const part of m.monomers || []) counts.set(part, (counts.get(part) || 0) + 1);
+  state.mono = { counts, chosen: new Set(counts.keys()), every: false, query: "" };
+  $("#sel-mono").hidden = !data.molecules.some(m => (m.monomers || []).length > 1);
+  $("#sel-find").value = "";
+  $("#sel-find").hidden = counts.size <= 12;
+  $$("#sel-mode button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === "any"));
+  const properties = $("#mpw-prop");
+  properties.textContent = "";
+  properties.append(el("option", { value: "" }, "All compounds"));
+  for (const name of Object.keys(data.summary.properties || {})) properties.append(el("option", { value: name }, "With " + name));
   state.ev = null;
   $("#ev-result").hidden = true;
   $("#ev-comp").hidden = true;
@@ -904,6 +1010,22 @@ export function startMolprops(told) {
     } finally { button.disabled = false; }
   };
   $("#mpw-search").oninput = e => { state.query = e.target.value; compoundTable(); };
+  $("#mpw-prop").onchange = e => { state.property = e.target.value; compoundTable(); };
+  // The selection file: compounds by monomer, a part for testing, and the file itself
+  $("#sel-list").addEventListener("change", e => {
+    const box = e.target.closest("input[data-mono]");
+    if (!box) return;
+    if (box.checked) state.mono.chosen.add(box.dataset.mono); else state.mono.chosen.delete(box.dataset.mono);
+    byMonomer();
+  });
+  seg($("#sel-mode"), v => { state.mono.every = v === "every"; byMonomer(); });
+  $("#sel-all").onclick = () => { state.mono.chosen = new Set(state.mono.counts.keys()); byMonomer(); };
+  $("#sel-none").onclick = () => { state.mono.chosen = new Set(); byMonomer(); };
+  $("#sel-find").oninput = e => { state.mono.query = e.target.value; monomerList(); };
+  $("#sel-draw").onclick = drawTesting;
+  $("#sel-clear").onclick = noTesting;
+  $("#sel-save").onclick = e => { if (state.data && state.file) saveSelection(e.currentTarget); };
+  $("#sel-percent").max = String(100 * state.training.max_test);
   // What the compounds are used for: one by one, or all that the table shows
   $("#ev-observables").addEventListener("change", weightFields);
   $("#mpw-setbar").addEventListener("click", e => {
@@ -911,6 +1033,10 @@ export function startMolprops(told) {
     if (button && state.data) useFor(compoundsShown().map(shown => shown.molecule), button.dataset.set);
   });
   $("#mpw-table").addEventListener("click", e => {
+    // The boxes: one compound, or all that the table shows
+    const box = e.target.closest("input[data-tick]"), all = e.target.closest("input[data-all]");
+    if (box) { tick([state.data.molecules[+box.dataset.tick]], box.checked); return; }
+    if (all) { tick(compoundsShown().map(shown => shown.molecule), all.checked); return; }
     const use = e.target.closest("button[data-use]");
     if (use) {
       const molecule = state.data.molecules[+use.dataset.use], order = Object.keys(SET_NAMES);

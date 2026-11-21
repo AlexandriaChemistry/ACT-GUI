@@ -99,6 +99,100 @@ class EvaluationTest(unittest.TestCase):
         with self.assertRaises(evaluation.EvaluationError):
             evaluation.selection(molecules, 0.25, sets={"test": ["methanol"]})
 
+    def test_monomers(self):
+        """!
+        @brief The monomers of a complex are the parts of its name, when
+        there are as many as the compounds that the complex consists of.
+        """
+        two = [{"formula": "CH4O", "iupac": ""}, {"formula": "H2O", "iupac": "oxidane"}]
+        self.assertEqual(["methanol", "water"], evaluation.monomers(
+            {"name": "methanol#water", "iupac": "methanol#water", "fragments": two}))
+        # Each monomer once
+        self.assertEqual(["water"], evaluation.monomers({"name": "water#water",
+                                                         "fragments": two}))
+        self.assertEqual(["water"], evaluation.monomers({"name": "water",
+                                                         "fragments": two[:1]}))
+        self.assertEqual(["a", "b", "c"], evaluation.monomers({"iupac": "a # b#c"}))
+        # A name that does not tell: what edit_mp says of the compounds
+        self.assertEqual(["CH4O", "oxidane"], evaluation.monomers({"name": "dimer 12",
+                                                                   "fragments": two}))
+        self.assertEqual(["a#b"], evaluation.monomers({"name": "a#b", "fragments": two[:1]}))
+        self.assertEqual(["?", "H2O"], evaluation.monomers(
+            {"name": "x", "fragments": [{}, {"formula": "H2O"}]}))
+        for wrong in (None, {}, {"name": ""}, {"name": 3}, "water"):
+            self.assertEqual([], evaluation.monomers(wrong))
+        # The description of a file gets them for the page
+        data = {"summary": {"molecules": 1}, "molecules": [{"name": "methanol#water",
+                                                            "fragments": two}]}
+        described = evaluation.described(data)
+        self.assertEqual(["methanol", "water"], described["molecules"][0]["monomers"])
+        self.assertEqual({"molecules": 1}, described["summary"])
+        self.assertNotIn("monomers", data["molecules"][0])
+        self.assertEqual({"x": 1}, evaluation.described({"x": 1}))
+
+    def test_compounds_chosen_by_monomer(self):
+        """!
+        @brief Choosing a monomer chooses the complexes it is in: with A#B,
+        A#C and B#C, choosing A gives A#B and A#C but not B#C.
+        """
+        molecules = [{"name": "A#B"}, {"name": "A#C"}, {"name": "B#C"}, {"name": "A#A"},
+                     {"name": "C"}]
+        self.assertEqual(["B#C", "C"], evaluation.without_monomers(molecules, ["A"]))
+        self.assertEqual(["A#A"], evaluation.without_monomers(molecules, ["B", "C"]))
+        self.assertEqual([], evaluation.without_monomers(molecules, ["A", "C"]))
+        self.assertEqual(["A#B", "A#C", "B#C", "A#A", "C"],
+                         evaluation.without_monomers(molecules, []))
+        # All monomers of a complex have to be chosen
+        self.assertEqual(["A#C", "B#C", "C"],
+                         evaluation.without_monomers(molecules, ["A", "B"], every=True))
+        self.assertEqual(["A#B", "B#C"],
+                         evaluation.without_monomers(molecules, ["A", "C"], every=True))
+        for wrong in (["D"], "A", [3], None, {"A": True}):
+            with self.assertRaises(evaluation.EvaluationError, msg=repr(wrong)):
+                evaluation.without_monomers(molecules, wrong)
+
+    def test_selection_file(self):
+        """!
+        @brief A selection file from the choices of the user: by monomer, by
+        hand, and with a part for testing that is drawn at random.
+        """
+        molecules = [{"name": "A#B"}, {"name": "A#C"}, {"name": "B#C"}, {"name": "A#D"},
+                     {"name": "D#D"}]
+        self.assertEqual("A#B|Train\nA#C|Train\nA#D|Train\n", evaluation.selection_file(
+            molecules, {"monomers": {"names": ["A"]}}))
+        self.assertEqual("A#B|Train\nA#C|Test\n", evaluation.selection_file(
+            molecules, {"monomers": {"names": ["A"]},
+                        "sets": {"test": ["A#C"], "ignore": ["A#D"]}}))
+        self.assertEqual("A#D|Train\nD#D|Train\n", evaluation.selection_file(
+            molecules, {"monomers": {"names": ["A", "D"], "every": True}}))
+        everything = "A#B|Train\nA#C|Train\nB#C|Train\nA#D|Train\nD#D|Train\n"
+        self.assertEqual(everything, evaluation.selection_file(molecules, {}))
+        # A part for testing: the same seed gives the same compounds
+        first = evaluation.selection_file(molecules, {"seed": 7}, 0.4)
+        self.assertEqual(first, evaluation.selection_file(molecules, {"seed": 7}, 0.4))
+        self.assertEqual(2, first.count("|Test"))
+        self.assertEqual(3, first.count("|Train"))
+        drawn = {evaluation.selection_file(molecules, {"seed": seed}, 0.4)
+                 for seed in range(20)}
+        self.assertGreater(len(drawn), 1)
+        by_monomer = evaluation.selection_file(molecules, {"monomers": {"names": ["A"]}}, 0.34)
+        self.assertEqual(["A#B", "A#C", "A#D"],
+                         [line.split("|")[0] for line in by_monomer.splitlines()])
+        self.assertEqual(1, by_monomer.count("|Test"))
+        wrong = [
+            None, [], {"monomers": ["A"]}, {"monomers": {"names": "A"}},
+            {"monomers": {"names": ["A"], "every": "yes"}}, {"monomers": {"names": ["E"]}},
+            # Nothing is left
+            {"monomers": {"names": []}},
+            # For testing, but not chosen
+            {"monomers": {"names": ["A"]}, "sets": {"test": ["B#C"]}},
+            {"monomers": {"names": ["A"]}, "sets": ["A#B"]},
+            {"seed": -1}, {"seed": 1.5}, {"seed": True}, {"seed": 2 ** 31},
+        ]
+        for spec in wrong:
+            with self.assertRaises(evaluation.EvaluationError, msg=repr(spec)):
+                evaluation.selection_file(molecules, spec)
+
     def test_weights(self):
         """!
         @brief A property can weigh more or less than the others in a

@@ -784,7 +784,7 @@ class PageTest(unittest.TestCase):
         self.assertIn("1-propanol#ethane", rows[0].text)
         # The details of a compound
         self.assertFalse(self.browser.find_element(By.ID, "mpw-detail").is_displayed())
-        self.click("#mpw-table tbody tr.pick td")
+        self.click("#mpw-table tbody tr.pick td:nth-child(2)")
         self.assertEqual("1-propanol#ethane", self.text("#mpw-dname"))
         self.assertEqual(2, len(self.browser.find_elements(By.CSS_SELECTOR, "#mpw-dfrag tbody tr")))
         self.assertIn("InChI=1S/C2H6", self.text("#mpw-dfrag"))
@@ -1152,6 +1152,110 @@ class PageTest(unittest.TestCase):
             str(data / "molprop" / "molprop.xml"))
         self.wait(lambda b: "molprop.xml" in b.find_element(By.ID, "mpw-chips").text)
         self.assertNotIn("testing", self.text("#mpw-sets"))
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_9d_selection_file(self):
+        """!
+        @brief The user makes a selection file: compounds are ticked one by
+        one or by the monomers they consist of, a part is drawn for testing,
+        and the file is saved.
+        """
+        data = Path(TESTDATA)
+        self.open_page()
+        self.click('#nav button[data-view="molprop"]')
+        self.browser.find_element(By.ID, "mpw-file").send_keys(
+            str(data / "molprop" / "booze-inter.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        self.assertEqual("", self.errors())
+        script = self.browser.execute_script
+
+        def ticked():
+            return script("return [...document.querySelectorAll('#mpw-table tbody tr')]"
+                          ".filter(r => r.querySelector('input[data-tick]').checked)"
+                          ".map(r => r.cells[1].textContent)")
+
+        def monomer(name):
+            script("[...document.querySelectorAll('#sel-list input[data-mono]')]"
+                   ".find(b => b.dataset.mono === arguments[0]).click()", name)
+        everything = ["methanol#methanol", "methanol#water", "water#water"]
+        self.assertEqual(everything, ticked())
+        # The monomers of the dimers, with the number of compounds each is in
+        self.assertTrue(self.browser.find_element(By.ID, "sel-mono").is_displayed())
+        self.assertEqual(["methanol2", "water2"], script(
+            "return [...document.querySelectorAll('#sel-list label')].map(l => l.textContent)"))
+        # Choosing a monomer chooses the dimers it is in, and no others
+        self.click("#sel-none")
+        self.assertEqual([], ticked())
+        self.assertEqual("0 for training, 3 not used", self.text("#mpw-sets"))
+        monomer("water")
+        self.assertEqual(["methanol#water", "water#water"], ticked())
+        self.assertIn("1 of 2 monomers ticked", self.text("#sel-mononote"))
+        self.assertIn("2 of 3 compounds are used", self.text("#sel-mononote"))
+        # Or only the dimers of which all monomers are ticked
+        self.click('#sel-mode button[data-v="every"]')
+        self.assertEqual(["water#water"], ticked())
+        self.click('#sel-mode button[data-v="any"]')
+        self.click("#sel-all")
+        self.assertEqual(everything, ticked())
+        self.shot("26-selection-monomers")
+
+        # One by one, and all that the table shows
+        script("document.querySelector('#mpw-table input[data-tick]').click()")
+        self.assertEqual(everything[1:], ticked())
+        self.assertEqual("2 for training, 1 not used", self.text("#mpw-sets"))
+        self.assertFalse(self.browser.find_element(By.ID, "mpw-detail").is_displayed())
+        header = "document.querySelector('#mpw-table input[data-all]')"
+        self.assertTrue(script("return %s.indeterminate" % header))
+        script(header + ".click()")
+        self.assertEqual(everything, ticked())
+        # The compounds with data for a property
+        options = [o.get_attribute("value") for o in
+                   self.browser.find_elements(By.CSS_SELECTOR, "#mpw-prop option")]
+        self.assertIn("InteractionEnergy", options)
+        Select(self.browser.find_element(By.ID, "mpw-prop")).select_by_value("InteractionEnergy")
+        self.assertEqual("3 compounds", self.text("#mpw-count"))
+
+        # A part for testing is drawn from the compounds that are ticked
+        script("document.querySelector('#mpw-table input[data-tick]').click()")
+        percent = self.browser.find_element(By.ID, "sel-percent")
+        percent.clear()
+        percent.send_keys("50")
+        self.click("#sel-draw")
+        self.assertEqual("1 for training, 1 for testing, 1 not used", self.text("#mpw-sets"))
+        self.click("#sel-clear")
+        self.assertEqual("2 for training, 1 not used", self.text("#mpw-sets"))
+        self.click("#sel-draw")
+        self.shot("27-selection-file")
+
+        # The file that is saved has what the table says
+        script("window.saved = []; const send = window.fetch;"
+               "window.fetch = (url, init) => send(url, init).then(answer => {"
+               " if (String(url).includes('/api/selection')) answer.clone().text()"
+               ".then(text => window.saved.push(text)); return answer; });")
+        self.click("#sel-save")
+        self.wait(lambda b: len(b.execute_script("return window.saved")) == 1)
+        self.wait(lambda b: "Saved booze-inter.dat" in b.find_element(By.ID, "toast").text)
+        self.assertEqual("", self.errors())
+        lines = script("return window.saved")[0].splitlines()
+        self.assertEqual(["methanol#water", "water#water"], [line.split("|")[0] for line in lines])
+        self.assertEqual(["Test", "Train"], sorted(line.split("|")[1] for line in lines))
+        uses = script("return [...document.querySelectorAll('#mpw-table tbody tr')]"
+                      ".map(r => r.querySelector('button[data-use]').textContent)")
+        self.assertEqual("Not used", uses[0])
+        self.assertEqual([("Testing" if line.endswith("Test") else "Training") for line in lines],
+                         uses[1:])
+        # Nothing ticked: no file
+        self.click("#sel-none")
+        self.click("#sel-save")
+        self.wait(lambda b: "No compound is for training" in b.find_element(By.ID, "toast").text)
+        self.assertEqual(1, len(script("return window.saved")))
+
+        # A file with single compounds has no monomers to choose from
+        self.browser.find_element(By.ID, "mpw-file").send_keys(
+            str(data / "molprop" / "molprop.xml"))
+        self.wait(lambda b: "molprop.xml" in b.find_element(By.ID, "mpw-chips").text)
+        self.assertFalse(self.browser.find_element(By.ID, "sel-mono").is_displayed())
+        self.assertTrue(self.browser.find_element(By.ID, "sel-save").is_displayed())
 
     # --- the cluster for long jobs ---
 

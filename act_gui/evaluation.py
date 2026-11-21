@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 
 class EvaluationError(ValueError):
@@ -94,6 +94,10 @@ SETS = ("test", "ignore")
 ## The seed with which the compounds for testing are drawn, such that the
 ## same file and the same part give the same compounds
 SPLIT_SEED = 20261120
+## The sign between the names of the compounds in the name of a complex
+MONOMER_SEPARATOR = "#"
+## The largest seed for drawing the compounds for testing
+MAX_SEED = 2147483647
 
 
 def options(chosen: Any, weights: Any = None) -> Dict[str, Any]:
@@ -134,7 +138,104 @@ def options(chosen: Any, weights: Any = None) -> Dict[str, Any]:
     return made
 
 
-def selection(molecules: Any, test: float = 0.0, sets: Any = None) -> str:
+def monomers(molecule: Any) -> List[str]:
+    """!
+    @brief The compounds that a dimer or a larger complex consists of.
+
+    The name of a complex has the names of its compounds with a # between
+    them, as in methanol#water. These names are used when the name or the
+    IUPAC name of the complex has one for each compound that edit_mp found
+    in it; otherwise the IUPAC name or the formula of each compound. A
+    single compound is its own monomer.
+    @param molecule A compound of a molprop file as edit_mp describes it.
+    @return The names, each once, in the order of the complex. Empty if the
+    compound has no name.
+    """
+    if not isinstance(molecule, Mapping):
+        return []
+    known = [name.strip() for name in (molecule.get("name"), molecule.get("iupac"))
+             if isinstance(name, str) and name.strip()]
+    if not known:
+        return []
+    fragments = molecule.get("fragments")
+    count = len(fragments) if isinstance(fragments, (list, tuple)) else 0
+    names: List[str] = []
+    for name in known:
+        parts = [part.strip() for part in name.split(MONOMER_SEPARATOR)]
+        if len(parts) > 1 and all(parts) and count in (0, len(parts)):
+            names = parts
+            break
+    if not names and count < 2:
+        names = [known[0]]
+    elif not names:
+        for fragment in fragments:
+            found = None
+            if isinstance(fragment, Mapping):
+                found = fragment.get("iupac") or fragment.get("formula") or fragment.get("inchi")
+            names.append(found.strip() if isinstance(found, str) and found.strip() else "?")
+    unique: List[str] = []
+    for part in names:
+        if part not in unique:
+            unique.append(part)
+    return unique
+
+
+def described(data: Any) -> Any:
+    """!
+    @brief What of the description of a molprop file by edit_mp goes to the
+    browser: all of it, and for each compound its monomers, such that the
+    page and the server agree on what they are.
+    @param data The result of edit_mp -json.
+    @return The same with "monomers" in each compound.
+    """
+    if not isinstance(data, Mapping) or not isinstance(data.get("molecules"), list):
+        return data
+    molecules = [dict(molecule, monomers=monomers(molecule)) if isinstance(molecule, Mapping)
+                 else molecule for molecule in data["molecules"]]
+    return dict(data, molecules=molecules)
+
+
+def without_monomers(molecules: Any, chosen: Any, every: bool = False) -> List[str]:
+    """!
+    @brief The compounds that are not used when the user chooses compounds
+    by their monomers.
+
+    With the complexes A#B, A#C and B#C, choosing A uses A#B and A#C but not
+    B#C. With every, a complex is used only when all its monomers are
+    chosen: A and B then use A#B, and A#A or B#B if the file has them.
+    @param molecules The compounds of a molprop file as edit_mp describes them.
+    @param chosen    The names of the monomers that are chosen.
+    @param every     Whether all monomers of a complex have to be chosen,
+    instead of one of them.
+    @return The names in the selection of the compounds that are left out.
+    @throws EvaluationError if the monomers are not a list of names, or if
+    one of them is in no compound of the file.
+    """
+    if not isinstance(chosen, (list, tuple)) or len(chosen) > MAX_COMPOUNDS \
+            or not all(isinstance(name, str) for name in chosen):
+        raise EvaluationError("The monomers that are chosen must be a list of names")
+    if not isinstance(molecules, Sequence) or isinstance(molecules, (str, bytes)):
+        raise EvaluationError("The molprop file has no compounds")
+    wanted = set(chosen)
+    known = set()
+    left_out: List[str] = []
+    for molecule in molecules:
+        parts = monomers(molecule)
+        known.update(parts)
+        used = bool(parts) and (all(part in wanted for part in parts) if every
+                                else any(part in wanted for part in parts))
+        if not used and isinstance(molecule, Mapping):
+            name = molecule.get("iupac") or molecule.get("name")
+            if isinstance(name, str) and name not in left_out:
+                left_out.append(name)
+    unknown = sorted(wanted - known)
+    if unknown:
+        raise EvaluationError("The molprop file has no monomer %r" % (unknown[0][:60],))
+    return left_out
+
+
+def selection(molecules: Any, test: float = 0.0, sets: Any = None,
+              seed: Optional[int] = None) -> str:
     """!
     @brief The selection of compounds for train_ff: all of them, unless
     the user chose otherwise.
@@ -148,6 +249,9 @@ def selection(molecules: Any, test: float = 0.0, sets: Any = None) -> str:
     with "test", the names of those for testing, and "ignore", the names
     of those that are not used. The names are those of the selection, the
     IUPAC name of a compound or else its name. None for none.
+    @param seed      The seed with which the compounds for testing are
+    drawn, None for the one that is always used, such that the same file
+    gives the same compounds.
     @return The text of the selection file, one line for each compound
     that is used.
     @throws EvaluationError if there are no compounds, if a name cannot be
@@ -199,11 +303,62 @@ def selection(molecules: Any, test: float = 0.0, sets: Any = None) -> str:
     if test > 0 and len(used) > 1:
         number = min(len(used) - 1, max(1, round(test * len(used))))
         testing = {used[index] for index in
-                   random.Random(SPLIT_SEED).sample(range(len(used)), number)}
+                   random.Random(SPLIT_SEED if seed is None else seed)
+                   .sample(range(len(used)), number)}
     if len(testing) >= len(used):
         raise EvaluationError("No compound is left to train on")
     return "".join("%s|%s\n" % (name, "Test" if name in testing else "Train")
                    for name in used)
+
+
+def selection_file(molecules: Any, spec: Any, test: float = 0.0) -> str:
+    """!
+    @brief A selection file as the user asks for it: the compounds chosen
+    one by one, by their monomers, or both, and those for testing by hand
+    or as a part that is drawn at random.
+    @param molecules The compounds of a molprop file as edit_mp describes them.
+    @param spec      The choices, an object that may have "sets", see
+    selection(), "monomers" with "names", the monomers that are chosen, and
+    "every", whether all monomers of a complex have to be chosen instead of
+    one, and "seed", a whole number with which the compounds for testing
+    are drawn.
+    @param test      The part of the compounds that is kept for testing.
+    @return The text of the file.
+    @throws EvaluationError if the choices are not understood or leave
+    nothing to train on.
+    """
+    if not isinstance(spec, Mapping):
+        raise EvaluationError("The choices for the selection must be an object")
+    sets = spec.get("sets")
+    by_monomer = spec.get("monomers")
+    if by_monomer is not None:
+        if not isinstance(by_monomer, Mapping) or not isinstance(by_monomer.get("every", False),
+                                                                 bool):
+            raise EvaluationError("The monomers are given as their names (names) and whether "
+                                  "all of a complex have to be chosen (every)")
+        left_out = without_monomers(molecules, by_monomer.get("names"),
+                                    by_monomer.get("every", False))
+        if sets is not None and not isinstance(sets, Mapping):
+            raise EvaluationError("The compounds that are chosen are given as those for "
+                                  "testing (test) and those that are not used (ignore)")
+        merged = {key: list(value) if isinstance(value, (list, tuple)) else value
+                  for key, value in (sets or {}).items()}
+        ignored = merged.get("ignore", [])
+        tested = merged.get("test", [])
+        if isinstance(ignored, list) and isinstance(tested, list):
+            for name in left_out:
+                if name in tested:
+                    raise EvaluationError("The compound %s is for testing, but its monomers "
+                                          "are not chosen" % name)
+                if name not in ignored:
+                    ignored.append(name)
+            merged["ignore"] = ignored
+        sets = merged
+    seed = spec.get("seed")
+    if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)
+                             or not 0 <= seed <= MAX_SEED):
+        raise EvaluationError("The seed is a whole number between 0 and %d" % MAX_SEED)
+    return selection(molecules, test, sets, seed)
 
 
 def digest(data: Any) -> Any:

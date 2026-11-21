@@ -423,6 +423,35 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         except RequestError as exc:
             raise fail(400, str(exc)) from exc
 
+    @app.post("/api/selection")
+    async def selection_file(request: Request) -> Response:
+        """!
+        @brief Write a selection file: which compounds of a molprop file
+        are for training and which for testing.
+        @param request The request, with a JSON object: "described", the
+        job that read the molprop file, and the choices: "sets" with the
+        compounds for testing and those that are not used, "monomers" to
+        choose compounds by what they consist of, "test" for a part that
+        is drawn for testing and "seed" for that draw.
+        @return The file, with a line for each compound that is used.
+        """
+        try:
+            body = await request.json()
+        except ValueError as exc:
+            raise fail(400, "The request is not valid JSON") from exc
+        if not isinstance(body, dict):
+            raise fail(400, "The request must be an object")
+        job_id = body.get("described")
+        molecules = described_molprop(job_id) if isinstance(job_id, str) else None
+        if molecules is None:
+            raise fail(400, "The molprop file has to be read before it is used, open it again")
+        try:
+            text = evaluation.selection_file(molecules, body, training.test_fraction(body))
+        except (evaluation.EvaluationError, training.TrainingError) as exc:
+            raise fail(400, str(exc)) from exc
+        return Response(text, media_type="text/plain; charset=utf-8",
+                        headers={"Content-Disposition": "attachment"})
+
     @app.post("/api/jobs")
     async def submit(request: Request) -> Dict[str, Any]:
         """!

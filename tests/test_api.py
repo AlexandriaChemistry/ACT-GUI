@@ -825,6 +825,59 @@ class ApiTest(unittest.TestCase):
             self.assertEqual(400, post(request).status_code, request)
         self.assertEqual(ncalls, len(self.run.calls))
 
+    def test_selection_file(self):
+        """!
+        @brief The server writes a selection file for a molprop file that
+        was read: all compounds, those the user chose one by one or by
+        monomer, with compounds for testing by hand or drawn at random.
+        """
+        client, _ = self.evaluation_app()
+        molprop = client.post("/api/uploads", params={"kind": "molprop", "name": "mols.xml"},
+                              content=MP, headers=self.headers).json()["id"]
+        answer = client.post("/api/jobs", headers=self.headers,
+                             json={"task": "mp_describe", "molprop": {"file": molprop}})
+        self.assertEqual(200, answer.status_code, answer.text)
+        described = answer.json()["id"]
+        for _ in range(500):
+            job = client.get("/api/jobs/" + described, headers=self.headers).json()
+            if job["status"] != "running" and job["status"] != "queued":
+                break
+            time.sleep(0.01)
+        self.assertEqual("finished", job["status"], job["error"])
+        # The page gets the monomers of each compound
+        self.assertEqual([["water"], ["methanol", "water"]],
+                         [m["monomers"] for m in job["result"]["molecules"]])
+
+        def ask(**choices):
+            return client.post("/api/selection", headers=self.headers,
+                               json=dict(choices, described=described))
+        answer = ask()
+        self.assertEqual(200, answer.status_code, answer.text)
+        self.assertEqual("water#water|Train\nmethanol#water|Train\n", answer.text)
+        self.assertTrue(answer.headers["content-type"].startswith("text/plain"))
+        self.assertEqual("attachment", answer.headers["content-disposition"])
+        self.assertEqual("water#water|Train\nmethanol#water|Test\n",
+                         ask(sets={"test": ["methanol#water"]}).text)
+        self.assertEqual("methanol#water|Train\n",
+                         ask(monomers={"names": ["methanol"]}).text)
+        self.assertEqual("water#water|Train\n",
+                         ask(monomers={"names": ["water"], "every": True}).text)
+        drawn = ask(test=0.5, seed=3)
+        self.assertEqual(200, drawn.status_code, drawn.text)
+        self.assertEqual(1, drawn.text.count("|Test"))
+        for wrong in ({"sets": {"test": ["acetone"]}}, {"monomers": {"names": ["acetone"]}},
+                      {"test": 0.9}, {"test": "half"}, {"seed": "x"},
+                      {"sets": {"ignore": ["water#water", "methanol#water"]}}):
+            self.assertEqual(400, ask(**wrong).status_code, wrong)
+        # Only for a file that was read, and with the key
+        for wrong in ("nosuchjob", 3, None):
+            self.assertEqual(400, client.post("/api/selection", headers=self.headers,
+                                              json={"described": wrong}).status_code)
+        self.assertEqual(400, client.post("/api/selection", headers=self.headers,
+                                          json=["x"]).status_code)
+        self.assertEqual(401, client.post("/api/selection",
+                                          json={"described": described}).status_code)
+
     def test_train_force_field(self):
         """!
         @brief train_ff gets what an evaluation gets, with the kinds of
