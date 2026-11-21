@@ -36,7 +36,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import cluster, cluster_jobs
+from . import cluster, cluster_jobs, evaluation
 from .cluster import ClusterError, ClusterSettings
 from .jobs import InputFile, place_files
 
@@ -91,6 +91,8 @@ class Plan:
     tasks: int
     minutes: int
     gpu: bool
+    ## The properties that a comparison compares, in the order they were chosen
+    observables: Tuple[str, ...] = ()
 
     def describe(self, settings: ClusterSettings) -> Dict[str, Any]:
         """!
@@ -114,7 +116,8 @@ def make_plan(name: str, task: str, command: str, options: Mapping[str, Any],
               outputs: Optional[Mapping[str, str]] = None,
               inputs: Optional[Mapping[str, Sequence[InputFile]]] = None,
               collect: Optional[Mapping[str, str]] = None,
-              tasks: int = 1, minutes: int = 60, gpu: bool = False) -> Plan:
+              tasks: int = 1, minutes: int = 60, gpu: bool = False,
+              observables: Sequence[str] = ()) -> Plan:
     """!
     @brief Turn a calculation into a job for the cluster.
     @param name      The name of the job.
@@ -135,6 +138,7 @@ def make_plan(name: str, task: str, command: str, options: Mapping[str, Any],
     @param tasks     The number of processes.
     @param minutes   The longest time the job may take.
     @param gpu       Whether the job needs a GPU.
+    @param observables The properties that a comparison compares.
     @return The plan.
     @throws ClusterError if the job cannot be made: a name, a number or a
     file that is not possible.
@@ -197,7 +201,8 @@ def make_plan(name: str, task: str, command: str, options: Mapping[str, Any],
     return Plan(name=name, task=task, command=command, words=words, script=script,
                 files=files, outputs=produced,
                 inputs={key: path.name for key, path in written.items()},
-                collect=kept, tasks=tasks, minutes=minutes, gpu=gpu)
+                collect=kept, tasks=tasks, minutes=minutes, gpu=gpu,
+                observables=tuple(observables))
 
 
 @dataclass
@@ -242,6 +247,8 @@ class ClusterJob:
     error: str = ""
     ## The number of times in a row that Slurm did not know the job
     missing: int = 0
+    ## The properties that a comparison compares, in the order they were chosen
+    observables: List[str] = field(default_factory=list)
     ## How far the job was when the cluster was last asked, for a job that
     ## reports its progress: what cluster_jobs.progress_summary() gives
     progress: Optional[Dict[str, Any]] = None
@@ -329,7 +336,19 @@ def _from_record(content: Any) -> ClusterJob:
         collect=_names(content.get("collect", {}), False),
         fetched=bool(content.get("fetched", False)), error=content.get("error", ""),
         missing=int(content.get("missing", 0)),
+        observables=_observables(content.get("observables", [])),
         progress=cluster_jobs.progress_summary(content.get("progress")), **numbers)
+
+
+def _observables(value: Any) -> List[str]:
+    """!
+    @brief The properties of a comparison as the file of a job has them.
+    @param value What the file has.
+    @return The names of the properties that are known, in their order.
+    """
+    if not isinstance(value, list):
+        return []
+    return [name for name in value if isinstance(name, str) and name in evaluation.OBSERVABLES]
 
 
 class ClusterQueue:
@@ -501,7 +520,7 @@ class ClusterQueue:
                          cluster=settings, slurm=slurm, created=self._clock(),
                          tasks=plan.tasks, minutes=plan.minutes, gpu=plan.gpu,
                          outputs=dict(plan.outputs), inputs=dict(plan.inputs),
-                         collect=dict(plan.collect))
+                         collect=dict(plan.collect), observables=list(plan.observables))
         with self._lock:
             self._jobs[job.name] = job
         try:

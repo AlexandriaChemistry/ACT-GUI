@@ -215,6 +215,8 @@ class ClusterJobsApiTest(unittest.TestCase):
         job_id = opened.json()["job"]
         result = self.client.get("/api/jobs/" + job_id, headers=self.headers).json()
         self.assertEqual("finished", result["status"])
+        # The properties that were chosen, in their order, as for a job here
+        self.assertEqual(["inter", "epot"], result["observables"])
         self.assertEqual({"Train": {"INTERACTION": {"N": 2, "RMSD": 1.0}}},
                          result["result"]["statistics"])
         self.assertEqual([{"name": "water#water", "dataset": "Train", "points": 1}],
@@ -394,6 +396,8 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.assertEqual(200, opened.status_code, opened.text)
         result = third.get("/api/jobs/" + opened.json()["job"], headers=self.headers).json()
         self.assertEqual({"compounds": [], "statistics": {}, "outliers": {}}, result["result"])
+        # Kept with the job on this machine
+        self.assertEqual(["inter", "epot"], result["observables"])
 
     def test_stop_and_forget(self):
         """!

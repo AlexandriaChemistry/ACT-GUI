@@ -20,7 +20,10 @@ described it, and are checked before they are written in the selection.
 """
 from __future__ import annotations
 
+import os
 import random
+import re
+import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -46,25 +49,52 @@ class Observable:
     files: Tuple[str, ...] = ()
     ## Whether it is a property of dimers, otherwise of single compounds
     dimer: bool = False
+    ## The names under which train_ff reports its statistics
+    statistics: Tuple[str, ...] = ()
+    ## The files with the comparison that can be plotted, by the name under
+    ## which they are fetched; for dimers those that train_ff writes always
+    terms: Tuple[str, ...] = ()
+
+    @property
+    def plots(self) -> Tuple[str, ...]:
+        """!
+        @brief The files with the comparison that can be plotted.
+        @return Their names, as they are fetched.
+        """
+        return self.files + self.terms
 
 
 ## The properties that can be compared, by name
 OBSERVABLES: Dict[str, Observable] = {o.name: o for o in (
-    Observable("epot", "Potential energy", "fc_epot", ("epotcorr",)),
-    Observable("force", "Forces on the atoms", "fc_force", ("forcecorr",)),
-    Observable("freq", "Vibrational frequencies", "fc_freq", ("freqcorr",)),
-    Observable("esp", "Electrostatic potential", "fc_esp", ("espcorr",)),
-    Observable("mu", "Dipole", "fc_mu", ("dipolecorr",)),
-    Observable("quad", "Quadrupole", "fc_quad", ("quadrupolecorr",)),
-    Observable("polar", "Polarizability", "fc_polar", ("alphacorr", "isopol", "anisopol")),
-    Observable("inter", "Interaction energy", "fc_inter", dimer=True),
-    Observable("elec", "Electrostatics", "fc_elec", dimer=True),
-    Observable("allelec", "Electrostatics and induction", "fc_allelec", dimer=True),
-    Observable("induc", "Induction", "fc_induc", dimer=True),
-    Observable("exch", "Exchange", "fc_exch", dimer=True),
-    Observable("disp", "Dispersion", "fc_disp", dimer=True),
-    Observable("exchind", "Exchange and induction", "fc_exchind", dimer=True),
-    Observable("vdw", "Van der Waals: exchange and dispersion", "fc_vdw", dimer=True),
+    Observable("epot", "Potential energy", "fc_epot", ("epotcorr",),
+               statistics=("Potential energy",)),
+    Observable("force", "Forces on the atoms", "fc_force", ("forcecorr",),
+               statistics=("RMS Force",)),
+    Observable("freq", "Vibrational frequencies", "fc_freq", ("freqcorr",),
+               statistics=("Frequencies",)),
+    Observable("esp", "Electrostatic potential", "fc_esp", ("espcorr",), statistics=("ESP",)),
+    Observable("mu", "Dipole", "fc_mu", ("dipolecorr",), statistics=("dipole",)),
+    Observable("quad", "Quadrupole", "fc_quad", ("quadrupolecorr",),
+               statistics=("quadrupole",)),
+    Observable("polar", "Polarizability", "fc_polar", ("alphacorr", "isopol", "anisopol"),
+               statistics=("Polariz. components", "Isotropic Polariz.",
+                           "Anisotropic Polariz.")),
+    Observable("inter", "Interaction energy", "fc_inter", dimer=True,
+               statistics=("INTERACTION",), terms=("INTERACTION",)),
+    Observable("elec", "Electrostatics", "fc_elec", dimer=True,
+               statistics=("COULOMB",), terms=("COULOMB",)),
+    Observable("allelec", "Electrostatics and induction", "fc_allelec", dimer=True,
+               statistics=("ALLELEC",), terms=("ALLELEC",)),
+    Observable("induc", "Induction", "fc_induc", dimer=True,
+               statistics=("INDUCTION",), terms=("INDUCTION",)),
+    Observable("exch", "Exchange", "fc_exch", dimer=True,
+               statistics=("EXCHANGE",), terms=("EXCHANGE",)),
+    Observable("disp", "Dispersion", "fc_disp", dimer=True,
+               statistics=("DISPERSION",), terms=("DISPERSION",)),
+    Observable("exchind", "Exchange and induction", "fc_exchind", dimer=True,
+               statistics=("EXCHIND",), terms=("EXCHIND",)),
+    Observable("vdw", "Van der Waals: exchange and dispersion", "fc_vdw", dimer=True,
+               statistics=("EXCHDISP",), terms=("EXCHDISP",)),
 )}
 
 ## The files that train_ff writes for dimers without being asked, by the
@@ -83,6 +113,21 @@ MAX_NAME_LENGTH = 300
 
 ## The most data points of a term of a compound that are sent to the browser
 MAX_POINTS = 20000
+
+## The most points of an energy term of all compounds that are sent to the browser
+MAX_PLOT_POINTS = 500000
+
+## What the key of a calculation in the result of train_ff looks like: the
+## word and the data file of the calculation in the molprop file
+_CALCULATION = re.compile(r"calculation-([A-Za-z0-9_.+-]{1,100})")
+CALCULATION_PREFIX = "calculation-"
+
+## The length units of the atoms in a molprop file, in Angstrom
+LENGTH_UNITS = {"Angstrom": 1.0, "A": 1.0, "nm": 10.0, "pm": 0.01, "Bohr": 0.529177210903,
+                "bohr": 0.529177210903}
+
+## The element of an atom from its name in a molprop file
+_ELEMENT = re.compile(r"[A-Z][a-z]?")
 
 ## The largest weight of a property in a training
 MAX_WEIGHT = 1e6
@@ -540,7 +585,205 @@ def compound(data: Any, index: Any) -> Dict[str, Any]:
 def describe() -> List[Dict[str, Any]]:
     """!
     @brief The properties that can be compared, for the browser.
-    @return For each its name, what the page calls it and whether it is a
-    property of dimers.
+    @return For each its name, what the page calls it, whether it is a
+    property of dimers, the names of its statistics and the files with
+    the comparison that can be plotted.
     """
-    return [{"name": o.name, "label": o.label, "dimer": o.dimer} for o in OBSERVABLES.values()]
+    return [{"name": o.name, "label": o.label, "dimer": o.dimer,
+             "statistics": list(o.statistics), "plots": list(o.plots)}
+            for o in OBSERVABLES.values()]
+
+
+def _number(value: Any) -> Optional[float]:
+    """!
+    @brief A number of the result of train_ff.
+    @param value What is there.
+    @return The number, None if it is no number.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def points(data: Any, term: Any) -> Dict[str, Any]:
+    """!
+    @brief The points of a term of the interaction energy of all compounds,
+    the reference against the force field, each with the compound, the
+    calculation and the data set it belongs to, such that the page can
+    tell which structure a point is.
+    @param data The result of train_ff.
+    @param term The name of the term, one of DIMER_FILES.
+    @return "term"; the lists "reference", "forcefield", "dataset",
+    "compound" (the place in the list of digest()) and "calculation" of the
+    same length; "truncated" if there were more than MAX_PLOT_POINTS.
+    @throws EvaluationError if there is no such term.
+    """
+    if not isinstance(term, str) or term not in DIMER_FILES:
+        raise EvaluationError("There is no such energy term")
+    made: Dict[str, Any] = {"term": term, "truncated": False, "reference": [],
+                            "forcefield": [], "dataset": [], "compound": [], "calculation": []}
+    molecules = _molecules(data) if isinstance(data, Mapping) else []
+    for index, molecule in enumerate(molecules):
+        energies = molecule.get("interaction_energies")
+        if not isinstance(energies, Mapping):
+            continue
+        dataset = molecule.get("dataset", "")
+        for key, terms in energies.items():
+            pair = terms.get(term) if isinstance(terms, Mapping) else None
+            if not isinstance(pair, Mapping):
+                continue
+            reference, forcefield = _number(pair.get("QM")), _number(pair.get("ACT"))
+            if reference is None or forcefield is None:
+                continue
+            if len(made["reference"]) >= MAX_PLOT_POINTS:
+                made["truncated"] = True
+                return made
+            made["reference"].append(reference)
+            made["forcefield"].append(forcefield)
+            made["dataset"].append(dataset if isinstance(dataset, str) else "")
+            made["compound"].append(index)
+            made["calculation"].append(str(key))
+    return made
+
+
+def calculation(data: Any, index: Any, key: Any) -> Dict[str, Any]:
+    """!
+    @brief The energies of one calculation of a compound in the result of
+    train_ff: for each term the reference, the force field and the
+    difference of the two.
+    @param data  The result of train_ff.
+    @param index The place of the compound in the list that digest() made.
+    @param key   The key of the calculation, calculation- and its data file.
+    @return The name and data set of the compound, the key and the data
+    file of the calculation, and "energies": a list with for each term its
+    name, "reference", "forcefield" and "difference" (force field minus
+    reference), None where a value is missing.
+    @throws EvaluationError if there is no such compound or calculation.
+    """
+    molecules = _molecules(data) if isinstance(data, Mapping) else []
+    if isinstance(index, bool) or not isinstance(index, int) \
+            or not 0 <= index < len(molecules):
+        raise EvaluationError("There is no such compound")
+    matched = _CALCULATION.fullmatch(key) if isinstance(key, str) else None
+    molecule = molecules[index]
+    energies = molecule.get("interaction_energies")
+    terms = energies.get(key) if matched and isinstance(energies, Mapping) else None
+    if not isinstance(terms, Mapping):
+        raise EvaluationError("The compound has no such calculation")
+    listed = []
+    for term, pair in terms.items():
+        if not isinstance(pair, Mapping):
+            continue
+        reference, forcefield = _number(pair.get("QM")), _number(pair.get("ACT"))
+        listed.append({"term": str(term), "reference": reference, "forcefield": forcefield,
+                       "difference": None if reference is None or forcefield is None
+                       else forcefield - reference})
+    return {"name": molecule.get("name", ""), "dataset": molecule.get("dataset", ""),
+            "calculation": key, "datafile": matched.group(1), "energies": listed}
+
+
+def _atoms(experiment: Any, fragments: Any) -> List[Dict[str, Any]]:
+    """!
+    @brief The atoms of a calculation in a molprop file.
+    @param experiment The element of the calculation.
+    @param fragments  The element with the compounds of the molecule, None
+    if it has none.
+    @return For each atom its element, type, coordinates in Angstrom and
+    the place of the compound it belongs to.
+    """
+    part: Dict[int, int] = {}
+    if fragments is not None:
+        for number, fragment in enumerate(fragments.findall("fragment")):
+            for word in (fragment.text or "").split():
+                if word.isdigit():
+                    part[int(word) - 1] = number
+    atoms = []
+    for place, atom in enumerate(experiment.findall("atom")):
+        name = atom.get("name", "")
+        found = _ELEMENT.match(name)
+        scale = LENGTH_UNITS.get(atom.get("coord_unit", "Angstrom"), 1.0)
+        position = []
+        for axis in ("x", "y", "z"):
+            try:
+                position.append(float((atom.findtext(axis) or "").strip()) * scale)
+            except ValueError as exc:
+                raise EvaluationError("An atom of the calculation has no position") from exc
+        atoms.append({"element": found.group(0) if found else "X",
+                      "type": atom.get("obtype", ""), "x": position[0], "y": position[1],
+                      "z": position[2], "fragment": part.get(place, 0)})
+    return atoms
+
+
+def structure(paths: Sequence["os.PathLike[str]"], name: str,
+              datafile: str) -> List[Dict[str, Any]]:
+    """!
+    @brief The atoms of a calculation in molprop files, found by the name
+    or the IUPAC name of the compound and the data file of the calculation,
+    as train_ff names them. The files are read piece by piece, such that a
+    large file needs little memory.
+    @param paths    The molprop files.
+    @param name     The name of the compound.
+    @param datafile The data file of the calculation.
+    @return The atoms, see _atoms().
+    @throws EvaluationError if the files do not have the calculation, or
+    cannot be read.
+    """
+    for path in paths:
+        try:
+            context = ElementTree.iterparse(os.fspath(path), events=("start", "end"))
+            root = None
+            for event, element in context:
+                if root is None and event == "start":
+                    root = element
+                if event != "end" or element.tag != "molecule":
+                    continue
+                info = element.find("molinfo")
+                names = {element.get("molname"), info.get("iupac") if info is not None else None}
+                if name in names:
+                    for experiment in element.findall("experiment"):
+                        if experiment.get("datafile") == datafile:
+                            return _atoms(experiment, element.find("fragments"))
+                element.clear()
+                if root is not None:
+                    root.clear()
+        except (OSError, ElementTree.ParseError) as exc:
+            raise EvaluationError("The molprop file cannot be read") from exc
+    raise EvaluationError("The molprop file that is open has no calculation %s of %s"
+                          % (datafile, name))
+
+
+def user_selection(molecules: Any, text: Any) -> str:
+    """!
+    @brief A selection file of the user, for train_ff as it is: each line
+    the name of a compound, a bar and Train, Test or Ignore. Names that the
+    molprop file does not have are kept, train_ff leaves them out.
+    @param molecules The compounds of the molprop file as edit_mp describes them.
+    @param text      The content of the file.
+    @return The lines, without the empty ones and the spaces around the
+    fields.
+    @throws EvaluationError if a line is no such line, or if no compound of
+    the molprop file is for training.
+    """
+    if not isinstance(text, str):
+        raise EvaluationError("The selection file must be text")
+    if len(text) > MAX_SELECTION_SIZE:
+        raise EvaluationError("The selection file is larger than %d MB"
+                              % (MAX_SELECTION_SIZE // (1024 * 1024)))
+    lines = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        fields = [field.strip() for field in line.split("|")]
+        if len(fields) != 2 or not fields[0] or fields[1] not in SELECTION_STATUS \
+                or len(fields[0]) > MAX_NAME_LENGTH:
+            raise EvaluationError("Line %d of the selection file is not the name of a compound, "
+                                  "a bar and Train, Test or Ignore: %r" % (number, line[:80]))
+        lines.append("%s|%s\n" % (fields[0], fields[1]))
+    try:
+        read = read_selection(molecules, "".join(lines))
+    except EvaluationError:
+        read = {"train": 0}
+    if read["train"] < 1:
+        raise EvaluationError("The selection file has no compound of the molprop file for "
+                              "training")
+    return "".join(lines)

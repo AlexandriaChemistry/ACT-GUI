@@ -554,7 +554,8 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             job = manager.submit(task.name, task.command, prepared.options,
                                  progress=task.progress, outputs=dict(task.outputs),
                                  inputs=prepared.inputs, collect=task.collect,
-                                 digest=task.digest, processes=prepared.processes)
+                                 digest=task.digest, processes=prepared.processes,
+                                 observables=prepared.observables)
         except JobError as exc:
             raise fail(429, str(exc)) from exc
         return manager.summary(job)
@@ -626,14 +627,14 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
                             filename=path.name if named
                             else "%s-%s%s" % (job.task, option, path.suffix))
 
-    @app.get("/api/jobs/{job_id}/compounds/{index}")
-    def job_compound(job_id: str, index: int) -> Dict[str, Any]:
+    def whole_result(job_id: str) -> Any:
         """!
-        @brief The energies of one compound of a comparison or a training,
-        from the file in which the program wrote its whole result.
+        @brief The whole result of a comparison or a training, from the file
+        in which the program wrote it.
         @param job_id The identifier of the calculation.
-        @param index  The place of the compound in the list of the result.
-        @return See evaluation.compound().
+        @return The result, without the outer key.
+        @throws HTTPException 404 for a calculation without such a result,
+        500 if the file cannot be read.
         """
         job = find_job(job_id)
         task = TASKS.get(job.task)
@@ -643,14 +644,77 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             raise fail(404, "This calculation has no energies of compounds")
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            # As act does: the file has one key, the name of the command
-            if isinstance(data, dict) and len(data) == 1:
-                data = next(iter(data.values()))
+        except (OSError, ValueError) as exc:
+            raise fail(500, "The result of the calculation cannot be read") from exc
+        # As act does: the file has one key, the name of the command
+        if isinstance(data, dict) and len(data) == 1:
+            data = next(iter(data.values()))
+        return data
+
+    @app.get("/api/jobs/{job_id}/compounds/{index}")
+    def job_compound(job_id: str, index: int) -> Dict[str, Any]:
+        """!
+        @brief The energies of one compound of a comparison or a training,
+        from the file in which the program wrote its whole result.
+        @param job_id The identifier of the calculation.
+        @param index  The place of the compound in the list of the result.
+        @return See evaluation.compound().
+        """
+        data = whole_result(job_id)
+        try:
             return evaluation.compound(data, index)
         except evaluation.EvaluationError as exc:
             raise fail(404, str(exc)) from exc
-        except (OSError, ValueError) as exc:
-            raise fail(500, "The result of the calculation cannot be read") from exc
+
+    @app.get("/api/jobs/{job_id}/points/{term}")
+    def job_points(job_id: str, term: str) -> Dict[str, Any]:
+        """!
+        @brief The points of a term of the interaction energy of all
+        compounds, each with its compound and calculation, such that the
+        page can show the structure of a point.
+        @param job_id The identifier of the calculation.
+        @param term   The term, such as INTERACTION or DISPERSION.
+        @return See evaluation.points().
+        """
+        data = whole_result(job_id)
+        try:
+            return evaluation.points(data, term)
+        except evaluation.EvaluationError as exc:
+            raise fail(404, str(exc)) from exc
+
+    @app.get("/api/jobs/{job_id}/compounds/{index}/calculations/{key}")
+    def job_calculation(job_id: str, index: int, key: str,
+                        molprop: Optional[str] = None) -> Dict[str, Any]:
+        """!
+        @brief The energies of one calculation of a compound and, from the
+        molprop file that the page has open, its structure. Not an async
+        function, so that reading a large molprop file does not hold up
+        other requests.
+        @param job_id  The identifier of the calculation.
+        @param index   The place of the compound in the list of the result.
+        @param key     The calculation, as the result names it.
+        @param molprop The upload of the molprop file, None for no structure.
+        @return See evaluation.calculation(), with "atoms", see
+        evaluation.structure(), empty if there is no structure, and
+        "structure_error", why not, empty if no file was given.
+        """
+        data = whole_result(job_id)
+        try:
+            told = evaluation.calculation(data, index, key)
+        except evaluation.EvaluationError as exc:
+            raise fail(404, str(exc)) from exc
+        told["atoms"] = []
+        told["structure_error"] = ""
+        if molprop is not None:
+            upload = uploads.get(molprop)
+            if upload is None or upload.kind != "molprop":
+                raise fail(404, "The molprop file is not known, open it again")
+            try:
+                told["atoms"] = evaluation.structure([uploads.path(upload)], told["name"],
+                                                     told["datafile"])
+            except evaluation.EvaluationError as exc:
+                told["structure_error"] = str(exc)
+        return told
 
     @app.get("/api/jobs/{job_id}/plots/{option}")
     def job_plot(job_id: str, option: str, series: str = "",

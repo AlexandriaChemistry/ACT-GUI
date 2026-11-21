@@ -288,3 +288,18 @@ dialog.save h2 { margin: 0 0 14px; font-size: 17px; }
 dialog.save input { width: 100%; box-sizing: border-box; }
 dialog.save .row.end { justify-content: flex-end; margin-top: 16px; }
 dialog.save .bad { color: var(--bad); }
+
+/* headers that sort a table */
+table.data th button.sort { appearance: none; background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer;
+  display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
+table.data th button.sort:hover { color: var(--ink); }
+table.data th[aria-sort="ascending"] button.sort, table.data th[aria-sort="descending"] button.sort { color: var(--ink); }
+table.data th button.sort .arrow { font-size: 9px; min-width: 9px; }
+table.data th.n button.sort { flex-direction: row-reverse; }
+
+/* plots that zoom and points that can be clicked */
+.plot.zoomable { cursor: grab; touch-action: none; user-select: none; }
+.plot.zoomable:active { cursor: grabbing; }
+.plot.pointable:not(.zoomable) { cursor: pointer; }
+#ev-calcstage { border-radius: var(--radius); height: clamp(280px, 44vh, 440px); }
+#ev-calctab tr.plotted td { font-weight: 600; color: var(--ink); }

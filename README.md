@@ -78,16 +78,33 @@ the molecule workspace can use for its calculations.
 The molprop workspace opens a molprop file and shows what is in it: the
 compounds with their formula, the compounds they consist of, the number of
 calculations and the methods, the number of values of each property, and
-the result of the validation of `alexandria edit_mp -validate`.
+the result of the validation of `alexandria edit_mp -validate`. A click on
+the header of a column sorts the table by it, a second click the other way
+around and a third gives the order of the file again.
 
 With a file open, a force field (the default, the one of the force field
 workspace or an uploaded one) can be compared with its data: `alexandria
 train_ff -nooptimize` computes the properties that are chosen for every
 compound, and the page shows the statistics and, for each property, the
-values of the force field against the reference values. The plot can be
-saved as a PDF file and the data as an xvg file. For a compound with
-several structures, such as a dimer, a histogram shows which energies the
-reference and the force field have, for each term of the energy.
+values of the force field against the reference values. Only the
+properties that were chosen are shown, in the order in which they were
+ticked, the first one first, also of a job on the cluster. The legend of a
+plot tells the compounds for training from those for testing. A plot is
+zoomed with the wheel of the mouse or the buttons + and −, moved by
+dragging, and shown whole again with *All* or a double click. The plot can be
+saved as a PDF file and the data as an xvg file.
+
+In a plot of a term of the interaction energy, such as the dispersion of
+SAPT against that of the force field, a click on a point shows the
+structure of that dimer, from the molprop file that is open, in a 3D view
+with the two compounds in different colours, and a table with the
+reference (SAPT), the force field (ACT) and their difference for every
+term of that structure. The points come from the result of `train_ff` in
+JSON, which names the calculation of each; with an older `alexandria`
+whose result does not have them the plot is made from the xvg file and
+cannot be clicked. For a compound with several structures, such as a
+dimer, a histogram shows which energies the reference and the force field
+have, for each term of the energy.
 
 The table of compounds says what each compound is used for: training,
 testing, or nothing. A click changes it for one compound, and the buttons
@@ -122,7 +139,13 @@ for training or for testing:
 
 A comparison or a training, on this computer or on the cluster, uses what
 the table says at that moment, so a selection that was opened or made here
-is the one that `train_ff` gets.
+is the one that `train_ff` gets. Instead, *Open selection file…* in the
+card of the comparison takes a selection file of the user, which
+`train_ff` then gets as it is; the table is not used. The server checks
+the file first: every line a name, a bar and `Train`, `Test` or `Ignore`,
+and at least one compound of the molprop file for training. The page
+tells how many compounds it has for training and for testing, and which
+names the molprop file does not have, which `train_ff` leaves out.
 
 Other programs can ask the server for the same file with a request to
 `/api/selection`, with the compounds by name or by monomer and a part for
