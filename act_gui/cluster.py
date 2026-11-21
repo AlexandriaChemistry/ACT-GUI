@@ -276,7 +276,8 @@ def batch_script(settings: ClusterSettings, name: str, words: Sequence[str], *,
     lines = ["#!/bin/bash -l",
              "#SBATCH --job-name=%s" % name,
              "#SBATCH --partition=%s" % (settings.gpu_partition if gpu else settings.partition),
-             "#SBATCH --ntasks=%d" % tasks,
+             # The short form: some installations of Slurm do not take --ntasks
+             "#SBATCH -n %d" % tasks,
              "#SBATCH --time=%d-%02d:%02d:00" % (minutes // 1440, minutes % 1440 // 60,
                                                  minutes % 60),
              "#SBATCH --output=%s" % OUTPUT_FILE]

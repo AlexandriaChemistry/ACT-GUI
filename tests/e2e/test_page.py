@@ -1747,7 +1747,7 @@ class PageTest(unittest.TestCase):
         self.assertEqual("dimers-1 · spoel@good:act/jobs/dimers-1", self.text("#ev-jobwhere"))
         script = self.text("#ev-jobscript")
         for line in ("#SBATCH --job-name=dimers-1", "#SBATCH --partition=GPU,CLUSTER-AMD",
-                     "#SBATCH --gres=gpu:1", "#SBATCH --ntasks=2", "#SBATCH --time=0-01:30:00"):
+                     "#SBATCH --gres=gpu:1", "#SBATCH -n 2", "#SBATCH --time=0-01:30:00"):
             self.assertIn(line, script)
         self.assertIn("srun alexandria train_ff ", script)
         self.assertIn(" -ff ff.xml ", script)
@@ -1882,7 +1882,7 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: b.find_element(By.ID, "ev-job").is_displayed() or self.errors())
         self.assertEqual("", self.errors())
         script = self.text("#ev-jobscript")
-        for part in ("#SBATCH --ntasks=4", "srun alexandria train_ff ", " -optimizer HYBRID ",
+        for part in ("#SBATCH -n 4", "srun alexandria train_ff ", " -optimizer HYBRID ",
                      " -fit 'De b' ", " -max_generations 3 ", " -max_iter 20 ", " -pop_size 4 ",
                      " -o trained.xml", " -progress progress.jsonl"):
             self.assertIn(part, script)

@@ -182,7 +182,7 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual("""#!/bin/bash -l
 #SBATCH --job-name=act-1a2b
 #SBATCH --partition=CLUSTER,CLUSTER-AMD
-#SBATCH --ntasks=1
+#SBATCH -n 1
 #SBATCH --time=0-01:00:00
 #SBATCH --output=slurm.out
 
@@ -201,7 +201,7 @@ exit $status
                                       gpu=True)
         lines = script.splitlines()
         for line in ("#SBATCH --partition=GPU,CLUSTER-AMD", "#SBATCH --gres=gpu:1",
-                     "#SBATCH --ntasks=16", "#SBATCH --time=1-12:05:00",
+                     "#SBATCH -n 16", "#SBATCH --time=1-12:05:00",
                      "#SBATCH --account=proj1", 'eval "$(conda shell.bash hook)"',
                      "conda activate act",
                      "srun alexandria train_ff -ff ff.xml -mp 'my data.xml' -fc_inter 1"):

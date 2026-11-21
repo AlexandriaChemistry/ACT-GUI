@@ -177,7 +177,7 @@ class PlanTest(QueueCase):
         self.assertEqual({"sel": "selection.dat"}, plan.inputs)
         self.assertEqual({"INTERACTION": "INTERACTION.xvg"}, plan.collect)
         self.assertIn("#SBATCH --job-name=compare-1\n", plan.script)
-        self.assertIn("#SBATCH --ntasks=4\n", plan.script)
+        self.assertIn("#SBATCH -n 4\n", plan.script)
         self.assertIn("#SBATCH --time=0-01:30:00\n", plan.script)
         self.assertIn("\nsrun alexandria train_ff -ff ff.xml -mp mp.xml ", plan.script)
         # Nothing of this machine goes to the cluster
