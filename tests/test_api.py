@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from act_gui.app import TOKEN_COOKIE, TOKEN_HEADER, create_app
 from act_gui.plots import PlotError
 from act_gui.settings import Settings
+from act_gui.tasks import TASKS
 from tests.test_jobs import FakeRun
 from tests.test_uploads import FF, MP, SDF
 
@@ -42,12 +43,20 @@ def fake_program_info():
     common = [option("qalg", "string"), option("maxiter", "int", 1000),
               option("minalg", "enum", "LBFGS", ("LBFGS", "Newton", "Steep")),
               option("toler", "real", 1e-6)]
-    return SimpleNamespace(commands={
-        "minimize": command(*common), "nma": command(*common, option("linewidth", "real", 24)),
-        "gentop": command(option("qalg", "string")),
-        "simulate": command(option("qalg", "string"), option("nsteps", "int", 0),
-                            option("temp", "real", 0)),
-    })
+    known = {
+        "minimize": list(common), "nma": common + [option("linewidth", "real", 24)],
+        "gentop": [option("qalg", "string")],
+        "simulate": [option("qalg", "string"), option("nsteps", "int", 0),
+                     option("temp", "real", 0)],
+    }
+    # What the interface gives with every run of a task, the program has
+    for task in TASKS.values():
+        options = known.setdefault(task.command, [])
+        for name in list(task.fixed) + list(task.outputs):
+            if all(name != o.name for o in options):
+                options.append(option(name, "file"))
+    return SimpleNamespace(commands={name: command(*options)
+                                     for name, options in known.items()})
 
 
 class ApiTest(unittest.TestCase):
@@ -307,6 +316,37 @@ class ApiTest(unittest.TestCase):
         self.assertEqual([], self.run.calls)
 
     # --- the force field workspace ---
+
+    def test_program_older_than_the_interface(self):
+        """!
+        @brief A program without an option that the interface always gives
+        is reported as too old, before anything is started.
+        """
+        def old_program():
+            info = fake_program_info()
+            options = dict(info.commands["minimize"].options)
+            del options["json"]
+            info.commands["minimize"] = SimpleNamespace(
+                options=options, has_option=lambda name: name in options)
+            del info.commands["nma"]
+            return info
+
+        app = create_app(self.settings, run=self.run, program_info=old_program)
+        client = TestClient(app)
+        answer = client.post("/api/jobs", headers=self.headers,
+                             json={"task": "minimize", "molecule": {"smiles": "CCO"}})
+        self.assertEqual(409, answer.status_code)
+        detail = answer.json()["detail"]
+        self.assertIn("-json of minimize", detail)
+        self.assertIn("older than this interface", detail)
+        answer = client.post("/api/jobs", headers=self.headers,
+                             json={"task": "nma", "molecule": {"smiles": "CCO"}})
+        self.assertEqual(409, answer.status_code)
+        self.assertIn("does not have the command nma", answer.json()["detail"])
+        # What the program has, still runs
+        answer = client.post("/api/jobs", headers=self.headers,
+                             json={"task": "charges", "molecule": {"smiles": "CCO"}})
+        self.assertEqual(200, answer.status_code)
 
     def test_generator_description(self):
         """!

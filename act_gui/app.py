@@ -40,7 +40,8 @@ from . import training
 from .cluster_queue import ClusterQueue
 from .jobs import FINISHED, JobError, JobManager
 from .settings import PACKAGE_DIR, Settings
-from .tasks import TASKS, Prepared, RequestError, Task, build_request, describe_task, find_task
+from .tasks import (TASKS, Prepared, RequestError, Task, build_request, describe_task,
+                    find_task, program_lacks)
 from .uploads import UploadError, UploadStore
 
 ## The name of the cookie and of the header with the token
@@ -409,6 +410,13 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             if not isinstance(body, dict):
                 raise RequestError("The request must be an object")
             task = find_task(body.get("task"))
+            try:
+                lacking = program_lacks(task, program_info())
+            except Exception:  # pylint: disable=broad-except
+                # A program that cannot be asked is reported when it is started
+                lacking = None
+            if lacking:
+                raise fail(409, lacking)
             return task, build_request(task, body, settings, uploads, written_forcefield,
                                        described_molprop,
                                        processes if task.parallel else None)
