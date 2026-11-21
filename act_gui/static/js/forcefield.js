@@ -370,16 +370,40 @@ function extracted(job) {
   $("#geo-log").hidden = !job.files.includes("g");
 }
 
+/**
+ * The molprop file that the geometries are taken from, as the server finds it: a file of
+ * its own, or that of the molprop workspace with the compounds that are ticked there.
+ * @returns {object} The reference to the file, with the compounds that are not used if there are any.
+ */
+function geometrySource() {
+  const shared = state.molprop.shared ? session.molprop : null;
+  if (!shared) return { file: state.molprop.file };
+  // Without compounds that are left out, the program takes all compounds of the file itself
+  return shared.sets.ignore.length ? { file: shared.file, described: shared.described, sets: { test: [], ignore: shared.sets.ignore } } : { file: shared.file };
+}
+
+/** Tell which molprop file the geometries are taken from. */
+function geometryLabel() {
+  const shared = state.molprop && state.molprop.shared ? session.molprop : null;
+  if (state.molprop && state.molprop.shared && !shared) state.molprop = null;
+  $("#mp-name").textContent = shared
+    ? shared.label + (shared.used < shared.total ? ` · the ${shared.used} of ${shared.total} compounds that are ticked in Molprop data` : ` · all ${shared.total} compounds`)
+    : state.molprop ? state.molprop.label : "";
+  $("#mp-shared").hidden = !session.molprop || Boolean(shared);
+  $("#run-geo").disabled = !(state.current && state.molprop);
+}
+
 /** Take the bonded parameters of the force field from a molprop file. */
 async function geometry() {
   if (!state.current || !state.molprop) return;
+  if (state.molprop.shared && session.molprop.used < 1) { toast("No compound is ticked in the tab Molprop data."); return; }
   const button = $("#run-geo"), sqe = $('#geo-qalg button[aria-pressed="true"]').dataset.v === "SQE";
   button.disabled = true;
   pill("geo-pill", "Reading the compounds…");
   alertBox("");
   try {
     const options = { gen_bcc: sqe, bfactor: numberOf("geo-bfactor"), afactor: numberOf("geo-afactor"), factor: numberOf("geo-factor") };
-    let job = await runTask({ task: "geometry_ff", forcefield: state.current.ref, molprop: { file: state.molprop.file }, options });
+    let job = await runTask({ task: "geometry_ff", forcefield: state.current.ref, molprop: geometrySource(), options });
     state.geoJob = job.id;
     extracted(job);
     if (!job.result.compounds) {
@@ -444,13 +468,19 @@ function rangeBar(param) {
   return el("span", { class: "range" + (out ? " out" : param.mutability === "Bounded" ? "" : " fixed") }, mark);
 }
 
+/**
+ * The parameters of a particle type that edit_ff changes: those of its charge.
+ * The mass and the reference enthalpy are properties of the element that it leaves as they are.
+ */
+const PARTICLE_PARAMETERS = ["charge", "zeta", "chargeVS", "zetaVS"];
+
 /** Fill the table of parameters. */
 function parameterTable() {
   const table = $("#p-table"), empty = $("#p-empty");
   table.textContent = "";
   empty.hidden = !!state.current;
   if (!state.current) { $("#p-count").textContent = ""; return; }
-  const lists = listsShown(), shown = lists.slice(0, MAX_LISTS), editable = state.filter !== "@particles";
+  const lists = listsShown(), shown = lists.slice(0, MAX_LISTS), particles = state.filter === "@particles";
   $("#p-count").textContent = lists.length > shown.length
     ? `the first ${shown.length} of ${lists.length} types, find a type to see others`
     : `${lists.length} ${lists.length === 1 ? "type" : "types"}`;
@@ -461,7 +491,9 @@ function parameterTable() {
   shown.forEach((list, i) => {
     list.parameters.forEach((param, j) => {
       const picked = state.picked && state.picked.identifier === list.identifier && state.picked.param.type === param.type;
-      const row = el("tr", { class: (editable ? "pick" : "") + (picked ? " sel" : ""), data: { list: String(i), param: String(j) } },
+      const editable = !particles || PARTICLE_PARAMETERS.includes(param.type);
+      const row = el("tr", { class: (editable ? "pick" : "") + (picked ? " sel" : ""), data: { list: String(i), param: String(j) },
+                             title: editable ? "" : "This parameter of a particle type cannot be changed here" },
         el("td", { class: "num" }, j === 0 ? list.identifier : ""), el("td", {}, param.type), el("td", { class: "n" }, num(param.value)),
         el("td", {}, param.unit), el("td", { class: "n" }, num(param.minimum)), el("td", { class: "n" }, num(param.maximum)),
         el("td", {}, rangeBar(param)), el("td", {}, param.mutability), el("td", { class: "n" }, String(param.ntrain)));
@@ -480,7 +512,7 @@ function editCard() {
   if (!picked) return;
   const what = $("#p-what"), param = picked.param;
   what.textContent = "";
-  for (const text of [picked.interaction, picked.identifier, param.type + (param.unit ? ` (${param.unit})` : "")]) {
+  for (const text of [picked.interaction === "@particles" ? "Particle type" : picked.interaction, picked.identifier, param.type + (param.unit ? ` (${param.unit})` : "")]) {
     what.append(el("span", { class: "chip" }, el("b", {}, text)));
   }
   $("#p-val").value = param.value; $("#p-min").value = param.minimum; $("#p-max").value = param.maximum;
@@ -490,7 +522,9 @@ function editCard() {
   else { select.prepend(el("option", { value: "" }, `Leave as it is: ${param.mutability}`)); select.value = ""; }
   $("#p-note").textContent = param.mutability === "Bounded"
     ? "A value outside the bounds is set to the nearest bound."
-    : `Training does not change this parameter (${param.mutability}). A new value or new bounds are set all the same.`;
+    : param.mutability === "ACM"
+      ? "This charge comes from the charge model for each molecule, so a value that is set here is not used."
+      : `Training does not change this parameter (${param.mutability}). A new value or new bounds are set all the same.`;
 }
 
 /**
@@ -632,14 +666,16 @@ export async function startForceFields(told) {
     try {
       const up = await upload(file, "molprop");
       state.molprop = { file: up.id, label: up.label };
-      $("#mp-name").textContent = up.label;
-      $("#run-geo").disabled = !state.current;
+      geometryLabel();
       alertBox("");
     } catch (err) {
-      $("#mp-name").textContent = state.molprop ? state.molprop.label : "";
+      geometryLabel();
       alertBox("The file was not accepted. " + err.message);
     }
   };
+  // The file of the molprop workspace, with the compounds that are ticked there
+  $("#mp-shared").onclick = () => { state.molprop = { shared: true }; geometryLabel(); };
+  document.addEventListener("act-molprop", geometryLabel);
   $("#run-geo").onclick = geometry;
   $("#geo-log").onclick = e => saveFile(e.currentTarget, `/jobs/${state.geoJob}/files/g`, {}, "Saving…", "geometry_ff.log");
   $("#p-filter").onchange = e => { state.filter = e.target.value; state.picked = null; parameterTable(); editCard(); };

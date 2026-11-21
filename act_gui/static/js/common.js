@@ -58,6 +58,7 @@ export const session = {
   token: "",            // for requests that change something
   pdf: false,           // whether the server can make PDF files of plots
   forcefield: null,     // the force field of the force field workspace: { ref, label }
+  molprop: null,        // the molprop file of the molprop workspace: { file, described, label, sets: { test, ignore }, used, total }
   clusterReady: false,  // whether the user has a cluster that jobs can be sent to
 };
 

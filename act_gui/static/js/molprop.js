@@ -136,6 +136,10 @@ function setsNote() {
   $("#tr-test").disabled = byHand;
   $("#tr-testnote").hidden = !byHand;
   if (!$("#sel-mono").hidden) monomerList();
+  // The force field workspace can take its geometries from the compounds that are chosen here
+  session.molprop = { ...state.file, sets: { test: sets.test, ignore: sets.ignore }, used: sets.train + sets.test.length,
+                      total: sets.train + sets.test.length + sets.ignore.length };
+  document.dispatchEvent(new CustomEvent("act-molprop"));
 }
 
 /**

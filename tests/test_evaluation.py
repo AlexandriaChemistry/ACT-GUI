@@ -220,10 +220,16 @@ class EvaluationTest(unittest.TestCase):
         read = evaluation.read_selection(
             molecules, "ethanol|Train\nacetone|Train\nacetone|Test\nbutanol|Test\n"
             "propanol|train\nno bar\na|b|c\n|Train\nw2|Train\n")
-        self.assertEqual(["water#water", "methanol#water", "propanol"], read["sets"]["ignore"])
-        self.assertEqual((["acetone", "butanol", "w2"], 3), (read["unknown"],
-                                                             read["unknown_count"]))
+        self.assertEqual(["methanol#water", "propanol"], read["sets"]["ignore"])
+        self.assertEqual((["acetone", "butanol"], 2), (read["unknown"],
+                                                       read["unknown_count"]))
         self.assertEqual((4, "propanol|train"), (read["invalid"], read["first_invalid"]))
+        # A compound is found by its name as well as by its IUPAC name
+        named = [{"name": "1-butanol", "iupac": "butan-1-ol"}, {"name": "w2",
+                                                                "iupac": "water#water"}]
+        read = evaluation.read_selection(named, "1-butanol|Test\nw2|Train\n")
+        self.assertEqual({"test": ["butan-1-ol"], "ignore": []}, read["sets"])
+        self.assertEqual(0, read["unknown_count"])
         many = "".join("x%d|Train\n" % i for i in range(50)) + "ethanol|Test\n"
         read = evaluation.read_selection(molecules, many)
         self.assertEqual((evaluation.MAX_UNKNOWN, 50), (len(read["unknown"]),

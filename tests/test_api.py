@@ -215,7 +215,7 @@ class ApiTest(unittest.TestCase):
         self.assertIn({"name": "inter", "label": "Interaction energy", "dimer": True},
                       session["observables"])
         self.assertEqual(["generator"], tasks[5]["needs"])
-        self.assertEqual(["forcefield", "molprop"], tasks[6]["needs"])
+        self.assertEqual(["forcefield", "molprop", "chosen"], tasks[6]["needs"])
         minimize = tasks[1]
         minalg = [o for o in minimize["options"] if o["name"] == "minalg"][0]
         self.assertEqual("enum", minalg["type"])
@@ -659,7 +659,7 @@ class ApiTest(unittest.TestCase):
         call = self.run.calls[0]
         self.assertEqual("edit_mp", call["command"])
         self.assertEqual({"mp": [self.settings.uploads_dir / (molprop + ".xml")],
-                          "json": True, "validate": True}, call["options"])
+                          "json": True, "validate": True, "molinfo": False}, call["options"])
         forcefield = self.upload("my.xml", "forcefield", FF).json()["id"]
         wrong = [
             {"task": "mp_describe"},
@@ -674,6 +674,53 @@ class ApiTest(unittest.TestCase):
             answer = self.client.post("/api/jobs", headers=self.headers, json=body)
             self.assertEqual(400, answer.status_code, body)
         self.assertEqual(1, len(self.run.calls))
+
+    def test_geometry_of_chosen_compounds(self):
+        """!
+        @brief geometry_ff gets a selection when the user left compounds
+        out, and none otherwise: it then takes all compounds of the file.
+        """
+        client, _ = self.evaluation_app()
+
+        def done(answer):
+            self.assertEqual(200, answer.status_code, answer.text)
+            for _ in range(500):
+                job = client.get("/api/jobs/" + answer.json()["id"], headers=self.headers).json()
+                if job["status"] in ("finished", "failed", "cancelled"):
+                    return job
+                time.sleep(0.01)
+            self.fail("The job did not finish")
+            return None
+
+        def post(**molprop):
+            return client.post("/api/jobs", headers=self.headers, json={
+                "task": "geometry_ff", "forcefield": {"file": forcefield}, "molprop": molprop})
+        molprop = client.post("/api/uploads", params={"kind": "molprop", "name": "mols.xml"},
+                              content=MP, headers=self.headers).json()["id"]
+        forcefield = client.post("/api/uploads", params={"kind": "forcefield", "name": "ff.xml"},
+                                 content=FF, headers=self.headers).json()["id"]
+        described = done(client.post("/api/jobs", headers=self.headers, json={
+            "task": "mp_describe", "molprop": {"file": molprop}}))["id"]
+        job = done(post(file=molprop, described=described,
+                        sets={"test": [], "ignore": ["methanol#water"]}))
+        self.assertEqual("finished", job["status"], job["error"])
+        call = self.run.calls[-1]
+        self.assertEqual("geometry_ff", call["command"])
+        self.assertEqual(call["workdir"] / "selection.dat", call["options"]["sel"])
+        self.assertEqual("water#water|Train\n", call["options"]["sel"].read_text())
+        # All compounds: no selection, also when the file was read
+        for request in ({"file": molprop}, {"file": molprop, "described": described}):
+            job = done(post(**request))
+            self.assertEqual("finished", job["status"], job["error"])
+            self.assertNotIn("sel", self.run.calls[-1]["options"])
+        ncalls = len(self.run.calls)
+        for wrong in ({"file": molprop, "sets": {"ignore": ["methanol#water"]}},
+                      {"file": molprop, "described": "nosuchjob", "sets": {"ignore": []}},
+                      {"file": molprop, "described": described, "sets": {"ignore": ["acetone"]}},
+                      {"file": molprop, "described": described,
+                       "sets": {"ignore": ["water#water", "methanol#water"]}}):
+            self.assertEqual(400, post(**wrong).status_code, wrong)
+        self.assertEqual(ncalls, len(self.run.calls))
 
     def evaluation_app(self):
         """!

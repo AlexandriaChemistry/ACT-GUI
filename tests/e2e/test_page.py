@@ -495,11 +495,30 @@ class PageTest(unittest.TestCase):
         self.assertEqual("6.25", self.parameter_rows()[0][2])
         self.assertFalse(self.browser.find_element(By.ID, "p-edit").is_displayed())
         self.assertIn("6.25", self.saved_file("#ff-save", "forcefield.xml", "<?xml"))
-        # The particle types can be looked at, not changed
+        # Of a particle type the charge and its width can be changed, not the mass
         self.show_parameters("@particles", "c3_s")
         rows = self.parameter_rows()
         self.assertEqual("c3_s", rows[0][0])
-        self.assertFalse(self.browser.find_elements(By.CSS_SELECTOR, "#p-table tr.pick"))
+        kinds = [row[1] for row in rows]
+        picks = self.browser.execute_script(
+            "return [...document.querySelectorAll('#p-table tbody tr')]"
+            ".map(r => r.classList.contains('pick'))")
+        self.assertEqual([kind != "mass" for kind in kinds], picks)
+        self.assertIn("charge", kinds)
+        self.browser.execute_script(
+            "document.querySelectorAll('#p-table tbody tr')[arguments[0]].click()",
+            kinds.index("charge"))
+        self.assertTrue(self.browser.find_element(By.ID, "p-edit").is_displayed())
+        self.assertIn("Particle type", self.text("#p-what"))
+        low = self.browser.find_element(By.ID, "p-min")
+        before = float(low.get_attribute("value"))
+        low.clear()
+        low.send_keys(str(before - 1.5))
+        self.click("#p-apply")
+        self.wait(lambda b: "(2 changes)" in b.find_element(By.ID, "ffchips").text)
+        self.assertEqual("", self.errors())
+        charge = self.parameter_rows()[kinds.index("charge")]
+        self.assertAlmostEqual(before - 1.5, float(charge[4].replace("\u2212", "-")), places=6)
         self.show_parameters("@particles", "no such type")
         self.assertIn("No type", self.text("#p-empty"))
 
@@ -1294,6 +1313,61 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: "molprop.xml" in b.find_element(By.ID, "mpw-chips").text)
         self.assertFalse(self.browser.find_element(By.ID, "sel-mono").is_displayed())
         self.assertTrue(self.browser.find_element(By.ID, "sel-save").is_displayed())
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_9e_geometry_of_chosen_compounds(self):
+        """!
+        @brief The force field workspace takes its geometries from the
+        molprop file of the molprop workspace, and from the compounds that
+        are ticked there.
+        """
+        data = Path(TESTDATA)
+        self.open_force_fields()
+        self.click('#fftabs button[data-tab="geom"]')
+        shared = self.browser.find_element(By.ID, "mp-shared")
+        run = self.browser.find_element(By.ID, "run-geo")
+        self.assertFalse(shared.is_displayed())
+        self.browser.find_element(By.ID, "ff-openfile").send_keys(
+            str(data / "forcefields" / "ACS-g1.xml"))
+        self.wait(lambda b: "ACS-g1.xml" in b.find_element(By.ID, "ffchips").text)
+        # A molprop file is opened in its own workspace, and a compound is left out
+        self.click('#nav button[data-view="molprop"]')
+        self.browser.find_element(By.ID, "mpw-file").send_keys(str(data / "molprop" / "molprop.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        self.click('#nav button[data-view="force-field"]')
+        self.assertTrue(shared.is_displayed())
+        self.assertFalse(run.is_enabled())
+        shared.click()
+        self.assertEqual("molprop.xml · all 3 compounds", self.text("#mp-name"))
+        self.assertFalse(shared.is_displayed())
+        self.assertTrue(run.is_enabled())
+        self.browser.execute_script(
+            "document.querySelector('#mpw-table input[data-tick]').click()")
+        self.assertEqual("molprop.xml · the 2 of 3 compounds that are ticked in Molprop data",
+                         self.text("#mp-name"))
+        self.browser.execute_script(
+            "window.asked = []; const send = window.fetch;"
+            "window.fetch = (url, init) => { if (init && typeof init.body === 'string')"
+            " window.asked.push(init.body); return send(url, init); };")
+        run.click()
+        self.wait(lambda b: b.find_element(By.ID, "geo-pill").text == "Done")
+        self.assertEqual("", self.errors())
+        self.assertEqual("2", self.text("#geo-ncomp"))
+        request = [body for body in map(json.loads, self.browser.execute_script(
+            "return window.asked")) if body.get("task") == "geometry_ff"][0]
+        self.assertEqual(1, len(request["molprop"]["sets"]["ignore"]))
+        self.shot("29-geometry-chosen")
+        # Nothing ticked: nothing to take geometries from
+        self.browser.execute_script(
+            "document.querySelector('#mpw-table input[data-all]').click();"
+            "if (document.querySelector('#mpw-table input[data-all]').checked)"
+            " document.querySelector('#mpw-table input[data-all]').click()")
+        run.click()
+        self.wait(lambda b: "No compound is ticked" in b.find_element(By.ID, "toast").text)
+        # A file of its own takes the place of the shared one
+        self.browser.find_element(By.ID, "mp-file").send_keys(str(data / "molprop" / "molprop.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "mp-name").text == "molprop.xml")
+        self.assertTrue(shared.is_displayed())
 
     # --- the cluster for long jobs ---
 
