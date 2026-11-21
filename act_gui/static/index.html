@@ -337,9 +337,12 @@
           <div class="body"><ul class="list" id="mpw-vlist"></ul>
             <p class="muted fine">Checked: every calculation of a compound has the same atoms in the same order, and the compounds of a dimer are in the same order everywhere.</p></div></div>
         <div class="card" id="sel-card"><div class="head"><h2>Selection file</h2><span class="spacer"></span>
-            <button class="btn small primary" id="sel-save" type="button">Save selection file</button></div>
+            <span class="row tight"><button class="btn small" id="sel-open" type="button">Open…</button>
+              <button class="btn small primary" id="sel-save" type="button">Save</button></span>
+            <input class="visually-hidden" type="file" id="sel-file" accept=".dat,.txt,text/plain" tabindex="-1" aria-hidden="true"></div>
           <div class="body stack-s">
-            <p class="muted fine">A selection file tells <code>train_ff</code> which compounds it uses: those that are ticked in the table, each for training or for testing.</p>
+            <p class="muted fine">A selection file tells <code>train_ff</code> which compounds it uses: those that are ticked in the table, each for training or for testing. A comparison or a training, here or on the cluster, uses what the table says.</p>
+            <p class="fine" id="sel-read" hidden></p>
             <div class="stack-s" id="sel-mono" hidden>
               <div class="row nowrap"><span class="lab">Choose by monomer</span><span class="spacer"></span>
                 <span class="row tight"><button class="btn small" id="sel-all" type="button">All</button><button class="btn small" id="sel-none" type="button">None</button></span></div>

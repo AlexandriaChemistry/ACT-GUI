@@ -277,3 +277,4 @@ table.data th.tick, table.data td.tick { width: 30px; padding-right: 0; }
 table.data td.tick input, table.data th.tick input { display: block; }
 tr.unused td:not(.tick) { opacity: .55; }
 .row.nowrap { flex-wrap: nowrap; }
+.warntext { color: var(--warn); }

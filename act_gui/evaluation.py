@@ -98,6 +98,13 @@ SPLIT_SEED = 20261120
 MONOMER_SEPARATOR = "#"
 ## The largest seed for drawing the compounds for testing
 MAX_SEED = 2147483647
+## The largest selection file that is read, in characters
+MAX_SELECTION_SIZE = 16 * 1024 * 1024
+## What a compound can be used for according to a selection file, as
+## alexandria reads it, and what that is in a request
+SELECTION_STATUS = {"Train": "train", "Test": "test", "Ignore": "ignore"}
+## The most names that are listed of those that are not in the molprop file
+MAX_UNKNOWN = 20
 
 
 def options(chosen: Any, weights: Any = None) -> Dict[str, Any]:
@@ -359,6 +366,83 @@ def selection_file(molecules: Any, spec: Any, test: float = 0.0) -> str:
                              or not 0 <= seed <= MAX_SEED):
         raise EvaluationError("The seed is a whole number between 0 and %d" % MAX_SEED)
     return selection(molecules, test, sets, seed)
+
+
+def read_selection(molecules: Any, text: Any) -> Dict[str, Any]:
+    """!
+    @brief Read a selection file of the user for the compounds of a molprop
+    file, as alexandria reads it: a line has the name of a compound, a bar
+    and Train, Test or Ignore; of a dimer the two compounds may be in the
+    other order than in the molprop file; the first line of a compound
+    counts. A compound of the molprop file that is not in the selection is
+    not used.
+    @param molecules The compounds of the molprop file as edit_mp describes
+    them.
+    @param text      The content of the selection file.
+    @return An object with "sets", the compounds for testing and those that
+    are not used as selection() takes them, the numbers "train", "test"
+    and "ignore" of compounds of the molprop file, "unknown", the first
+    names of the selection that the molprop file does not have, with their
+    number "unknown_count", and "invalid", the number of lines that were
+    not understood, with the first of them in "first_invalid".
+    @throws EvaluationError if the text is too long or is no text, or if
+    the selection has none of the compounds of the molprop file.
+    """
+    if not isinstance(text, str):
+        raise EvaluationError("The selection file must be text")
+    if len(text) > MAX_SELECTION_SIZE:
+        raise EvaluationError("The selection file is larger than %d MB"
+                              % (MAX_SELECTION_SIZE // (1024 * 1024)))
+    if not isinstance(molecules, Sequence) or isinstance(molecules, (str, bytes)) \
+            or not molecules:
+        raise EvaluationError("The molprop file has no compounds")
+    names: List[str] = []
+    for molecule in molecules:
+        name = (molecule.get("iupac") or molecule.get("name")) \
+            if isinstance(molecule, Mapping) else None
+        if isinstance(name, str) and name not in names:
+            names.append(name)
+    # A dimer is also found with its compounds in the other order
+    lookup: Dict[str, str] = {}
+    for name in names:
+        parts = name.split(MONOMER_SEPARATOR)
+        if len(parts) == 2:
+            lookup.setdefault(parts[1] + MONOMER_SEPARATOR + parts[0], name)
+    for name in names:
+        lookup[name] = name
+    status: Dict[str, str] = {}
+    unknown: List[str] = []
+    invalid = 0
+    first_invalid = ""
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        fields = [field.strip() for field in line.split("|")]
+        if len(fields) != 2 or not fields[0] or fields[1] not in SELECTION_STATUS:
+            invalid += 1
+            first_invalid = first_invalid or line[:80]
+            continue
+        found = lookup.get(fields[0])
+        if found is None:
+            if fields[0] not in unknown:
+                unknown.append(fields[0])
+        elif found not in status:
+            status[found] = SELECTION_STATUS[fields[1]]
+    if not status:
+        raise EvaluationError(
+            "The selection file has none of the compounds of the molprop file"
+            + (": %d lines were not understood, the first is %r" % (invalid, first_invalid)
+               if invalid else ""))
+    sets: Dict[str, List[str]] = {"test": [], "ignore": []}
+    for name in names:
+        use = status.get(name, "ignore")
+        if use != "train":
+            sets[use].append(name)
+    return {"sets": sets, "train": len(names) - len(sets["test"]) - len(sets["ignore"]),
+            "test": len(sets["test"]), "ignore": len(sets["ignore"]),
+            "unknown": [name[:MAX_NAME_LENGTH] for name in unknown[:MAX_UNKNOWN]],
+            "unknown_count": len(unknown), "invalid": invalid, "first_invalid": first_invalid}
 
 
 def digest(data: Any) -> Any:

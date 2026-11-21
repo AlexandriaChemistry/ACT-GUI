@@ -235,6 +235,42 @@ function saveSelection(button) {
   saveFile(button, "/selection", {}, "Saving…", name, { described: state.file.described, sets: { test: sets.test, ignore: sets.ignore } });
 }
 
+/**
+ * Read a selection file of the user: the table then says what the file says.
+ * @param {File} file The file.
+ */
+async function openSelection(file) {
+  if (file.size > 16 * 1048576) { alertBox("The selection file is larger than 16 MB."); return; }
+  const button = $("#sel-open");
+  button.disabled = true;
+  alertBox("");
+  try {
+    const read = await (await call("/selection/read", { method: "POST", json: { described: state.file.described, text: await file.text() } })).json();
+    state.sets = new Map([...read.sets.test.map(name => [name, "test"]), ...read.sets.ignore.map(name => [name, "ignore"])]);
+    // The monomers of the compounds that are used are those that are ticked
+    const chosen = new Set();
+    for (const m of state.data.molecules) if (state.sets.get(selectionName(m)) !== "ignore") for (const part of m.monomers || []) chosen.add(part);
+    state.mono.chosen = chosen;
+    state.mono.every = false;
+    $$("#sel-mode button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === "any"));
+    compoundTable();
+    setsNote();
+    // What the file said, and what of it could not be used
+    const note = $("#sel-read"), problems = [];
+    if (read.unknown_count) {
+      problems.push(`${read.unknown_count} ${read.unknown_count === 1 ? "compound of the selection is" : "compounds of the selection are"} not in the molprop file: `
+        + read.unknown.join(", ") + (read.unknown_count > read.unknown.length ? " and others" : "") + ".");
+    }
+    if (read.invalid) problems.push(`${read.invalid} ${read.invalid === 1 ? "line was" : "lines were"} not understood, the first is "${read.first_invalid}".`);
+    note.textContent = `${file.name}: ${read.train} for training, ${read.test} for testing` + (read.ignore ? `, ${read.ignore} of the molprop file not used` : "") + ". " + problems.join(" ");
+    note.className = "fine " + (problems.length ? "warntext" : "muted");
+    note.hidden = false;
+    toast("Opened " + file.name);
+  } catch (e) {
+    alertBox("The selection file could not be read. " + e.message + ".");
+  } finally { button.disabled = false; }
+}
+
 /** Show the details of the compound that was picked, or hide them. */
 function compoundDetail() {
   const card = $("#mpw-detail"), m = state.picked >= 0 ? state.data.molecules[state.picked] : null;
@@ -863,6 +899,7 @@ function show(label, data) {
   state.mono = { counts, chosen: new Set(counts.keys()), every: false, query: "" };
   $("#sel-mono").hidden = !data.molecules.some(m => (m.monomers || []).length > 1);
   $("#sel-find").value = "";
+  $("#sel-read").hidden = true;
   $("#sel-find").hidden = counts.size <= 12;
   $$("#sel-mode button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === "any"));
   const properties = $("#mpw-prop");
@@ -1025,6 +1062,12 @@ export function startMolprops(told) {
   $("#sel-draw").onclick = drawTesting;
   $("#sel-clear").onclick = noTesting;
   $("#sel-save").onclick = e => { if (state.data && state.file) saveSelection(e.currentTarget); };
+  $("#sel-open").onclick = () => $("#sel-file").click();
+  $("#sel-file").onchange = e => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (file && state.data && state.file) openSelection(file);
+  };
   $("#sel-percent").max = String(100 * state.training.max_test);
   // What the compounds are used for: one by one, or all that the table shows
   $("#ev-observables").addEventListener("change", weightFields);

@@ -1250,6 +1250,44 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: "No compound is for training" in b.find_element(By.ID, "toast").text)
         self.assertEqual(1, len(script("return window.saved")))
 
+        # A selection file of the user is opened: the table says what the file says
+        self.browser.find_element(By.ID, "sel-file").send_keys(
+            str(data / "molprop" / "booze-inter.dat"))
+        self.wait(lambda b: "booze-inter.dat" in b.find_element(By.ID, "sel-read").text)
+        self.assertEqual("", self.errors())
+        self.assertEqual("booze-inter.dat: 2 for training, 1 for testing.",
+                         self.text("#sel-read"))
+        self.assertEqual("2 for training, 1 for testing", self.text("#mpw-sets"))
+        self.assertEqual(everything, ticked())
+        self.assertEqual(["Training", "Training", "Testing"], script(
+            "return [...document.querySelectorAll('#mpw-table button[data-use]')]"
+            ".map(b => b.textContent)"))
+        self.shot("28-selection-opened")
+        # A comparison uses it, as a training does
+        script("window.asked = []; const post = window.fetch;"
+               "window.fetch = (url, init) => { if (init && typeof init.body === 'string')"
+               " window.asked.push(init.body); return post(url, init); };")
+        self.browser.find_element(By.ID, "ev-fffile").send_keys(
+            str(data / "forcefields" / "ACS-pol.xml"))
+        Select(self.browser.find_element(By.ID, "ev-ff")).select_by_value("upload")
+        script("document.getElementById('run-ev').scrollIntoView()")
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-pill").text in ("Done", "Failed"))
+        self.assertEqual("Done", self.text("#ev-pill"), self.errors())
+        request = [body for body in map(json.loads, script("return window.asked"))
+                   if body.get("task") == "evaluate"][0]
+        self.assertEqual({"test": ["water#water"], "ignore": []}, request["molprop"]["sets"])
+        rows = script("return [...document.querySelectorAll('#ev-stats tbody tr')]"
+                      ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertEqual({"Train", "Test"}, {row[1] for row in rows})
+        # A file that is no selection of these compounds changes nothing
+        script("document.getElementById('mpw-content').scrollIntoView()")
+        self.browser.find_element(By.ID, "sel-file").send_keys(
+            str(data / "molprop" / "booze-mono.dat"))
+        self.wait(lambda b: "could not be read" in self.errors())
+        self.assertIn("none of the compounds", self.errors())
+        self.assertEqual("2 for training, 1 for testing", self.text("#mpw-sets"))
+
         # A file with single compounds has no monomers to choose from
         self.browser.find_element(By.ID, "mpw-file").send_keys(
             str(data / "molprop" / "molprop.xml"))
