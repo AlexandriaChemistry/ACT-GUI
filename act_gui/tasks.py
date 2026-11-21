@@ -451,7 +451,7 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
         chosen = _edit_options(chosen)
     number = 1
     if task.parallel:
-        # One individual for each process, and an optimizer that can do with them
+        # The processes, the individuals, and an optimizer that can do with them
         chosen.setdefault("optimizer", training.DEFAULT_OPTIMIZER)
         try:
             if processes is None:
@@ -459,16 +459,19 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
                                             settings.max_processes)
             else:
                 number = training.processes(processes, chosen["optimizer"], processes)
+            individuals = training.population(
+                request.get("training") if TRAINING in task.needs else None,
+                chosen["optimizer"], number)
         except training.TrainingError as exc:
             raise RequestError(str(exc)) from exc
-        chosen["pop_size"] = number
+        chosen["pop_size"] = individuals
         if TRAINING in task.needs:
             # The population of an earlier training, for the same number of individuals
             try:
                 earlier = training.continued(request.get("training"))
                 if earlier is not None:
                     options.update(training.gene_pool(
-                        chosen["optimizer"], number, pools(earlier) if pools else None))
+                        chosen["optimizer"], individuals, pools(earlier) if pools else None))
             except training.TrainingError as exc:
                 raise RequestError(str(exc)) from exc
     elif request.get("processes") not in (None, 1):

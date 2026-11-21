@@ -14,9 +14,10 @@ browser.
 
 The user chooses the kinds of parameters to train, such as sigma and
 epsilon, and the properties to train on, which are those of an evaluation
-(module evaluation). train_ff has one individual, a set of parameters, for
-each of its processes, so the number of processes is the size of the
-population; the genetic algorithm needs two at least.
+(module evaluation). train_ff trains a population of individuals, sets of
+parameters, as many as it has processes unless the user gives another
+number: with fewer individuals each gets helper processes, with more (only
+for the genetic algorithm) each process computes several in turn.
 """
 from __future__ import annotations
 
@@ -46,7 +47,11 @@ MAX_TEST = 0.5
 ## The largest gene pool that is read to count its individuals
 MAX_POOL_BYTES = 64 * 1024 * 1024
 
-## The optimizers of train_ff, and whether they need more than one process
+## The largest number of individuals
+MAX_POPULATION = 1024
+
+## The optimizers of train_ff, and whether they need more than one process and
+## an even number of individuals
 OPTIMIZERS: Dict[str, bool] = {"MCMC": False, "HYBRID": True, "GA": True}
 
 ## The optimizer when none is chosen: the one that runs on one process
@@ -99,7 +104,7 @@ def processes(value: Any, optimizer: Any, largest: int) -> int:
     @param value     The number that is asked for, None for one.
     @param optimizer The optimizer, None for the default.
     @param largest   The largest number that is allowed.
-    @return The number of processes, which is the number of individuals.
+    @return The number of processes.
     @throws TrainingError if it is not a number within the limits, or too
     small for the optimizer.
     """
@@ -109,11 +114,42 @@ def processes(value: Any, optimizer: Any, largest: int) -> int:
     name = DEFAULT_OPTIMIZER if optimizer is None else optimizer
     if name not in OPTIMIZERS:
         raise TrainingError("The optimizer is one of %s" % ", ".join(OPTIMIZERS))
-    if OPTIMIZERS[name] and (number < 2 or number % 2):
-        # train_ff makes the next generation from pairs of individuals
-        raise TrainingError("The optimizer %s needs an even number of processes, two at least"
-                            % name)
+    if OPTIMIZERS[name] and number < 2:
+        # The master hands out the individuals to the others
+        raise TrainingError("The optimizer %s needs two processes at least" % name)
     return number
+
+
+def population(spec: Any, optimizer: Any, number: int) -> int:
+    """!
+    @brief The number of individuals of a training (train_ff -pop_size).
+    @param spec      The choices: an object that may have "population", a
+    whole number; without it there is one individual for each process.
+    @param optimizer The optimizer, checked by processes.
+    @param number    The number of processes, checked by processes.
+    @return The number of individuals.
+    @throws TrainingError if it is not a whole number within the limits,
+    not even for the genetic algorithm, which pairs the individuals, more
+    than the processes for Monte Carlo alone, or fewer than the processes
+    and not a divisor of them, such that each individual gets as many.
+    """
+    value = spec.get("population") if isinstance(spec, Mapping) else None
+    size = number if value is None else value
+    if isinstance(size, bool) or not isinstance(size, int) or not 1 <= size <= MAX_POPULATION:
+        raise TrainingError("The number of individuals is between 1 and %d" % MAX_POPULATION)
+    name = DEFAULT_OPTIMIZER if optimizer is None else optimizer
+    if OPTIMIZERS.get(name, False) and (size < 2 or size % 2):
+        # train_ff makes the next generation from pairs of individuals
+        raise TrainingError("The optimizer %s needs an even number of individuals, two at least%s"
+                            % (name, "" if value is not None else
+                               ", and without a number of individuals it has one for each process"))
+    if size > number and not OPTIMIZERS.get(name, False):
+        raise TrainingError("Monte Carlo alone has at most one individual for each process, "
+                            "not %d individuals on %d processes" % (size, number))
+    if size < number and number % size:
+        raise TrainingError("With %d individuals the number of processes is a multiple of %d, "
+                            "such that each individual gets as many, not %d" % (size, size, number))
+    return size
 
 
 def continued(spec: Any) -> Optional[str]:
@@ -157,9 +193,9 @@ def gene_pool(optimizer: Any, number: int, pool: Optional["os.PathLike[str]"]) -
 
     train_ff reads a gene pool for the genetic algorithm with or without
     Monte Carlo, not for Monte Carlo alone, and the pool must have as many
-    individuals as the training has processes.
+    individuals as the training has.
     @param optimizer The optimizer of this training.
-    @param number    Its number of processes.
+    @param number    Its number of individuals.
     @param pool      The gene pool of the earlier training, None if that
     is not known or has none.
     @return The options.
@@ -175,7 +211,7 @@ def gene_pool(optimizer: Any, number: int, pool: Optional["os.PathLike[str]"]) -
     size = pool_size(pool)
     if size != number:
         raise TrainingError("The earlier training had %d individuals, so this one needs %d "
-                            "processes, not %d" % (size, size, number))
+                            "individuals, not %d" % (size, size, number))
     return {"gpin": Path(pool)}
 
 

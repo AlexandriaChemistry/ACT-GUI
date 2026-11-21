@@ -133,11 +133,16 @@ A force field can also be trained on the data of the file, with `alexandria
 train_ff`: you choose the kinds of parameters to train (such as `sigma`
 and `epsilon`) from those that the force field has and that are not fixed,
 the properties to train on with a weight for each, the optimizer (Monte Carlo, or the
-genetic algorithm with or without Monte Carlo, which needs an even number
-of processes), the number of iterations and generations, and the part of the
-compounds that is kept for testing, unless they were chosen in the table. `train_ff` has one set of parameters
-for each process, so the number of processes is the size of the
-population; more than one process needs `mpirun`, `mpiexec` or `srun` in
+genetic algorithm with or without Monte Carlo, which needs two processes
+at least), the number of iterations and generations, the number of
+individuals (sets of parameters, `train_ff -pop_size`) and the part of the
+compounds that is kept for testing, unless they were chosen in the table.
+Without a number of individuals there is one for each process. The genetic
+algorithm needs an even number of them, and may have more individuals than
+processes, which then compute several in turn; Monte Carlo alone has at
+most one for each process. With fewer individuals than processes the number
+of processes is a multiple of the number of individuals, such that each gets
+as many. More than one process needs `mpirun`, `mpiexec` or `srun` in
 the `PATH`, or the program in the environment variable `ACT_MPIEXEC`. The
 page follows the training with a plot of χ², from what
 `train_ff -progress` writes, lists the trained parameters and compares the
@@ -157,7 +162,7 @@ that is done, here or on the cluster: the next one starts from the trained
 force field, without random values. With the genetic algorithm it also
 starts from the individuals that the earlier training ended with
 (`train_ff -gpin` with the file that `-gpout` wrote), which needs as many
-processes as there were individuals. Monte Carlo alone leaves no
+individuals as there were. Monte Carlo alone leaves no
 individuals and does not read them, so it continues from the force field
 only. *Start anew* goes back to a training from the beginning. A training
 that stopped because its time was up is continued in the same way.

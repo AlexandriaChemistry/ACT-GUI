@@ -294,10 +294,10 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.assertIn(" -gpin gpin.csv", shown["script"])
         self.assertIn(" -pop_size 2 ", shown["script"])
         self.assertNotIn(str(self.dir), answer.text)
-        # As many processes as the earlier training had individuals
+        # As many individuals as the earlier training had
         refused = post(name="train-2", tasks=4, minutes=60)
         self.assertEqual(400, refused.status_code)
-        self.assertIn("needs 2 processes", refused.json()["detail"])
+        self.assertIn("needs 2 individuals, not 4", refused.json()["detail"])
         self.assertEqual(0, self.logins())
 
     def test_training_on_the_cluster(self):
@@ -328,7 +328,11 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.assertIn("-pop_size 2 ", shown["script"])
         refused = post(name="train-1", tasks=1)
         self.assertEqual(400, refused.status_code)
-        self.assertIn("even number of processes", refused.json()["detail"])
+        self.assertIn("two processes at least", refused.json()["detail"])
+        # More individuals than processes, which compute them in turn
+        shown = post(name="train-1", tasks=2, request=dict(
+            body, training={"fit": ["sigma", "epsilon"], "population": 6})).json()
+        self.assertIn("-pop_size 6 ", shown["script"])
         for tasks in (0, "4", 5000, True):
             self.assertEqual(400, post(name="train-1", tasks=tasks).status_code, tasks)
         self.assertEqual(0, self.logins())

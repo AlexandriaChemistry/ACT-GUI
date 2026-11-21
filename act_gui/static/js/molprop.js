@@ -624,6 +624,28 @@ function whole(id, low, high) {
   return $(id).value.trim() !== "" && Number.isInteger(value) && value >= low && value <= high ? value : null;
 }
 
+/** The largest population of a training. */
+const MAX_POPULATION = 1024;
+
+/**
+ * The number of individuals of a training, checked as the server does.
+ * @param {object} chosen    The optimizer: its name and whether it has a population.
+ * @param {number} processes The number of processes.
+ * @returns {{size: number, given: boolean}|{error: string}} The number and whether the user gave it, or why it cannot be.
+ */
+function population(chosen, processes) {
+  const given = $("#tr-pop").value.trim() !== "";
+  const size = given ? whole("#tr-pop", 1, MAX_POPULATION) : processes;
+  if (size === null) return { error: `Give between 1 and ${MAX_POPULATION} individuals, or none for one per process.` };
+  if (chosen.parallel && size % 2) {
+    // The genetic algorithm makes the next generation from pairs of individuals
+    return { error: `${chosen.name} needs an even number of individuals` + (given ? "." : `; without a number there is one for each of the ${processes} processes.`) };
+  }
+  if (!chosen.parallel && size > processes) return { error: `Monte Carlo alone has at most one individual for each of the ${processes} processes.` };
+  if (size < processes && processes % size) return { error: `With ${size} individuals the number of processes is a multiple of ${size}, such that each gets as many.` };
+  return { size, given };
+}
+
 /**
  * What the training adds to the request for a comparison.
  * @param {object} body The request for the comparison.
@@ -647,11 +669,13 @@ function trainingRequest(body) {
   // On the cluster the job has the processes, which are asked for with the job
   const cluster = onCluster(), most = cluster ? Number($("#ev-tasks").max) : state.maxProcesses;
   const processes = whole(cluster ? "#ev-tasks" : "#tr-procs", chosen.parallel ? 2 : 1, most);
-  if (processes === null || (chosen.parallel && processes % 2)) {
-    // The genetic algorithm makes the next generation from pairs of individuals
-    toast(chosen.parallel ? `${chosen.name} needs an even number of processes, between 2 and ${most}.` : `Give between 1 and ${most} processes.`);
+  if (processes === null) {
+    // The master hands out the individuals of the genetic algorithm to the others
+    toast(chosen.parallel ? `${chosen.name} needs between 2 and ${most} processes.` : `Give between 1 and ${most} processes.`);
     return null;
   }
+  const individuals = population(chosen, processes);
+  if (individuals.error) { toast(individuals.error); return null; }
   // Compounds for testing that were chosen by hand are in the request already
   const percent = $("#tr-test").disabled ? 0 : Number($("#tr-test").value || 0);
   if (!(percent >= 0 && percent <= 100 * state.training.max_test)) { toast(`At most ${100 * state.training.max_test} % of the compounds can be kept for testing.`); return null; }
@@ -663,10 +687,11 @@ function trainingRequest(body) {
   }
   if (Object.keys(weights).length) body = { ...body, weights };
   const request = { ...body, task: "train", options, training: { fit, test: percent / 100 } };
+  if (individuals.given) request.training.population = individuals.size;
   // The individuals of the training that is continued, for an optimizer that has a population
   if (continues() && chosen.parallel && state.cont.individuals) {
-    if (processes !== state.cont.individuals) {
-      toast(`The training that is continued ended with ${state.cont.individuals} individuals, so this one needs ${state.cont.individuals} processes.`);
+    if (individuals.size !== state.cont.individuals) {
+      toast(`The training that is continued ended with ${state.cont.individuals} individuals, so this one needs ${state.cont.individuals} individuals.`);
       return null;
     }
     request.training.continue = state.cont.job;
@@ -767,7 +792,7 @@ function continueNote() {
   const n = state.cont.individuals;
   $("#tr-conttext").textContent = `Continues ${state.cont.label}: from its trained force field` + (
     chosen.parallel
-      ? (n ? `, and from the ${n} individuals it ended with. That needs ${n} processes.` : ". It has no individuals to continue from, as it was done with Monte Carlo alone.")
+      ? (n ? `, and from the ${n} individuals it ended with. That needs ${n} individuals.` : ". It has no individuals to continue from, as it was done with Monte Carlo alone.")
       : (n ? `. Monte Carlo alone does not use the ${n} individuals it ended with; ${state.training.optimizers.filter(o => o.parallel).map(o => o.name).join(" and ")} do.` : "."));
 }
 
@@ -787,7 +812,7 @@ async function continueTraining(job, label) {
   // Further from where it is, not from random values
   $("#tr-random").checked = false;
   const chosen = optimizer();
-  if (chosen.parallel && individuals) $(onCluster() ? "#ev-tasks" : "#tr-procs").value = String(individuals);
+  if (chosen.parallel && individuals) $("#tr-pop").value = String(individuals);
   if (!training()) $('#ev-what button[data-v="train"]').click();
   what();
   $("#ev-card").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -832,8 +857,8 @@ function what() {
   $("#tr-genfield").hidden = !chosen.parallel;
   if (chosen.parallel && Number($("#tr-procs").value) < 2) $("#tr-procs").value = Math.min(4, state.maxProcesses);
   $("#tr-note").textContent = chosen.parallel
-    ? `${chosen.name} has one set of parameters, an individual, for each process, and needs an even number of them. Each generation every individual does the Monte Carlo iterations${chosen.name === "GA" ? " (not used by GA)" : ""}.`
-    : "With more than one process each has its own Monte Carlo chain, and the best of them is kept.";
+    ? `${chosen.name} trains a population of sets of parameters, individuals, an even number of them, by default one for each process. With more individuals than processes each process computes several in turn. Each generation every individual does the Monte Carlo iterations${chosen.name === "GA" ? " (not used by GA)" : ""}.`
+    : "Each individual has its own Monte Carlo chain, and the best of them is kept. There is one individual for each process unless fewer are given; then each gets as many processes.";
   places();
   offerKinds();
   continueNote();

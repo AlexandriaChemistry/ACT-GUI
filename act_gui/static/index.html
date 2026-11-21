@@ -404,6 +404,8 @@
               <input type="number" id="tr-gen" min="1" step="1" value="10"></div>
             <div class="field" id="tr-procfield"><label for="tr-procs">Processes</label>
               <input type="number" id="tr-procs" min="1" step="1" value="1"></div>
+            <div class="field"><label for="tr-pop">Individuals</label>
+              <input type="number" id="tr-pop" min="1" max="1024" step="1" placeholder="one per process" title="The population: the number of sets of parameters that are trained (train_ff -pop_size)"></div>
             <div class="field"><label for="tr-test">Compounds for testing (%)</label>
               <input type="number" id="tr-test" min="0" max="50" step="5" value="0">
               <span class="muted fine" id="tr-testnote" hidden>Chosen in the table of compounds.</span></div>
