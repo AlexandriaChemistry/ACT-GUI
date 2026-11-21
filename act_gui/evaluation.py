@@ -372,8 +372,9 @@ def read_selection(molecules: Any, text: Any) -> Dict[str, Any]:
     """!
     @brief Read a selection file of the user for the compounds of a molprop
     file, as alexandria reads it: a line has the name of a compound, a bar
-    and Train, Test or Ignore; of a dimer the two compounds may be in the
-    other order than in the molprop file; the first line of a compound
+    and Train, Test or Ignore; the name is the IUPAC name of the compound
+    or its name in the molprop file; of a dimer the two compounds may be in
+    the other order than in the molprop file; the first line of a compound
     counts. A compound of the molprop file that is not in the selection is
     not used.
     @param molecules The compounds of the molprop file as edit_mp describes
@@ -397,19 +398,27 @@ def read_selection(molecules: Any, text: Any) -> Dict[str, Any]:
             or not molecules:
         raise EvaluationError("The molprop file has no compounds")
     names: List[str] = []
+    # A compound is found by its IUPAC name or its name, and a dimer also
+    # with its compounds in the other order. The name in the selection that
+    # the server writes comes first where two compounds share a name.
+    exact: Dict[str, str] = {}
+    other: Dict[str, str] = {}
     for molecule in molecules:
-        name = (molecule.get("iupac") or molecule.get("name")) \
-            if isinstance(molecule, Mapping) else None
-        if isinstance(name, str) and name not in names:
-            names.append(name)
-    # A dimer is also found with its compounds in the other order
-    lookup: Dict[str, str] = {}
-    for name in names:
-        parts = name.split(MONOMER_SEPARATOR)
-        if len(parts) == 2:
-            lookup.setdefault(parts[1] + MONOMER_SEPARATOR + parts[0], name)
-    for name in names:
-        lookup[name] = name
+        if not isinstance(molecule, Mapping):
+            continue
+        known = [name for name in (molecule.get("iupac"), molecule.get("name"))
+                 if isinstance(name, str) and name]
+        if not known:
+            continue
+        if known[0] not in names:
+            names.append(known[0])
+        exact.setdefault(known[0], known[0])
+        for name in known:
+            other.setdefault(name, known[0])
+            parts = name.split(MONOMER_SEPARATOR)
+            if len(parts) == 2:
+                other.setdefault(parts[1] + MONOMER_SEPARATOR + parts[0], known[0])
+    lookup = dict(other, **exact)
     status: Dict[str, str] = {}
     unknown: List[str] = []
     invalid = 0

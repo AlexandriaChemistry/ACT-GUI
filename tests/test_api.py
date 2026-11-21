@@ -659,7 +659,7 @@ class ApiTest(unittest.TestCase):
         call = self.run.calls[0]
         self.assertEqual("edit_mp", call["command"])
         self.assertEqual({"mp": [self.settings.uploads_dir / (molprop + ".xml")],
-                          "json": True, "validate": True}, call["options"])
+                          "json": True, "validate": True, "molinfo": False}, call["options"])
         forcefield = self.upload("my.xml", "forcefield", FF).json()["id"]
         wrong = [
             {"task": "mp_describe"},

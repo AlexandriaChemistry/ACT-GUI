@@ -367,6 +367,9 @@ class RealProgramTest(unittest.TestCase):
             self.assertEqual(total, len(molecules))
             self.assertEqual(first, molecules[0]["name"])
             self.assertEqual(2 if dimers else 1, len(molecules[0]["fragments"]))
+            # The names are those of the file, which train_ff and geometry_ff
+            # look compounds up by, not those of the table of compounds of ACT
+            self.assertEqual([first] * 2, [molecules[0]["name"], molecules[0]["iupac"]])
             # The monomers of each compound, for choosing compounds by them
             self.assertEqual(first.split("#"), molecules[0]["monomers"])
             validation = job["result"]["validation"]

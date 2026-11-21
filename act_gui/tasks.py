@@ -188,7 +188,11 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
     # --- the molprop workspace ---
     Task(name="mp_describe", command="edit_mp",
          title="Read and check a molprop file",
-         fixed={"json": True, "validate": True},
+         # Without -nomolinfo edit_mp describes the compounds with the IUPAC
+         # names of its own table of compounds, which are not those of the
+         # file that train_ff and geometry_ff read: a selection with these
+         # names would leave such compounds out without a word
+         fixed={"json": True, "validate": True, "molinfo": False},
          downloads=("g",),
          needs=(MOLPROP,), workspace="molprop", digest=evaluation.described),
     Task(name="evaluate", command="train_ff",
