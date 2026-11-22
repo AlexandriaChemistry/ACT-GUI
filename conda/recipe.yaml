@@ -1,0 +1,84 @@
+# Recipe for the conda package act-gui on the channel alexandriachemistry,
+# built with rattler-build from the top of the repository:
+#
+#   rattler-build build --recipe conda/recipe.yaml \
+#       --channel alexandriachemistry --channel conda-forge
+#
+# The source is this repository (files ignored by git are skipped). The
+# package needs the Python package act of ACT, which is in the package
+# alexandria-python of the same channel, with the program alexandria. The
+# workflow .github/workflows/conda.yml builds the package and uploads it; it
+# checks that the version below is the one in act_gui/__init__.py.
+
+context:
+  version: "0.1.0.dev0"
+  # The oldest Python for which there is an alexandria-python
+  python_min: "3.11"
+
+package:
+  name: act-gui
+  version: ${{ version }}
+
+source:
+  path: ..
+
+build:
+  number: 0
+  noarch: python
+  script: ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+  python:
+    entry_points:
+      - act-gui = act_gui.__main__:main
+      # The name of the program of ACT-utilities that this one replaces
+      - actgui = act_gui.__main__:main
+
+requirements:
+  host:
+    - python ${{ python_min }}.*
+    - pip
+    - setuptools >=61.0
+    - wheel
+  run:
+    - python >=${{ python_min }}
+    - fastapi
+    - uvicorn
+    # The Python package act and the program alexandria. The interface uses
+    # options of ACT 1.95b, such as geometry_ff -samples.
+    - alexandria-python >=1.95b
+    # To save plots as PDF files
+    - plotxvg >=1.3
+
+tests:
+  - python:
+      imports:
+        - act_gui
+        - act_gui.app
+      pip_check: true
+  - files:
+      recipe:
+        - check-package.py
+    requirements:
+      run:
+        # For the test client of FastAPI
+        - httpx
+    script:
+      - act-gui --version
+      - actgui --version
+      - act-gui --help
+      # The page, its files and a calculation with the alexandria of the package
+      - python check-package.py
+
+about:
+  homepage: https://github.com/AlexandriaChemistry/ACT-GUI
+  repository: https://github.com/AlexandriaChemistry/ACT-GUI
+  documentation: https://github.com/AlexandriaChemistry/ACT-GUI#readme
+  license: GPL-2.0-or-later
+  license_file: LICENSE
+  summary: Graphical user interface of the Alexandria Chemistry Toolkit, in the browser
+  description: |
+    ACT-GUI is a user interface for the Alexandria Chemistry Toolkit that
+    runs in a web browser. A small server on your own computer runs the
+    commands of alexandria, and the page shows molecules with their
+    charges, spectra, force fields and how well a force field reproduces
+    reference data. Long calculations can be sent to a Slurm cluster on
+    which you have an account. Start it with act-gui.

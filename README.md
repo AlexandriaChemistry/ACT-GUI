@@ -248,9 +248,33 @@ Not there yet: the server for several users.
 The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 `act_gui/static/vendor/`) to show molecules.
 
+## Installing with conda
+
+The conda package `act-gui` on the channel `alexandriachemistry` brings
+everything along: the Python package `act` of ACT and the program
+`alexandria` (through the package `alexandria-python`), FastAPI, uvicorn
+and plotXVG.
+
+    conda install -c alexandriachemistry -c conda-forge act-gui
+    act-gui
+
+The package is made with the recipe in `conda/` by the workflow
+`.github/workflows/conda.yml`: pull requests build and test it, a tag
+`v<version>` (the version of `act_gui/__init__.py`, which the recipe has
+as well) uploads it with the label `main`. Its test starts the server and
+computes the charges of water with the `alexandria` of the environment.
+The package needs `alexandria-python` 1.95b or newer on the channel; as
+long as there is none, the workflow builds it without the test and does
+not upload it. To build it yourself:
+
+    rattler-build build --recipe conda/recipe.yaml \
+        --channel alexandriachemistry --channel conda-forge
+
 ## Requirements
 
-- ACT with the Python package `act` (the main branch of ACT) and
+Without conda:
+
+- ACT with the Python package `act` (ACT 1.95b or newer) and
   the `alexandria` program in the `PATH`, or its path in the environment
   variable `ACT_ALEXANDRIA`;
 - Python 3.9 or newer with `fastapi` and `uvicorn`;
