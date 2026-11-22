@@ -2005,6 +2005,54 @@ class PageTest(unittest.TestCase):
 
     # --- the cluster for long jobs ---
 
+    def test_9f_screen_modes(self):
+        """!
+        @brief The button in the top bar goes from light to dark to hippy
+        and back, the tab Settings offers the three; the choice is in the
+        file with the settings and the page starts in it the next time.
+        """
+        import json  # pylint: disable=import-outside-toplevel
+        # The tests of the cluster start without a file with settings
+        self.addCleanup(lambda: self.config.unlink(missing_ok=True))
+        self.open_page()
+        root = lambda:self.browser.find_element(By.TAG_NAME, "html").get_attribute("data-theme")
+        background = lambda: self.browser.execute_script(
+            "return getComputedStyle(document.body).backgroundColor")
+        self.assertEqual("light", root())
+        self.assertEqual("Light", self.text("#theme"))
+        light = background()
+        self.click("#theme")
+        self.assertEqual("dark", root())
+        self.assertEqual("Dark", self.text("#theme"))
+        self.assertEqual("rgb(0, 0, 0)", background())
+        self.wait(lambda b: self.config.is_file()
+                  and json.loads(self.config.read_text()).get("appearance") == {"theme": "dark"})
+        self.click("#theme")
+        self.assertEqual("hippy", root())
+        self.assertNotIn(background(), (light, "rgb(0, 0, 0)"))
+        frame = self.browser.execute_script(
+            "return getComputedStyle(document.querySelector('.card')).borderTopWidth")
+        self.assertEqual("4px", frame)
+        self.shot("40-hippy")
+        self.click("#theme")
+        self.assertEqual("light", root())
+        self.assertEqual(light, background())
+        # The tab Settings, and the page that is opened again
+        self.click('#nav button[data-view="settings"]')
+        self.assertTrue(self.browser.find_element(By.ID, "view-settings").is_displayed())
+        self.click('#set-theme button[data-v="dark"]')
+        self.assertEqual("dark", root())
+        self.assertEqual("Dark", self.text("#theme"))
+        self.wait(lambda b: json.loads(self.config.read_text()).get("appearance") == {"theme": "dark"})
+        self.open_page()
+        self.assertEqual("dark", root())
+        self.click('#nav button[data-view="settings"]')
+        self.assertEqual("true", self.browser.find_element(
+            By.CSS_SELECTOR, '#set-theme button[data-v="dark"]').get_attribute("aria-pressed"))
+        self.click('#set-theme button[data-v="light"]')
+        self.wait(lambda b: json.loads(self.config.read_text()).get("appearance") == {"theme": "light"})
+        self.assertEqual("", self.errors())
+
     def test_a_cluster_settings(self):
         """!
         @brief The user gives the server, the user name and the working
@@ -2016,6 +2064,14 @@ class PageTest(unittest.TestCase):
         self.click('#nav button[data-view="cluster"]')
         self.assertTrue(self.browser.find_element(By.ID, "view-cluster").is_displayed())
         self.assertIn("No cluster yet", self.text("#cl-chips"))
+        self.assertIn("tab Settings", self.text("#cl-chips"))
+        # The settings are in the tab Settings, to which the tab Cluster leads
+        self.click("#cl-tosettings")
+        self.assertTrue(self.browser.find_element(By.ID, "view-settings").is_displayed())
+        self.assertFalse(self.browser.find_element(By.ID, "view-cluster").is_displayed())
+        self.assertEqual("true", self.browser.find_element(
+            By.CSS_SELECTOR, '#nav button[data-view="settings"]').get_attribute("aria-selected"))
+        self.assertTrue(self.browser.find_element(By.ID, "set-cluster").is_displayed())
         self.assertFalse(self.browser.find_element(By.ID, "cl-check").is_enabled())
         self.assertFalse(self.browser.find_element(By.ID, "cl-forget").is_displayed())
         self.assertIn(str(self.config), self.text("#cl-file"))
@@ -2048,9 +2104,9 @@ class PageTest(unittest.TestCase):
             box.clear()
             box.send_keys(text)
         self.click("#cl-save")
-        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").text)
+        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
         self.assertEqual("", self.errors())
-        self.assertIn("cpu,cpu-long", self.text("#cl-chips"))
+        self.assertIn("cpu,cpu-long", self.browser.find_element(By.ID, "cl-chips").get_attribute("textContent"))
         self.assertEqual({"cluster": {"server": "good", "user": "spoel", "workdir": "act/jobs",
                                       "load": "source", "load_name": "/opt/act/bin/ACTRC",
                                       "partition": "cpu,cpu-long",
@@ -2067,7 +2123,7 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: b.find_element(By.ID, "cl-check").is_enabled())
         # The login
         self.click("#cl-check")
-        self.wait(lambda b: b.find_element(By.ID, "cl-pill").text == "Ready")
+        self.wait(lambda b: b.find_element(By.ID, "cl-checkpill").text == "Ready")
         self.assertIn("The login works", self.text("#cl-result"))
         self.assertIn("slurm 23.02.7", self.text("#cl-result"))
         self.assertEqual(1, len(self.cluster.calls()))
@@ -2078,16 +2134,17 @@ class PageTest(unittest.TestCase):
         self.click("#cl-save")
         self.wait(lambda b: b.find_element(By.ID, "cl-check").is_enabled())
         self.click("#cl-check")
-        self.wait(lambda b: b.find_element(By.ID, "cl-pill").text == "Not ready")
+        self.wait(lambda b: b.find_element(By.ID, "cl-checkpill").text == "Not ready")
         self.assertIn("is not there", self.text("#cl-result"))
         # The page is opened again: the settings are those of the file
         self.open_page()
-        self.click('#nav button[data-view="cluster"]')
+        self.click('#nav button[data-view="settings"]')
         self.wait(lambda b: b.find_element(By.ID, "cl-server").get_attribute("value") == "good")
         self.assertEqual("act/jobs/nothere", self.browser.find_element(
             By.ID, "cl-workdir").get_attribute("value"))
+        self.click('#nav button[data-view="settings"]')
         self.click("#cl-forget")
-        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").text)
+        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
         self.assertEqual({}, json.loads(self.config.read_text()))
         self.assertEqual("", self.browser.find_element(By.ID, "cl-server").get_attribute("value"))
 
@@ -2101,6 +2158,7 @@ class PageTest(unittest.TestCase):
         data = Path(TESTDATA)
         self.open_page()
         self.click('#nav button[data-view="cluster"]')
+        self.click('#nav button[data-view="settings"]')
         for field, value in (("cl-server", "good"), ("cl-user", "spoel"),
                              ("cl-workdir", "act/jobs")):
             box = self.browser.find_element(By.ID, field)
@@ -2108,7 +2166,7 @@ class PageTest(unittest.TestCase):
             box.send_keys(value)
         Select(self.browser.find_element(By.ID, "cl-load")).select_by_value("none")
         self.click("#cl-save")
-        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").text)
+        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
         self.click('#nav button[data-view="molecule"]')
         self.browser.find_element(By.ID, "fffile").send_keys(str(data / "forcefields" / "SPCE.xml"))
         self.browser.find_element(By.ID, "molfile").send_keys(str(data / "molecules" / "water_dimer.pdb"))
@@ -2190,8 +2248,9 @@ class PageTest(unittest.TestCase):
             self.click('#cj-table button[data-act="forget"]')
             time.sleep(0.3)
         self.wait(lambda b: b.find_element(By.ID, "cj-empty").is_displayed())
+        self.click('#nav button[data-view="settings"]')
         self.click("#cl-forget")
-        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").text)
+        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
 
     def test_b_job_on_the_cluster(self):
         """!
@@ -2205,6 +2264,7 @@ class PageTest(unittest.TestCase):
         self.click('#nav button[data-view="cluster"]')
         self.assertTrue(self.browser.find_element(By.ID, "cj-empty").is_displayed())
         self.assertFalse(self.browser.find_element(By.ID, "cj-ask").is_enabled())
+        self.click('#nav button[data-view="settings"]')
         for field, value in (("cl-server", "good"), ("cl-user", "spoel"),
                              ("cl-workdir", "act/jobs")):
             box = self.browser.find_element(By.ID, field)
@@ -2212,7 +2272,7 @@ class PageTest(unittest.TestCase):
             box.send_keys(value)
         Select(self.browser.find_element(By.ID, "cl-load")).select_by_value("none")
         self.click("#cl-save")
-        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").text)
+        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
         logins = len(self.cluster.calls())
 
         # The comparison, with the choice of where it runs
@@ -2321,8 +2381,9 @@ class PageTest(unittest.TestCase):
         self.assertTrue((remote / "job.sh").is_file())
         self.assertEqual(logins + 3, len(self.cluster.calls()))
         # Without a cluster the comparison runs on this computer only
+        self.click('#nav button[data-view="settings"]')
         self.click("#cl-forget")
-        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").text)
+        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
         self.click('#nav button[data-view="molprop"]')
         self.assertFalse(self.browser.find_element(By.ID, "ev-where").is_displayed())
 
@@ -2338,6 +2399,7 @@ class PageTest(unittest.TestCase):
         data = Path(TESTDATA)
         self.open_page()
         self.click('#nav button[data-view="cluster"]')
+        self.click('#nav button[data-view="settings"]')
         for field, value in (("cl-server", "good"), ("cl-user", "spoel"),
                              ("cl-workdir", "act/jobs")):
             box = self.browser.find_element(By.ID, field)
@@ -2345,7 +2407,7 @@ class PageTest(unittest.TestCase):
             box.send_keys(value)
         Select(self.browser.find_element(By.ID, "cl-load")).select_by_value("none")
         self.click("#cl-save")
-        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").text)
+        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
         logins = len(self.cluster.calls())
 
         self.click('#nav button[data-view="molprop"]')
@@ -2448,8 +2510,9 @@ class PageTest(unittest.TestCase):
         self.click('#cj-table button[data-act="forget"]')
         self.click('#cj-table button[data-act="forget"]')
         self.wait(lambda b: b.find_element(By.ID, "cj-empty").is_displayed())
+        self.click('#nav button[data-view="settings"]')
         self.click("#cl-forget")
-        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").text)
+        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
 
 
 if __name__ == "__main__":

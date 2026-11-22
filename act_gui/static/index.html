@@ -17,9 +17,11 @@
       <button role="tab" data-view="force-field" aria-selected="false">Force field</button>
       <button role="tab" data-view="molprop" aria-selected="false">Molprop data</button>
       <button role="tab" data-view="cluster" aria-selected="false" hidden>Cluster</button>
+      <button role="tab" data-view="settings" aria-selected="false">Settings</button>
       <span class="ink"></span>
     </nav>
-    <div class="status"><span class="dot"></span><span id="status-text">Starting</span></div>
+    <div class="status"><span class="dot"></span><span id="status-text">Starting</span>
+      <button class="btn small themebtn" id="theme" type="button" title="Screen mode">Light</button></div>
   </header>
   <div class="alert" id="alert" role="alert" hidden></div>
 
@@ -393,8 +395,6 @@
           <div class="chips" id="mpw-chips"><span class="chip">None yet. Open a file with compounds and their properties to see what is in it and to check it.</span></div></div>
         <span class="pill" id="mpw-pill" hidden></span>
       </div>
-    </div>
-    <div class="cols side-right" id="mpw-content" hidden>
       <div class="facts" id="mpw-facts" hidden>
         <div class="fact"><div class="row tight"><span class="lab">Validation</span><span class="pill" id="mpw-vpill" hidden></span></div>
           <div class="scroll flat maxh250"><ul class="list" id="mpw-vlist"></ul></div>
@@ -403,9 +403,11 @@
           <div class="chips" id="mpw-props"></div>
           <p class="muted fine">The number of values of each. Click one to see only the compounds that have it.</p></div>
       </div>
+    </div>
+    <div class="cols side-right" id="mpw-content" hidden>
+      <div class="stack">
       <div class="card"><div class="head"><h2>Compounds</h2><span class="muted" id="mpw-count"></span><span class="spacer"></span>
           <div class="field"><select id="mpw-prop" aria-label="Show the compounds with data for a property"><option value="">All compounds</option></select></div>
-      <div class="stack">
           <div class="field"><input type="text" id="mpw-search" placeholder="Find name or formula" aria-label="Find a compound" spellcheck="false" autocomplete="off"></div></div>
         <div class="setbar" id="mpw-setbar"><span class="muted fine" id="mpw-sets"></span><span class="spacer"></span>
           <span class="muted fine">Use the compounds in the table for</span>
@@ -587,19 +589,30 @@
         <div class="field grow"><span class="lab">Cluster for long jobs</span>
           <div class="chips" id="cl-chips"></div></div>
         <span class="pill" id="cl-pill" hidden></span>
+        <button class="btn" id="cl-tosettings" type="button">Change the settings…</button>
       </div>
     </div>
     <div class="card" id="cj-card">
       <div class="head"><h2>Jobs on the cluster</h2><span class="muted" id="cj-note"></span><span class="spacer"></span>
         <button class="btn small" id="cj-ask" type="button" disabled>Ask the cluster now</button></div>
       <div class="xscroll"><table class="data" id="cj-table"></table></div>
-      <p class="empty pad" id="cj-empty">No jobs yet. A calculation that can run on the cluster has the choice “On the cluster”: for now the comparison of a force field with a molprop file, in the tab Molprop data.</p>
+      <p class="empty pad" id="cj-empty">No jobs yet. A calculation that can run on the cluster has the choice “On the cluster”: the comparison and the training of a force field in the tab Molprop data, and the second virial coefficient and OpenMM in the tab Molecule.</p>
       <div class="body" id="cj-foot" hidden>
         <p class="outcome bad" id="cj-problem" role="status" hidden></p>
         <p class="muted fine" id="cj-kept"></p></div>
     </div>
-    <div class="cols form-left">
-      <div class="card"><div class="body">
+  </section>
+
+  <!-- ================= Settings ================= -->
+  <section class="view" id="view-settings" hidden>
+    <div class="card"><div class="head"><h2>Screen</h2></div>
+      <div class="body">
+        <div class="seg" id="set-theme" role="group" aria-label="Screen mode">
+          <button type="button" aria-pressed="true" data-v="light">Light</button><button type="button" aria-pressed="false" data-v="dark">Dark</button><button type="button" aria-pressed="false" data-v="hippy">Hippy</button></div>
+        <p class="muted fine" id="set-themenote"></p>
+      </div></div>
+    <div class="cols form-left" id="set-cluster">
+      <div class="card"><div class="head"><h2>Cluster for long jobs</h2></div><div class="body">
         <div class="field"><label for="cl-server">Server</label>
           <input class="mono wide" type="text" id="cl-server" placeholder="csb.example.org" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
         <div class="field"><label for="cl-user">Your user name on the server</label>
@@ -634,6 +647,7 @@
           <p class="muted fine">Several partitions are given with commas in between. The program is <span class="mono">alexandria</span>, or <span class="mono">alexandria_d</span> for a build in double precision. What is filled in at first are the values for the cluster csb.</p></div>
         <div class="row"><button class="btn primary" id="cl-save" type="button">Save</button>
           <button class="btn" id="cl-check" type="button" disabled>Test the login</button>
+          <span class="pill" id="cl-checkpill" hidden></span>
           <span class="spacer"></span>
           <button class="btn" id="cl-forget" type="button" hidden>Forget</button></div>
         <p class="outcome" id="cl-result" role="status" hidden></p>

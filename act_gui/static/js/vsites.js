@@ -478,5 +478,7 @@ export function startVsites(kinds, atomtypes, onChange = null) {
     saveBlob(new Blob([text], { type: "application/json" }), "vsites.json");
   };
   window.addEventListener("resize", () => { if (V && !$("#fftab-vsite").hidden) { V.resize(); V.render(); } });
+  // The colours of the screen mode, also for the labels
+  document.addEventListener("act-theme", () => { if (V) scene(); });
   siteList();
 }
