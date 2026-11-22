@@ -20,20 +20,26 @@
   --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
   --radius: 10px;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0e1419; --surface: #151d24; --stage: #0a0f13; --ink: #e5ecf2; --muted: #93a3b2;
-    --line: #25313b; --accent: #6eaaf0; --accent-ink: #08131f; --accent-soft: #162a41;
-    --good: #58c08a; --warn: #e0a84a; --bad: #f0796c; --neg: #f0796c; --pos: #7fb0f5;
-    --series2: #8d9aa7; color-scheme: dark;
-  }
-}
+/* The screen modes, chosen with the button in the top bar or in the tab
+   Settings; the server puts the one of the user on the page. Light is the
+   default. Dark is a black screen with white text. */
 :root[data-theme="dark"] {
-  --bg: #0e1419; --surface: #151d24; --stage: #0a0f13; --ink: #e5ecf2; --muted: #93a3b2;
-  --line: #25313b; --accent: #6eaaf0; --accent-ink: #08131f; --accent-soft: #162a41;
+  --bg: #000000; --surface: #0d0d0d; --stage: #050505; --ink: #ffffff; --muted: #b4b4b4;
+  --line: #2e2e2e; --accent: #6eaaf0; --accent-ink: #000000; --accent-soft: #10243d;
   --good: #58c08a; --warn: #e0a84a; --bad: #f0796c; --neg: #f0796c; --pos: #7fb0f5;
-  --series2: #8d9aa7; color-scheme: dark;
+  --series2: #9a9a9a; color-scheme: dark;
 }
+/* Hippy: dark purple, yellow text and thick orange borders around everything */
+:root[data-theme="hippy"] {
+  --bg: #2b0a3d; --surface: #3a1152; --stage: #22072f; --ink: #ffe94d; --muted: #e8cf6a;
+  --line: #ff8c1a; --accent: #ff8c1a; --accent-ink: #2b0a3d; --accent-soft: #5a1f62;
+  --good: #9dff6a; --warn: #ffb347; --bad: #ff6b8b; --neg: #ff6b6b; --pos: #6fd6ff;
+  --series2: #e0a3ff; --frame: 4px solid #ff8c1a; color-scheme: dark;
+}
+:root[data-theme="hippy"] .card, :root[data-theme="hippy"] dialog.save { border: var(--frame); }
+:root[data-theme="hippy"] .btn, :root[data-theme="hippy"] .seg, :root[data-theme="hippy"] input[type="text"],
+:root[data-theme="hippy"] input[type="number"], :root[data-theme="hippy"] select { border-width: 2px; }
+:root[data-theme="hippy"] .top { border-bottom: var(--frame); }
 * { box-sizing: border-box; }
 body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font); }
 .wrap { max-width: 1440px; margin: 0 auto; padding-block: 0 56px;
@@ -55,6 +61,8 @@ p { margin: 0; }
 .top .tabs { flex: 1 1 auto; }
 .status { margin-left: auto; padding-bottom: 12px; display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+.themebtn { min-width: 64px; margin-left: 6px; }
+#set-theme { justify-self: start; }
 
 /* tabs with a sliding underline */
 .tabs { position: relative; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
@@ -230,6 +238,16 @@ table.data tr.off td:first-child { color: var(--ink); }
 .range.fixed i { background: var(--muted); }
 
 /* ---------- the molprop workspace ---------- */
+/* The validation and the properties of a file, next to each other under its name */
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 14px 28px;
+  padding: 14px 16px 16px; border-top: 1px solid var(--line); }
+.fact { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.fact .fine { margin-top: 0; }
+.fact .scroll { max-height: 250px; }
+/* The fragments and the properties of a compound, next to each other where there is room */
+.pair { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+@media (max-width: 760px) { .pair { grid-template-columns: minmax(0, 1fr); } }
+.pad.tight { padding-block: 8px 12px; margin: 0; }
 #mpw-search { width: 190px; }
 #view-molprop .head .field { display: block; }
 .ml8 { margin-left: 8px; }

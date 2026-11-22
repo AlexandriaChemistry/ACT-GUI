@@ -318,9 +318,10 @@ def default_jobs_dir() -> Path:
     return root / "act-gui" / "cluster-jobs"
 
 
-def _read(path: Path) -> Dict[str, Any]:
+def read_settings(path: Path) -> Dict[str, Any]:
     """!
-    @brief Read the file with the settings.
+    @brief Read the file with the settings of the user: those of the
+    cluster and the preferences of the page, each under its own key.
     @param path The file.
     @return Its content, empty if there is no file.
     @throws ClusterError if the file is no JSON object.
@@ -346,7 +347,7 @@ def load(path: Optional[Path]) -> Optional[ClusterSettings]:
     """
     if path is None:
         return None
-    content = _read(Path(path))
+    content = read_settings(Path(path))
     if content.get(KEY) is None:
         return None
     try:
@@ -364,17 +365,28 @@ def save(path: Path, settings: Optional[ClusterSettings]) -> None:
     @param settings The settings, None to forget them.
     @throws ClusterError if the file cannot be written.
     """
-    path = Path(path)
+    update_settings(Path(path), KEY, None if settings is None else asdict(settings))
+
+
+def update_settings(path: Path, key: str, value: Optional[Dict[str, Any]]) -> None:
+    """!
+    @brief Write one part of the file with the settings of the user, or
+    take it out. The other parts are kept. The file is for the user only.
+    @param path  The file. Its directory is made if needed.
+    @param key   The part, such as cluster.
+    @param value Its content, None to take it out.
+    @throws ClusterError if the file cannot be written.
+    """
     try:
         try:
-            content = _read(path)
+            content = read_settings(path)
         except ClusterError:
             # A file that cannot be read is replaced
             content = {}
-        if settings is None:
-            content.pop(KEY, None)
+        if value is None:
+            content.pop(key, None)
         else:
-            content[KEY] = asdict(settings)
+            content[key] = value
         path.parent.mkdir(parents=True, exist_ok=True)
         partial = path.with_name(path.name + ".part")
         handle = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

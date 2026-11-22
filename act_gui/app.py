@@ -32,11 +32,11 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, Mapping, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import __version__, cluster, cluster_api, evaluation, ffgen, openmm_package, plots
+from . import __version__, cluster, cluster_api, evaluation, ffgen, openmm_package, plots, preferences
 from . import dimerscan, geometry, training
 from .cluster_queue import ClusterQueue
 from .jobs import FINISHED, JobError, JobManager
@@ -136,6 +136,11 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
     except cluster.ClusterError as exc:
         app.state.cluster = None
         app.state.cluster_error = str(exc)
+    # The preferences of the user for the page, such as the screen mode. A
+    # server for several users keeps none: the page keeps them in the browser.
+    keeps_preferences = settings.mode == "desktop"
+    app.state.preferences = (preferences.load(settings.config_file) if keeps_preferences
+                             else dict(preferences.DEFAULTS))
     app.add_middleware(TrustedHostMiddleware,
                        allowed_hosts=allowed_hosts or ["127.0.0.1", "localhost", "testserver"])
 
@@ -210,8 +215,12 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             response.set_cookie(TOKEN_COOKIE, settings.token, httponly=True,
                                 samesite="strict", path="/")
             return response
-        return FileResponse(PACKAGE_DIR / "static" / "index.html",
-                            headers={"Cache-Control": "no-store"})
+        # The page starts in the screen mode of the user, without first
+        # showing itself in another one
+        page = (PACKAGE_DIR / "static" / "index.html").read_text(encoding="utf-8")
+        page = page.replace('<html lang="en">', '<html lang="en" data-theme="%s">'
+                            % app.state.preferences["theme"], 1)
+        return HTMLResponse(page, headers={"Cache-Control": "no-store"})
 
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon() -> Response:
@@ -244,7 +253,39 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             "training": training.describe(),
             "max_processes": settings.max_processes,
             "cluster": settings.mode == "desktop",
+            "preferences": app.state.preferences,
+            "keeps_preferences": keeps_preferences,
         }
+
+    @app.get("/api/preferences")
+    async def get_preferences() -> Dict[str, str]:
+        """!
+        @brief The preferences of the user for the page.
+        @return The preferences, such as {"theme": "dark"}.
+        """
+        return app.state.preferences
+
+    @app.put("/api/preferences")
+    async def put_preferences(request: Request) -> Dict[str, str]:
+        """!
+        @brief Set the preferences of the user, and keep them in the file
+        with the settings if there is one.
+        @param request The request with the preferences as JSON.
+        @return The preferences.
+        """
+        if not keeps_preferences:
+            raise fail(404, "This server keeps no preferences of its users")
+        try:
+            chosen = preferences.parse(await request.json())
+        except ValueError as exc:
+            raise fail(400, str(exc)) from exc
+        if settings.config_file is not None:
+            try:
+                preferences.save(settings.config_file, chosen)
+            except cluster.ClusterError as exc:
+                raise fail(500, str(exc)) from exc
+        app.state.preferences = chosen
+        return chosen
 
     def cluster_state() -> Dict[str, Any]:
         """!

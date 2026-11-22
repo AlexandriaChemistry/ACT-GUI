@@ -103,7 +103,10 @@ the molecule workspace can use for its calculations.
 The molprop workspace opens a molprop file and shows what is in it: the
 compounds with their formula, the compounds they consist of, the number of
 calculations and the methods, the number of values of each property, and
-the result of the validation of `alexandria edit_mp -validate`. A click on
+the result of the validation of `alexandria edit_mp -validate`. The
+validation and the properties are shown under the name of the file; a
+click on a property shows only the compounds that have it, and a click on
+a compound shows its details under the table. A click on
 the header of a column sorts the table by it, a second click the other way
 around and a third gives the order of the file again. Calculations that are
 in the file twice with the same results, which `train_ff` uses once, are
@@ -218,10 +221,17 @@ individuals and does not read them, so it continues from the force field
 only. *Start anew* goes back to a training from the beginning. A training
 that stopped because its time was up is continued in the same way.
 
-The tab Cluster, on the desktop, takes the Slurm cluster for long jobs:
-the server, your user name there and a working directory. The comparison
-can then run as a job on the cluster, and the tab lists the jobs, see
-below.
+The tab Settings has the screen mode and, on the desktop, the Slurm
+cluster for long jobs: the server, your user name there and a working
+directory. The comparison can then run as a job on the cluster, and the
+tab Cluster lists the jobs, see below.
+
+The screen is light, dark (white on black) or hippy (yellow on dark
+purple, with orange borders). The button at the right of the top bar goes
+to the next mode, the tab Settings offers the three. On the desktop the
+choice is kept in the file with your settings (see below) under
+`"appearance": {"theme": "dark"}`, and the page starts in it the next
+time.
 
 Files are saved under a name that the user chooses, starting from a name
 that the page proposes: a force field after the file it was opened from
@@ -249,17 +259,29 @@ The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 
 ## Running on the desktop
 
-    python -m act_gui
+    act-gui
 
-prints an address and opens it in the browser. The server listens on the
-local machine only, and the address has a key without which the server does
-not answer. Uploads and results are kept in a temporary directory that is
-removed at the end; `--data DIR` keeps them in a directory.
+(or `actgui`, the name of the program that this interface replaces, or
+`python -m act_gui`) prints an address and opens it in the browser. The
+server listens on the local machine only, and the address has a key
+without which the server does not answer. Uploads and results are kept in
+a temporary directory that is removed at the end; `--data DIR` keeps them
+in a directory.
+
+Without installing ACT-GUI, the script `actgui` in this directory starts
+it from here, with the Python of `.venv` here if there is one (or that of
+`ACT_GUI_PYTHON`, or `python3`). The Python package `act` and the program
+`alexandria` are found as always; from the source and the build of ACT,
+for instance:
+
+    PYTHONPATH=/path/to/ACT/python ACT_ALEXANDRIA=/path/to/ACT/build/bin/alexandria ./actgui
+
+A link to the script in a directory of your `PATH` works too.
 
 ## The cluster for long jobs
 
 Long jobs go to a Slurm cluster on which you have an account. In the
-tab Cluster you give the name of the server (a host name or a name from
+tab Settings you give the name of the server (a host name or a name from
 your ssh configuration), your user name there and a working directory,
 with its full path or as a path in your home directory. They are kept in
 the file `settings.json` in the directory `act-gui` of your configuration

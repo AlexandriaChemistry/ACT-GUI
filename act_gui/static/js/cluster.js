@@ -56,7 +56,7 @@ function show(state) {
                  el("span", { class: "chip" }, "partitions ", el("b", {}, c.partition)),
                  el("span", { class: "chip" }, "with a GPU ", el("b", {}, `${c.gpu_partition}, ${c.gpu_gres}`)));
   } else {
-    chips.append(el("span", { class: "chip" }, "No cluster yet. Long jobs cannot be sent anywhere."));
+    chips.append(el("span", { class: "chip" }, "No cluster yet. Long jobs cannot be sent anywhere until one is set in the tab Settings."));
   }
   $("#cl-file").textContent = state.file
     ? `These settings are kept in ${state.file} and read when the interface starts.`
@@ -316,7 +316,17 @@ function result(message, ok = false) {
   box.hidden = !message;
   box.textContent = message;
   box.className = "outcome " + (ok ? "good" : "bad");
-  pill("cl-pill", message ? (ok ? "Ready" : "Not ready") : "", ok ? "good" : "bad");
+  loginPill(message ? (ok ? "Ready" : "Not ready") : "", ok ? "good" : "bad");
+}
+
+/**
+ * Tell how the login goes, next to the button in the tab Settings and in the tab Cluster.
+ * @param {string} text The text, empty to show nothing.
+ * @param {string} kind good, bad or nothing.
+ */
+function loginPill(text, kind = "") {
+  pill("cl-pill", text, kind);
+  pill("cl-checkpill", text, kind);
 }
 
 /** Log in once with the settings that are kept, to see whether jobs can be sent. */
@@ -325,12 +335,12 @@ async function check() {
   button.disabled = true;
   alertBox("");
   result("");
-  pill("cl-pill", "Logging in…");
+  loginPill("Logging in…");
   try {
     const answer = await (await call("/cluster/check", { method: "POST" })).json();
     result(answer.message, answer.ok);
   } catch (e) {
-    pill("cl-pill", "");
+    loginPill("");
     alertBox("The login could not be checked. " + e.message);
   } finally { button.disabled = false; }
 }
@@ -353,7 +363,9 @@ export async function startCluster(told) {
   const tab = $('#nav button[data-view="cluster"]');
   // A server for several users has no cluster of one user
   tab.hidden = !told.cluster;
+  $("#set-cluster").hidden = !told.cluster;
   if (!told.cluster) return;
+  $("#cl-tosettings").onclick = () => $('#nav button[data-view="settings"]').click();
   $("#cl-save").onclick = save;
   $("#cl-check").onclick = check;
   $("#cl-forget").onclick = forget;

@@ -326,10 +326,38 @@ async function openSelection(file) {
   } finally { button.disabled = false; }
 }
 
+/**
+ * Show the properties in the file, each with its number of values, as
+ * buttons that show only the compounds that have it.
+ */
+function propertyChips() {
+  const chips = $("#mpw-props");
+  chips.textContent = "";
+  for (const [name, n] of Object.entries(state.data.summary.properties || {})) {
+    chips.append(el("button", { class: "chip", type: "button", data: { prop: name }, "aria-pressed": String(state.property === name),
+                                title: state.property === name ? "Show all compounds" : `Show only the compounds with ${name}` },
+                    name + " ", el("b", {}, String(n))));
+  }
+  if (!chips.childElementCount) chips.append(el("span", { class: "chip" }, "None"));
+}
+
+/**
+ * Show only the compounds that have a property, in the table, the list
+ * above it and the buttons of the properties.
+ * @param {string} name The property, empty for all compounds.
+ */
+function filterByProperty(name) {
+  state.property = name;
+  $("#mpw-prop").value = name;
+  propertyChips();
+  compoundTable();
+}
+
 /** Show the details of the compound that was picked, or hide them. */
 function compoundDetail() {
   const card = $("#mpw-detail"), m = state.picked >= 0 ? state.data.molecules[state.picked] : null;
   card.hidden = !m;
+  $("#mpw-pickhint").hidden = Boolean(m) || !state.data.molecules.length;
   if (!m) return;
   $("#mpw-dname").textContent = m.name || m.iupac;
   const chips = $("#mpw-dchips");
@@ -1291,7 +1319,8 @@ function show(label, data) {
   if (s.dimers) add("dimers", String(s.dimers));
   if (s.larger) add("larger", String(s.larger));
   add("calculations", String(s.experiments));
-  countTable($("#mpw-props"), ["Property", "Values"], s.properties);
+  propertyChips();
+  $("#mpw-facts").hidden = false;
   $("#mpw-content").hidden = false;
   compoundTable();
   compoundDetail();
@@ -1444,7 +1473,16 @@ export function startMolprops(told) {
   };
   $("#mpw-search").oninput = e => { state.query = e.target.value; compoundTable(); };
   $("#mpw-vlist").addEventListener("click", e => { if (e.target.closest("#mpw-clean")) saveCleaned(e.target.closest("#mpw-clean")); });
-  $("#mpw-prop").onchange = e => { state.property = e.target.value; compoundTable(); };
+  $("#mpw-prop").onchange = e => filterByProperty(e.target.value);
+  $("#mpw-props").addEventListener("click", e => {
+    const b = e.target.closest("button[data-prop]");
+    if (b) filterByProperty(state.property === b.dataset.prop ? "" : b.dataset.prop);
+  });
+  $("#mpw-dclose").onclick = () => { state.picked = -1; compoundTable(); compoundDetail(); };
+  // The structure of a calculation in the colours of the screen mode
+  document.addEventListener("act-theme", () => {
+    if (calcViewer) { calcViewer.setBackgroundColor(css("--stage")); calcViewer.render(); }
+  });
   // The selection file: compounds by monomer, a part for testing, and the file itself
   $("#sel-list").addEventListener("change", e => {
     const box = e.target.closest("input[data-mono]");

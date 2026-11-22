@@ -19,6 +19,7 @@ import { css, esc, limits, markPoint, plot, redrawPlots } from "./plot.js";
 import { startForceFields } from "./forcefield.js";
 import { startMolprops } from "./molprop.js";
 import { startCluster } from "./cluster.js";
+import { startSettings } from "./settings.js";
 import { clusterChoice } from "./clusterjob.js";
 
 /* global $3Dmol */
@@ -867,10 +868,11 @@ $("#e-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.sim, "simulate", 
 
 const TABS = { charges: "tab-charges", minimize: "tab-minimize", modes: "tab-modes", simulate: "tab-simulate", openmm: "tab-openmm", scan: "tab-scan", b2: "tab-b2" };
 tabs($("#tasks"), name => { state.ui.tab = name; showOnly(Object.values(TABS), TABS[name]); scene(); });
-const VIEWS = { molecule: "view-molecule", "force-field": "view-force-field", molprop: "view-molprop", cluster: "view-cluster" };
+const VIEWS = { molecule: "view-molecule", "force-field": "view-force-field", molprop: "view-molprop", cluster: "view-cluster", settings: "view-settings" };
 tabs($("#nav"), name => { showOnly(Object.values(VIEWS), VIEWS[name]); if (name === "molecule") scene(); else if (V) V.stopAnimate(); });
 window.addEventListener("resize", () => { redrawPlots(); $$(".tabs").forEach(moveInk); if (V) { V.resize(); V.render(); } });
-if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { redrawPlots(); scene(); });
+// The plots and the molecule take the colours of the screen mode when they are drawn
+document.addEventListener("act-theme", () => { redrawPlots(); scene(); });
 
 /** Ask the server who we are and what it offers. */
 async function start() {
@@ -885,6 +887,7 @@ async function start() {
     $('#ffsel option[value="default"]').textContent = told.default_forcefield;
     $("#smiles").maxLength = told.max_smiles_length;
     $("#status-text").textContent = (told.mode === "desktop" ? "Desktop mode" : "Server") + " · version " + told.version;
+    startSettings(told);
     startForceFields(told);
     startMolprops(told);
     // The tab of the cluster is there on the desktop only
