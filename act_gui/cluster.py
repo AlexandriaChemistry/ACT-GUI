@@ -278,6 +278,10 @@ def batch_script(settings: ClusterSettings, name: str, words: Sequence[str], *,
              "#SBATCH --partition=%s" % (settings.gpu_partition if gpu else settings.partition),
              # The short form: some installations of Slurm do not take --ntasks
              "#SBATCH -n %d" % tasks,
+             # One process per physical core: Slurm counts hardware threads as
+             # CPUs, while mpirun gives one slot per core and would refuse to
+             # start the processes on the half as many cores
+             "#SBATCH --hint=nomultithread",
              "#SBATCH --time=%d-%02d:%02d:00" % (minutes // 1440, minutes % 1440 // 60,
                                                  minutes % 60),
              "#SBATCH --output=%s" % OUTPUT_FILE]
@@ -290,7 +294,7 @@ def batch_script(settings: ClusterSettings, name: str, words: Sequence[str], *,
     lines += load_lines(settings)
     command = remote_command(words)
     if tasks > 1:
-        launcher = "srun" if settings.launcher == "srun" else "mpirun -n %d" % tasks
+        launcher = "srun" if settings.launcher == "srun" else "mpirun -n $SLURM_NTASKS"
         command = "%s %s" % (launcher, command)
     lines += [command, "status=$?", "echo $status > %s" % STATUS_FILE, "exit $status", ""]
     return "\n".join(lines)
