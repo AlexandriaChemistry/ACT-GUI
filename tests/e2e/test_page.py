@@ -269,8 +269,13 @@ class PageTest(unittest.TestCase):
         self.assertIn("sel", self.browser.find_element(
             By.CSS_SELECTOR, "#modetable tr.pick").get_attribute("class"))
         self.shot("04-modes")
-        # The spectrum on paper
+        # The spectrum on paper, and as data
         self.saved_pdf("ir-pdf", "nma-ir.pdf")
+        spectrum = self.saved_file("#ir-xvg", "nma-ir.xvg", "")
+        points = [line.split() for line in spectrum.splitlines()
+                  if line.strip() and line.lstrip()[0] not in "#@&"]
+        self.assertGreater(len(points), 100)
+        self.assertTrue(all(len(point) == 2 for point in points))
         # The wavenumbers from high to low, on the screen and on paper
 
         def tick(label):
@@ -349,6 +354,112 @@ class PageTest(unittest.TestCase):
             atoms = [line for line in archive.read("act-openmm/conf.pdb").decode().splitlines()
                      if line.startswith(("ATOM", "HETATM"))]
             self.assertEqual(10, len(atoms))
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_2b2_forcefield_file_of_molecule(self):
+        """!
+        @brief The force field file for a molecule is opened with a button,
+        is then the choice, and can be chosen again after another.
+        """
+        self.open_page()
+        self.assertTrue(self.browser.find_element(By.ID, "ffopen").is_displayed())
+        choice = Select(self.browser.find_element(By.ID, "ffsel"))
+        self.assertFalse(self.browser.find_element(By.CSS_SELECTOR, '#ffsel option[value="upload"]').is_enabled())
+        self.browser.find_element(By.ID, "fffile").send_keys(str(Path(TESTDATA) / "forcefields" / "ACS-g1.xml"))
+        self.assertEqual("ACS-g1.xml", choice.first_selected_option.text)
+        self.click("#load")
+        self.wait(lambda b: "ACS-g1.xml" in b.find_element(By.ID, "molchips").text)
+        choice.select_by_value("default")
+        self.click("#load")
+        self.wait(lambda b: "ACS-g1.xml" not in b.find_element(By.ID, "molchips").text
+                  and "force field" in b.find_element(By.ID, "molchips").text)
+        choice.select_by_value("upload")
+        self.click("#load")
+        self.wait(lambda b: "ACS-g1.xml" in b.find_element(By.ID, "molchips").text)
+        self.assertEqual("", self.errors())
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_2c_dimer_scan(self):
+        """!
+        @brief The interaction energy of a water dimer at three distances,
+        with the atoms that are closest chosen; a click on a point shows the
+        minimized dimer, and the energies can be saved.
+        """
+        self.open_page()
+        # A single compound cannot be scanned
+        self.click("#load")
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, "#qtable tr.pick"))
+        self.click('#tasks button[data-tab="scan"]')
+        self.assertIn("needs a structure of two compounds", self.text("#scan-note"))
+        self.assertFalse(self.browser.find_element(By.ID, "run-scan").is_enabled())
+        self.browser.find_element(By.ID, "molfile").send_keys(
+            str(Path(TESTDATA) / "molecules" / "water_dimer.pdb"))
+        self.wait(lambda b: "compounds of 3 and 3 atoms" in b.find_element(By.ID, "scan-note").text)
+        # The closest atoms, a hydrogen of the first and the oxygen of the second
+        first = Select(self.browser.find_element(By.ID, "scan-atom1"))
+        second = Select(self.browser.find_element(By.ID, "scan-atom2"))
+        self.assertEqual(["1", "2", "3"], [o.get_attribute("value") for o in first.options])
+        self.assertEqual(["4", "5", "6"], [o.get_attribute("value") for o in second.options])
+        self.assertEqual(("3", "4"), (first.first_selected_option.get_attribute("value"),
+                                      second.first_selected_option.get_attribute("value")))
+        for field, value in (("scan-rmin", "0.25"), ("scan-rmax", "0.35"), ("scan-step", "0.05")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        self.click("#run-scan")
+        self.wait(lambda b: b.find_element(By.ID, "scan-pill").text in ("Done", "Failed"), 300)
+        self.assertEqual("Done", self.text("#scan-pill"), self.errors())
+        self.assertIn("3 distances", self.text("#scan-plotnote"))
+        # A click on the point at the shortest distance shows that structure
+        self.browser.execute_script("document.getElementById('scanplot').scrollIntoView({ block: 'center' })")
+        place = self.browser.execute_script("""
+            const svg = document.querySelector('#scanplot svg'), box = svg.getBoundingClientRect();
+            const scale = box.width / svg.viewBox.baseVal.width;
+            const path = [...svg.querySelectorAll('g path')].filter(p => p.getAttribute('stroke-linecap') === 'round')[0];
+            const [x, y] = path.getAttribute('d').slice(1).split('h')[0].split(' ').map(Number);
+            return [x * scale - box.width / 2, y * scale - box.height / 2];""")
+        ActionChains(self.browser).move_to_element_with_offset(
+            self.browser.find_element(By.CSS_SELECTOR, "#scanplot svg"),
+            int(round(place[0])), int(round(place[1]))).click().perform()
+        self.wait(lambda b: "Minimized at 0.250 nm" in b.find_element(By.ID, "scene-title").text)
+        self.assertEqual("", self.errors())
+        self.shot("05c-dimer-scan")
+        saved = self.saved_file("#scan-xvg", "dimer-scan.xvg", "@")
+        self.assertIn('legend "EPOT"', saved)
+        self.assertEqual(3, len([line for line in saved.splitlines() if line and line[0] not in "#@"]))
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_2d_second_virial(self):
+        """!
+        @brief The second virial coefficient of a water dimer with SPC/E at
+        three temperatures, here; a single compound cannot have one.
+        """
+        self.open_page()
+        self.click("#load")
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, "#qtable tr.pick"))
+        self.click('#tasks button[data-tab="b2"]')
+        self.assertIn("this structure has 1", self.text("#b2-note"))
+        self.assertFalse(self.browser.find_element(By.ID, "run-b2").is_enabled())
+        self.browser.find_element(By.ID, "fffile").send_keys(str(Path(TESTDATA) / "forcefields" / "SPCE.xml"))
+        self.browser.find_element(By.ID, "molfile").send_keys(str(Path(TESTDATA) / "molecules" / "water_dimer.pdb"))
+        self.wait(lambda b: b.find_element(By.ID, "run-b2").is_enabled())
+        for field, value in (("b2-t1", "300"), ("b2-t2", "400"), ("b2-dt", "50"), ("b2-maxdimer", "16")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        self.click("#run-b2")
+        self.wait(lambda b: b.find_element(By.ID, "b2-pill").text in ("Done", "Failed"), 300)
+        self.assertEqual("Done", self.text("#b2-pill"), self.errors())
+        rows = self.browser.execute_script(
+            "return [...document.querySelectorAll('#b2-table tbody tr')].map(r => r.cells[0].textContent)")
+        self.assertEqual(["300", "350", "400"], rows)
+        self.assertIn("3 temperatures", self.text("#b2-plotnote"))
+        self.assertEqual(["Total", "Classical"], [g.text for g in self.browser.find_elements(
+            By.CSS_SELECTOR, "#b2plot g.legend")])
+        self.shot("05d-second-virial")
+        saved = self.saved_file("#b2-xvg", "B2T.xvg", "")
+        self.assertEqual(3, len([line for line in saved.splitlines()
+                                 if line.strip() and line.lstrip()[0] not in "#@&"]))
 
     def test_3_wrong_smiles_gives_a_message(self):
         """!
@@ -1512,6 +1623,34 @@ class PageTest(unittest.TestCase):
         self.assertEqual(0, len(self.browser.find_elements(By.CSS_SELECTOR, "#evplot circle.marked")))
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_8b_calculations_twice(self):
+        """!
+        @brief A molprop file with a calculation that is there twice: the
+        validation says so, and the file is saved without it, under the
+        name of the file or another.
+        """
+        original = (Path(TESTDATA) / "molprop" / "water-forces.xml").read_text()
+        begin, end = original.index("<experiment "), original.index("</experiment>") + 13
+        with tempfile.TemporaryDirectory() as tmp:
+            twice = Path(tmp) / "twice.xml"
+            twice.write_text(original[:end] + "\n    " + original[begin:end] + original[end:])
+            self.open_page()
+            self.click('#nav button[data-view="molprop"]')
+            self.browser.find_element(By.ID, "mpw-file").send_keys(str(twice))
+            self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        self.wait(lambda b: "twice" in b.find_element(By.ID, "mpw-vlist").text)
+        told = self.text("#mpw-vlist")
+        self.assertIn("1 calculation is in the file twice", told)
+        self.assertIn("in 1 compound: water", told)
+        self.assertEqual("Valid, with duplicates", self.text("#mpw-vpill"))
+        self.shot("29b-calculations-twice")
+        # Saved without it, under the name of the file or another
+        saved = self.saved_file("#mpw-clean", "twice.xml", "<?xml", rename="water-once.xml")
+        self.assertEqual(original.count("<experiment "), saved.count("<experiment "))
+        self.assertIn('molname="water"', saved)
+        self.assertEqual("", self.errors())
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_9c_compounds_and_weights(self):
         """!
         @brief The user says in the table what each compound is used for:
@@ -1800,6 +1939,37 @@ class PageTest(unittest.TestCase):
             "return window.asked")) if body.get("task") == "geometry_ff"][0]
         self.assertEqual(1, len(request["molprop"]["sets"]["ignore"]))
         self.shot("29-geometry-chosen")
+        # The histograms of the geometries, and where the values of a bar come from
+        self.wait(lambda b: b.find_element(By.ID, "geo-hist").is_displayed())
+        kinds = Select(self.browser.find_element(By.ID, "geo-htype"))
+        self.assertTrue(kinds.first_selected_option.text.startswith("Bond lengths"))
+        self.assertIn("Angles", [o.text.split(" (")[0] for o in kinds.options])
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, "#geoplot svg"))
+        self.assertIn("values in bins of 1 pm", self.text("#geo-histnote"))
+        self.browser.execute_script("document.getElementById('geoplot').scrollIntoView({ block: 'center' })")
+        place = self.browser.execute_script("""
+            const svg = document.querySelector('#geoplot svg'), box = svg.getBoundingClientRect();
+            const scale = box.width / svg.viewBox.baseVal.width;
+            const path = [...svg.querySelectorAll('g path')].filter(p => p.getAttribute('stroke-linecap') === 'round')[0];
+            const [x, y] = path.getAttribute('d').slice(1).split('h')[0].split(' ').map(Number);
+            return [x * scale - box.width / 2, y * scale - box.height / 2];""")
+        ActionChains(self.browser).move_to_element_with_offset(
+            self.browser.find_element(By.CSS_SELECTOR, "#geoplot svg"),
+            int(round(place[0])), int(round(place[1]))).click().perform()
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, "#geo-samples tbody tr"))
+        self.assertRegex(self.text("#geo-bintitle"), r"(?i)^\d+ values? around ")
+        rows = self.browser.execute_script(
+            "return [...document.querySelectorAll('#geo-samples tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        for compound, calculation, atoms, value in rows:
+            self.assertTrue(compound)
+            self.assertRegex(atoms, r"^[A-Z][a-z]?\d+-[A-Z][a-z]?\d+$")
+            self.assertTrue(value.endswith("pm"))
+        self.shot("29c-geometry-histogram")
+        # Another kind of geometry
+        kinds.select_by_value("ANGLES")
+        self.wait(lambda b: "values in bins of 0.5 degrees" in b.find_element(By.ID, "geo-histnote").text)
+        self.assertEqual("", self.errors())
         # Nothing ticked: nothing to take geometries from
         self.browser.execute_script(
             "document.querySelector('#mpw-table input[data-all]').click();"
@@ -1899,6 +2069,108 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").text)
         self.assertEqual({}, json.loads(self.config.read_text()))
         self.assertEqual("", self.browser.find_element(By.ID, "cl-server").get_attribute("value"))
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_d_molecule_jobs_on_the_cluster(self):
+        """!
+        @brief The second virial coefficient and a simulation with OpenMM of
+        a molecule go to the cluster; their results are shown in the
+        molecule workspace. A directory stands in for the cluster.
+        """
+        data = Path(TESTDATA)
+        self.open_page()
+        self.click('#nav button[data-view="cluster"]')
+        for field, value in (("cl-server", "good"), ("cl-user", "spoel"),
+                             ("cl-workdir", "act/jobs")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        Select(self.browser.find_element(By.ID, "cl-load")).select_by_value("none")
+        self.click("#cl-save")
+        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").text)
+        self.click('#nav button[data-view="molecule"]')
+        self.browser.find_element(By.ID, "fffile").send_keys(str(data / "forcefields" / "SPCE.xml"))
+        self.browser.find_element(By.ID, "molfile").send_keys(str(data / "molecules" / "water_dimer.pdb"))
+        self.wait(lambda b: b.find_element(By.ID, "run-b2").is_enabled())
+
+        # The second virial coefficient on four processes of the cluster
+        self.click('#tasks button[data-tab="b2"]')
+        self.assertTrue(self.browser.find_element(By.ID, "b2-where").is_displayed())
+        self.click('#b2-place button[data-v="cluster"]')
+        self.assertEqual("Show the job…", self.text("#run-b2"))
+        self.assertFalse(self.browser.find_element(By.ID, "b2-procfield").is_displayed())
+        for field, value in (("b2-jobname", "virial-1"), ("b2-tasks", "4"), ("b2-maxdimer", "16")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        self.click("#run-b2")
+        self.wait(lambda b: b.find_element(By.ID, "b2-job").is_displayed())
+        script = self.text("#b2-jobscript")
+        self.assertIn("#SBATCH -n 4", script)
+        self.assertIn("srun alexandria b2 ", script)
+        self.assertIn(" -maxdimer 16", script)
+        self.click("#b2-send")
+        self.wait(lambda b: b.find_element(By.ID, "view-cluster").is_displayed())
+        self.assertEqual("", self.errors())
+
+        # A simulation with OpenMM on a GPU of the cluster
+        self.click('#nav button[data-view="molecule"]')
+        self.click('#tasks button[data-tab="openmm"]')
+        self.click('#omm-place button[data-v="cluster"]')
+        self.assertEqual("Show the job…", self.text("#run-omm"))
+        name = self.browser.find_element(By.ID, "omm-jobname")
+        name.send_keys("md-1")
+        self.click("#omm-gpu")
+        self.click("#run-omm")
+        self.wait(lambda b: b.find_element(By.ID, "omm-job").is_displayed())
+        script = self.text("#omm-jobscript")
+        self.assertIn("python3 run.py", script)
+        self.assertIn("#SBATCH --gres=", script)
+        files = self.browser.execute_script(
+            "return [...document.querySelectorAll('#omm-jobfiles tbody tr')].map(r => r.cells[0].textContent)")
+        self.assertEqual(["conf.pdb", "openmm.xml", "run.py", "simulation.dat"], files)
+        self.shot("36-openmm-job-shown")
+        self.click("#omm-send")
+        self.wait(lambda b: b.find_element(By.ID, "view-cluster").is_displayed())
+        self.assertEqual("", self.errors())
+
+        # Both are done when the cluster is asked; their results are shown
+        def row(job):
+            return self.browser.execute_script(
+                "const r = document.querySelector('#cj-table tbody tr[data-job=\"' + arguments[0] + '\"]');"
+                "return r ? [...r.cells].map(c => c.textContent) : null", job)
+        self.wait(lambda b: row("virial-1") is not None and row("md-1") is not None)
+
+        def asked_until_done(_browser):
+            # The cluster is not asked again within a short time, as after another test
+            if row("virial-1")[2] == "Finished" and row("md-1")[2] == "Finished":
+                return True
+            if self.browser.find_element(By.ID, "cj-ask").is_enabled():
+                self.click("#cj-ask")
+            time.sleep(1)
+            return False
+        self.wait(asked_until_done, 180)
+        self.click('#cj-table tr[data-job="md-1"] button[data-act="open"]')
+        self.wait(lambda b: b.find_element(By.ID, "omm-result").is_displayed())
+        self.assertTrue(self.browser.find_element(By.ID, "tab-openmm").is_displayed())
+        self.assertIn("2 points", self.text("#omm-note"))
+        self.assertIn("md-1", self.text("#omm-resulttitle").lower())
+        self.shot("37-openmm-results")
+        self.click('#nav button[data-view="cluster"]')
+        self.click('#cj-table tr[data-job="virial-1"] button[data-act="open"]')
+        self.wait(lambda b: b.find_element(By.ID, "tab-b2").is_displayed())
+        self.wait(lambda b: b.find_element(By.ID, "b2-plotnote").text != "")
+        self.assertEqual("", self.errors())
+
+        # Take the jobs and the cluster away again
+        self.click('#nav button[data-view="cluster"]')
+        while self.browser.find_elements(By.CSS_SELECTOR, '#cj-table button[data-act="forget"]'):
+            self.click('#cj-table button[data-act="forget"]')
+            self.click('#cj-table button[data-act="forget"]')
+            time.sleep(0.3)
+        self.wait(lambda b: b.find_element(By.ID, "cj-empty").is_displayed())
+        self.click("#cl-forget")
+        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").text)
 
     def test_b_job_on_the_cluster(self):
         """!
@@ -2135,6 +2407,19 @@ class PageTest(unittest.TestCase):
         saved = self.saved_file("#tr-save", "booze-mono-trained.xml", "<alexandria_chemistry")
         self.assertIn("alexandria_chemistry", saved)
         self.shot("35-cluster-training-results")
+        self.assertEqual(logins + 3, len(self.cluster.calls()))
+
+        # The output files of the training came back and can be saved, also
+        # the log that train_ff writes without being asked
+        self.click('#nav button[data-view="cluster"]')
+        self.click('#cj-table button[data-act="files"]')
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, '#cj-table button[data-save="train_ff.log"]'))
+        listed = self.text("#cj-table")
+        for name in ("trained.xml", "train_ff.json", "sensitivity.json", "slurm.out"):
+            self.assertIn(name, listed)
+        self.assertNotIn("selection.dat", listed)
+        log = self.saved_file('#cj-table button[data-save="train_ff.log"]', "train_ff.log", "The log")
+        self.assertIn("train_ff", log)
         self.assertEqual(logins + 3, len(self.cluster.calls()))
 
         # Take the job and the cluster away again

@@ -60,6 +60,7 @@ export const session = {
   forcefield: null,     // the force field of the force field workspace: { ref, label }
   molprop: null,        // the molprop file of the molprop workspace: { file, described, label, sets: { test, ignore }, used, total }
   clusterReady: false,  // whether the user has a cluster that jobs can be sent to
+  maxProcesses: 1,      // the most processes of a calculation on this computer
 };
 
 /* ---------- messages ---------- */
@@ -152,14 +153,29 @@ export async function upload(file, kind) {
  * @returns {Promise<boolean>} Whether the file was saved.
  */
 export async function saveFile(button, path, params, busy, fallback, json = undefined) {
+  return saveMade(button, fallback, busy, async () => {
+    const answer = await call(path, json === undefined ? { params } : { method: "POST", json, params });
+    return answer.blob();
+  });
+}
+
+/**
+ * Save a file that is made after the user chose where it goes, such as the
+ * output of a calculation that is started for it.
+ * @param {Element} button     The button that was pressed; it is disabled meanwhile.
+ * @param {string} suggested   The name that is proposed.
+ * @param {string} busy        What the button says meanwhile.
+ * @param {function} make      Makes the content: a function that gives a promise of a Blob.
+ * @returns {Promise<boolean>} Whether it was saved; false if the user did not want to or it failed.
+ */
+export async function saveMade(button, suggested, busy, make) {
   // Where it goes is asked first, while the click of the user still counts
-  const where = await askWhere(fallback);
+  const where = await askWhere(suggested);
   if (!where) return false;
   const label = button.textContent;
   button.disabled = true; button.textContent = busy;
   try {
-    const answer = await call(path, json === undefined ? { params } : { method: "POST", json, params });
-    await store(where, await answer.blob());
+    await store(where, await make());
     return true;
   } catch (e) {
     alertBox("The file could not be saved. " + e.message);

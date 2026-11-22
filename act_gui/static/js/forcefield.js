@@ -22,6 +22,7 @@
 import { $, $$, alertBox, call, el, num, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
 import { compareWith, startDiff } from "./ffdiff.js";
 import { chosenSites, redrawVsites, startVsites } from "./vsites.js";
+import { markPoint, plot, resetZoom, zoomPlot } from "./plot.js";
 
 /** What the workspace knows. */
 const state = {
@@ -36,6 +37,7 @@ const state = {
   filter: "",          // the interaction of which the parameters are listed
   query: "",           // the text that identifiers must contain
   picked: null,        // the parameter that is being changed: { interaction, identifier, param }
+  hist: null,          // the histograms of geometry_ff: { job, summary, data, marked }
   fixed: [],           // the files with fixed parameters: { name, entries }
 };
 
@@ -468,6 +470,7 @@ async function geometry() {
     let job = await runTask({ task: "geometry_ff", forcefield: state.current.ref, molprop: geometrySource(), options });
     state.geoJob = job.id;
     extracted(job);
+    histogramsCard(job);
     if (!job.result.compounds) {
       pill("geo-pill", "No compound could be used", "warn");
       alertBox("None of the compounds in the file could be used with this force field, so it was not changed. " +
@@ -486,6 +489,106 @@ async function geometry() {
     pill("geo-pill", "Failed", "bad");
     alertBox("The geometries could not be extracted. " + e.message);
   } finally { button.disabled = !(state.current && state.molprop); }
+}
+
+/* ---------- histograms of the geometries ---------- */
+
+/** What the page calls the kinds of geometry. */
+const GEOMETRY_KINDS = { BONDS: "Bond lengths", ANGLES: "Angles", LINEAR_ANGLES: "Linear angles",
+                         PROPER_DIHEDRALS: "Dihedral angles", IMPROPER_DIHEDRALS: "Improper dihedrals" };
+
+/**
+ * Offer the histograms of the geometries that were extracted.
+ * @param {object} job The calculation of geometry_ff; its result lists the histograms.
+ */
+function histogramsCard(job) {
+  const histograms = job.result && job.result.histograms;
+  const kinds = histograms ? Object.keys(histograms).filter(kind => histograms[kind].length) : [];
+  state.hist = { job: job.id, summary: histograms || {}, data: null, marked: null };
+  $("#geo-hist").hidden = !kinds.length;
+  if (!kinds.length) return;
+  const select = $("#geo-htype");
+  select.textContent = "";
+  for (const kind of kinds) select.append(el("option", { value: kind }, `${GEOMETRY_KINDS[kind] || kind} (${histograms[kind].length})`));
+  histogramKind();
+}
+
+/** Offer the types of the kind of geometry that is chosen, the most common first. */
+function histogramKind() {
+  const listed = state.hist.summary[$("#geo-htype").value] || [], select = $("#geo-hid");
+  select.textContent = "";
+  for (const h of listed) select.append(el("option", { value: h.identifier }, `${h.identifier} · ${h.count}`));
+  histogramShown();
+}
+
+/** Fetch and draw the histogram that is chosen. */
+async function histogramShown() {
+  const hist = state.hist, kind = $("#geo-htype").value, identifier = $("#geo-hid").value;
+  if (!hist || !identifier) return;
+  try {
+    const data = await (await call(`/jobs/${hist.job}/histograms`, { params: { type: kind, identifier } })).json();
+    if (state.hist !== hist || $("#geo-hid").value !== identifier) return;
+    hist.data = data;
+    hist.marked = null;
+  } catch (e) { alertBox("The histogram could not be fetched. " + e.message); return; }
+  histogramPlot();
+  binSamples(-1);
+}
+
+/** Draw the histogram that was fetched: bars, and a point on top of each to click. */
+function histogramPlot() {
+  const data = state.hist.data, w = data.binwidth || 1, bins = data.bins || [];
+  if (!bins.length) { $("#geoplot").textContent = ""; return; }
+  // The outline of the bars, with the empty bins in between
+  const x = [], y = [];
+  const first = bins[0].value - w / 2, last = bins[bins.length - 1].value + w / 2;
+  let k = 0;
+  x.push(first); y.push(0);
+  for (let left = first; left < last - w / 2; left += w) {
+    const bin = bins[k] && Math.abs(bins[k].value - (left + w / 2)) < w / 4 ? bins[k++] : null;
+    const count = bin ? bin.count : 0;
+    x.push(left, left + w); y.push(count, count);
+  }
+  x.push(last); y.push(0);
+  const top = Math.max(...bins.map(b => b.count));
+  const unit = data.unit === "degree" ? "degrees" : data.unit;
+  plot("geoplot", { label: `Histogram of ${data.identifier}`, xlim: [first - w, last + w], ylim: [0, top * 1.12 || 1], height: 340,
+                    xlabel: `${data.identifier} (${unit})`, ylabel: "Values", zoom: true, marked: state.hist.marked,
+                    series: [{ type: "line", x, y, fill: true },
+                             { type: "points", x: bins.map(b => b.value), y: bins.map(b => b.count), size: 7, pickable: true }],
+                    onPoint: (series, index) => { state.hist.marked = { series, id: index }; markPoint("geoplot", state.hist.marked); binSamples(index); } });
+  $("#geo-histnote").textContent = `${data.count} values in bins of ${num(w, 4)} ${unit}. Zoom with the wheel or with + and −, drag to move, double-click or All to see all of it.`;
+}
+
+/**
+ * List where the values of a bin come from.
+ * @param {number} index The bin, -1 for none.
+ */
+function binSamples(index) {
+  const data = state.hist.data, bin = data && index >= 0 ? data.bins[index] : null, table = $("#geo-samples");
+  table.textContent = "";
+  if (!bin) {
+    $("#geo-bintitle").textContent = "Where the values come from";
+    $("#geo-binnote").textContent = "Click a bar to see from which compounds, calculations and atoms its values come.";
+    return;
+  }
+  const unit = data.unit === "degree" ? "°" : ` ${data.unit}`;
+  $("#geo-bintitle").textContent = `${bin.count} ${bin.count === 1 ? "value" : "values"} around ${num(bin.value, 4)}${unit}`;
+  if (!bin.samples) {
+    $("#geo-binnote").textContent = "This alexandria does not tell where the values come from (geometry_ff -samples).";
+    return;
+  }
+  table.append(el("thead", {}, el("tr", {}, el("th", {}, "Compound"), el("th", {}, "Calculation"), el("th", {}, "Atoms"), el("th", { class: "n" }, "Value"))));
+  const body = el("tbody");
+  for (const s of bin.samples) {
+    // The data file of the calculation without its directory, which can be long
+    body.append(el("tr", {}, el("td", {}, s.molecule), el("td", { class: "mono", title: s.calculation }, s.calculation.split("/").pop()),
+      el("td", { class: "mono" }, s.names),
+      el("td", { class: "n" }, num(s.value, 4) + unit)));
+  }
+  table.append(body);
+  $("#geo-binnote").textContent = (bin.more ? `And ${bin.more} more values in this bin. ` : "") +
+    "The atoms are numbered from one, in the order of the molprop file, with their names.";
 }
 
 /* ---------- parameters ---------- */
@@ -751,6 +854,12 @@ export async function startForceFields(told) {
   $("#mp-shared").onclick = () => { state.molprop = { shared: true }; geometryLabel(); };
   document.addEventListener("act-molprop", geometryLabel);
   $("#run-geo").onclick = geometry;
+  // The histograms of the geometries
+  $("#geo-htype").onchange = histogramKind;
+  $("#geo-hid").onchange = histogramShown;
+  $("#geo-zoomin").onclick = () => zoomPlot("geoplot", 0.8);
+  $("#geo-zoomout").onclick = () => zoomPlot("geoplot", 1.25);
+  $("#geo-zoomall").onclick = () => resetZoom("geoplot");
   $("#geo-log").onclick = e => saveFile(e.currentTarget, `/jobs/${state.geoJob}/files/g`, {}, "Saving…", "geometry_ff.log");
   $("#p-filter").onchange = e => { state.filter = e.target.value; state.picked = null; parameterTable(); editCard(); };
   $("#p-search").oninput = e => { state.query = e.target.value; parameterTable(); };

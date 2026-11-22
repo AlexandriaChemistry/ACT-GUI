@@ -25,10 +25,11 @@ from __future__ import annotations
 
 import dataclasses
 import hmac
+import functools
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, Mapping, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -36,7 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__, cluster, cluster_api, evaluation, ffgen, openmm_package, plots
-from . import training
+from . import dimerscan, geometry, training
 from .cluster_queue import ClusterQueue
 from .jobs import FINISHED, JobError, JobManager
 from .settings import PACKAGE_DIR, Settings
@@ -550,12 +551,16 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         except ValueError as exc:
             raise fail(400, "The request is not valid JSON") from exc
         task, prepared = prepare(body)
+        if task.cluster_only:
+            raise fail(400, "%s runs as a job on the cluster only" % task.title)
+        # A scan runs the command once for each distance, as one job
+        runner = functools.partial(dimerscan.run_scan, run) if task.runner == "dimer_scan" else None
         try:
             job = manager.submit(task.name, task.command, prepared.options,
                                  progress=task.progress, outputs=dict(task.outputs),
                                  inputs=prepared.inputs, collect=task.collect,
                                  digest=task.digest, processes=prepared.processes,
-                                 observables=prepared.observables)
+                                 observables=prepared.observables, runner=runner)
         except JobError as exc:
             raise fail(429, str(exc)) from exc
         return manager.summary(job)
@@ -639,9 +644,9 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         job = find_job(job_id)
         task = TASKS.get(job.task)
         path: Optional[Path] = job.files.get("json")
-        if task is None or task.digest not in (evaluation.digest, training.digest) \
+        if task is None or task.digest not in (evaluation.digest, training.digest, geometry.digest) \
                 or job.status != FINISHED or path is None or not path.is_file():
-            raise fail(404, "This calculation has no energies of compounds")
+            raise fail(404, "This calculation has no such result")
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -664,6 +669,40 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         try:
             return evaluation.compound(data, index)
         except evaluation.EvaluationError as exc:
+            raise fail(404, str(exc)) from exc
+
+    @app.get("/api/jobs/{job_id}/scan/{index}")
+    def job_scan_structure(job_id: str, index: int) -> FileResponse:
+        """!
+        @brief The minimized structure at one distance of a scan of a
+        dimer, also while the scan goes on.
+        @param job_id The identifier of the scan.
+        @param index  The place of the distance.
+        @return The structure as a pdb file.
+        """
+        job = find_job(job_id)
+        if job.task != "dimer_scan":
+            raise fail(404, "This calculation is no scan")
+        try:
+            path = dimerscan.structure(job.workdir, index)
+        except dimerscan.DimerScanError as exc:
+            raise fail(404, str(exc)) from exc
+        return FileResponse(path, media_type="chemical/x-pdb")
+
+    @app.get("/api/jobs/{job_id}/histograms")
+    def job_histogram(job_id: str, type: str, identifier: str) -> Mapping[str, Any]:  # pylint: disable=redefined-builtin
+        """!
+        @brief One histogram of the bond lengths, angles or dihedrals that
+        geometry_ff found, with where its values come from.
+        @param job_id     The identifier of the calculation.
+        @param type       The interaction type, such as BONDS.
+        @param identifier The identifier, such as c3_b~h_b.
+        @return See geometry.histogram().
+        """
+        data = whole_result(job_id)
+        try:
+            return geometry.histogram(data, type, identifier)
+        except geometry.GeometryError as exc:
             raise fail(404, str(exc)) from exc
 
     @app.get("/api/jobs/{job_id}/points/{term}")
@@ -795,7 +834,23 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         # nobody logs in elsewhere as somebody else.
         app.state.cluster_queue = ClusterQueue(settings.cluster_jobs_dir,
                                                program=settings.ssh_program)
-        cluster_api.register(app, manager, app.state.cluster_queue, prepare, arguments, fail)
+        def written(command: str) -> Dict[str, str]:
+            """!
+            @brief The files that a command writes under their default
+            names when their option is not given.
+            @param command The command.
+            @return The names by option.
+            """
+            try:
+                options = program_info().commands[command].options
+            except Exception:  # pylint: disable=broad-except
+                return {}
+            values = options.values() if isinstance(options, dict) else options
+            return {option.name: option.default for option in values
+                    if getattr(option, "is_file", False) and getattr(option, "is_output", False)
+                    and getattr(option, "required", False) and isinstance(option.default, str)}
+        cluster_api.register(app, manager, app.state.cluster_queue, prepare, arguments, fail,
+                             written)
 
     static_dir = PACKAGE_DIR / "static"
     if static_dir.is_dir():

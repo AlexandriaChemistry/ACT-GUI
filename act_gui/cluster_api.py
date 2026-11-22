@@ -24,16 +24,17 @@ from __future__ import annotations
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import cluster_jobs
+from . import cluster_jobs, openmm_package
 from .cluster import MAX_TASKS, ClusterError, ClusterSettings
-from .cluster_queue import ACTIVE, PROGRESS, ClusterQueue, Plan, make_plan
+from .cluster_queue import ACTIVE, PROGRESS, ClusterQueue, Plan, make_plan, make_script_plan
 from .jobs import JobManager
-from .tasks import TASKS, Prepared, Task
+from .tasks import OPENMM_RESULTS, TASKS, Prepared, Task
 
 ## What a request can say about the job itself
 CHOICES = ("name", "tasks", "minutes", "gpu")
@@ -46,7 +47,8 @@ MAX_REPORTS = 5000
 def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
              prepare: Callable[..., Tuple[Task, Prepared]],
              arguments: Callable[..., Any],
-             fail: Callable[[int, str], HTTPException]) -> None:
+             fail: Callable[[int, str], HTTPException],
+             written: Optional[Callable[[str], Dict[str, str]]] = None) -> None:
     """!
     @brief Add the routes for jobs on the cluster to the application.
     @param app       The application. Its state has the settings of the cluster.
@@ -59,6 +61,9 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
     @param arguments The function that makes the arguments of a command,
     see cluster_queue.make_plan().
     @param fail      The function that makes the answer for an error.
+    @param written   The function that tells which files a command writes
+    under their default names when their option is not given, by option
+    name; they are fetched as well. None for none.
     """
 
     def poll_seconds() -> int:
@@ -97,6 +102,8 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         @return The plan.
         """
         chosen = body.get("cluster") or {}
+        if isinstance(body, Mapping) and body.get("task") == "openmm_run":
+            return openmm_plan(body, staging, name, chosen)
         tasks = chosen.get("tasks", 1)
         if isinstance(tasks, bool) or not isinstance(tasks, int) or not 1 <= tasks <= MAX_TASKS:
             raise fail(400, "The number of processes is between 1 and %d" % MAX_TASKS)
@@ -112,14 +119,62 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
             # In a file in the directory of the job, which is read when
             # the cluster is asked for the state of the job
             options[PROGRESS] = True
+        # Also the files that the command writes without being asked, such
+        # as the log file of a training, unless the job names them otherwise
+        collect = dict(task.collect)
+        named = set(collect.values()) | set(task.outputs.values())
+        for key, filename in (written(task.command) if written else {}).items():
+            if key not in options and key not in task.outputs and key not in collect \
+                    and filename not in named:
+                collect[key] = filename
         try:
             return make_plan(name, task.name, task.command, options, staging,
                              arguments, app.state.cluster, outputs=dict(task.outputs),
-                             inputs=prepared.inputs, collect=dict(task.collect),
+                             inputs=prepared.inputs, collect=collect,
                              tasks=tasks, minutes=minutes,
                              gpu=chosen.get("gpu", False), observables=prepared.observables)
         except (ValueError, OSError) as exc:
             # Also an option that the command does not take
+            raise fail(400, str(exc)) from exc
+
+    def openmm_plan(body: Mapping[str, Any], staging: Path, name: str,
+                    chosen: Mapping[str, Any]) -> Plan:
+        """!
+        @brief A simulation with OpenMM of the files that were made for it
+        here, run on the cluster with the script of the package.
+        @param body    The request: job, the calculation that made the files
+        for OpenMM, and simulation, its steps, dt and temperature.
+        @param staging The directory that stands for that of the job.
+        @param name    The name of the job.
+        @param chosen  What the request says about the job: minutes, gpu.
+        @return The plan.
+        """
+        source = body.get("job")
+        made = manager.get(source) if isinstance(source, str) else None
+        pdb = made.files.get("c") if made is not None else None
+        xml = made.files.get("openmm") if made is not None else None
+        if made is None or made.task != "openmm" or made.status != "finished" \
+                or pdb is None or xml is None:
+            raise fail(400, "Make the files for OpenMM of the molecule first")
+        minutes, gpu = chosen.get("minutes", 60), chosen.get("gpu", False)
+        if not isinstance(gpu, bool):
+            raise fail(400, "Whether the job needs a GPU is yes or no")
+        simulation = body.get("simulation") or {}
+        if not isinstance(simulation, Mapping) or set(simulation) - {"steps", "dt", "temperature"}:
+            raise fail(400, "The simulation has steps, dt and temperature")
+        try:
+            settings = openmm_package.parse_settings(**simulation)
+            contents = {
+                openmm_package.PDB_NAME: Path(pdb).read_bytes(),
+                openmm_package.XML_NAME: Path(xml).read_bytes(),
+                # On a node with a GPU OpenMM computes there
+                openmm_package.DAT_NAME: openmm_package.simulation_dat(
+                    settings, "CUDA" if gpu else "CPU").encode("utf-8"),
+                openmm_package.RUN_NAME: openmm_package.run_script().encode("utf-8")}
+            return make_script_plan(name, "openmm_run", ["python3", openmm_package.RUN_NAME],
+                                    contents, OPENMM_RESULTS, staging, app.state.cluster,
+                                    minutes=minutes, gpu=gpu)
+        except (openmm_package.PackageError, ClusterError, OSError) as exc:
             raise fail(400, str(exc)) from exc
 
     def handle(body: Any) -> Dict[str, Any]:
@@ -259,6 +314,37 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
                                 observables=job.observables)
         queue.adopted(name, adopted.id)
         return {"job": adopted.id, "task": task.name}
+
+    @app.get("/api/cluster/jobs/{name}/files")
+    def cluster_files(name: str) -> Dict[str, Any]:
+        """!
+        @brief The output files of a job that were fetched, to be saved.
+        @param name The name of the job.
+        @return "files": for each its name and size in bytes.
+        """
+        try:
+            files = queue.output_files(name)
+        except ClusterError as exc:
+            raise fail(404, str(exc)) from exc
+        return {"files": [{"name": item, "size": path.stat().st_size}
+                          for item, path in files.items()]}
+
+    @app.get("/api/cluster/jobs/{name}/files/{filename}")
+    def cluster_file(name: str, filename: str) -> FileResponse:
+        """!
+        @brief An output file of a job that was fetched.
+        @param name     The name of the job.
+        @param filename The name of the file, one of cluster_files().
+        @return The file, to be saved.
+        """
+        try:
+            files = queue.output_files(name)
+        except ClusterError as exc:
+            raise fail(404, str(exc)) from exc
+        if filename not in files:
+            raise fail(404, "The job has no such file")
+        return FileResponse(files[filename], media_type="application/octet-stream",
+                            filename=filename)
 
     @app.delete("/api/cluster/jobs/{name}")
     def cluster_stop(name: str, forget: bool = False) -> Dict[str, Any]:

@@ -29,7 +29,7 @@ from tests.test_cluster import FakeServer
 ## The options of the stand-in for the commands that write a file, with
 ## the name of the file if none is given
 OUTPUTS = {"json": "%s.json", "epotcorr": "epot_corr.xvg", "o": "out.xml", "g": "%s.log",
-           "progress": "progress.jsonl"}
+           "progress": "progress.jsonl", "b2": "B2T.xvg"}
 
 
 def fake_arguments(command, options, workdir):
@@ -276,8 +276,9 @@ class QueueTest(QueueCase):
         data, files, inputs = self.queue.results("job1")
         self.assertEqual({"Train": {"INTERACTION": {"N": 2, "RMSD": 1.0}}}, data["statistics"])
         local = self.local / "job1"
+        # The log is collected, as train_ff writes it without being asked
         self.assertEqual({"sel": local / "selection.dat", "json": local / "train_ff.json",
-                          "epotcorr": local / "epot_corr.xvg",
+                          "epotcorr": local / "epot_corr.xvg", "g": local / "train_ff.log",
                           "INTERACTION": local / "INTERACTION.xvg"}, files)
         self.assertEqual({"sel": local / "selection.dat"}, inputs)
         self.assertIn("running train_ff", (local / "slurm.out").read_text())

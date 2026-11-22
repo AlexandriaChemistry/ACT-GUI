@@ -180,7 +180,8 @@ class JobManager:
                inputs: Optional[Mapping[str, Sequence[InputFile]]] = None,
                collect: Optional[Mapping[str, str]] = None,
                digest: Optional[Callable[[Any], Any]] = None,
-               processes: int = 1, observables: Sequence[str] = ()) -> Job:
+               processes: int = 1, observables: Sequence[str] = (),
+               runner: Optional[Callable[..., Any]] = None) -> Job:
         """!
         @brief Start a job, or put it in the queue.
         @param task     The name of the task, for the browser.
@@ -200,6 +201,9 @@ class JobManager:
         @param processes The number of processes that the command runs on.
         @param observables The properties that a comparison compares, for
         the browser.
+        @param runner   The function that runs the job instead of the
+        function of the manager, such as a scan that runs the command more
+        than once; it gets the command and the same arguments.
         @return The job.
         @throws JobError if too many jobs are waiting or running.
         """
@@ -214,13 +218,13 @@ class JobManager:
             self._jobs[job_id] = job
         options, job.inputs = place_files(job.workdir, options, outputs, inputs)
         self._pool.submit(self._execute, job, options, progress, dict(collect or {}), digest,
-                          processes)
+                          processes, runner)
         return job
 
     def _execute(self, job: Job, options: Dict[str, Any], progress: bool,
                  collect: Optional[Mapping[str, str]] = None,
                  digest: Optional[Callable[[Any], Any]] = None,
-                 processes: int = 1) -> None:
+                 processes: int = 1, runner: Optional[Callable[..., Any]] = None) -> None:
         """!
         @brief Run a job. Called in a thread of the pool.
         @param job      The job.
@@ -229,6 +233,7 @@ class JobManager:
         @param collect  Files to keep that the command writes unasked, see submit().
         @param digest   The function that makes what is kept of the result.
         @param processes The number of processes that the command runs on.
+        @param runner   The function that runs the job, the one of the manager if None.
         """
         if job.stop.is_set():
             self._finish(job, CANCELLED)
@@ -253,7 +258,7 @@ class JobManager:
                 extra["on_progress"] = on_progress
             if processes > 1:
                 extra["processes"] = processes
-            result = self._run(job.command, **extra, **options)
+            result = (runner or self._run)(job.command, **extra, **options)
             data = digest(result.data) if digest is not None else result.data
             # The files that were made for the job, then those it wrote
             files = dict(job.inputs)

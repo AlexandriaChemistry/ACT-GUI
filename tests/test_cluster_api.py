@@ -100,6 +100,12 @@ class ClusterJobsApiTest(unittest.TestCase):
                 result.data = {"summary": {"molecules": 1},
                                "molecules": [{"name": "w2", "iupac": "water#water"}],
                                "validation": {"checked": True, "ok": True}}
+            elif command == "gentop" and isinstance(kwargs.get("openmm"), Path):
+                # The force field for OpenMM, next to the coordinates
+                kwargs["openmm"].write_text("<ForceField/>\n")
+                result.files["openmm"] = [kwargs["openmm"]]
+                kwargs["c"].write_text("ATOM      1  C   MOL     1       0.000   0.000   0.000\n")
+                result.files["c"] = [kwargs["c"]]
             elif command == "train_ff" and kwargs.get("optimizer") in ("GA", "HYBRID"):
                 # The individuals that a training ends with
                 pool = Path(workdir) / "genepool.csv"
@@ -302,6 +308,71 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.assertIn("needs 2 individuals, not 4", refused.json()["detail"])
         self.assertEqual(0, self.logins())
 
+    def test_openmm_simulation_on_the_cluster(self):
+        """!
+        @brief The files for OpenMM that were made here are simulated on the
+        cluster with the script of the package, on a GPU if the job asks
+        for one; its output comes back and is opened as a job here.
+        """
+        made = self.client.post("/api/jobs", headers=self.headers,
+                                json={"task": "openmm", "molecule": {"smiles": "CC"}}).json()
+        for _ in range(500):
+            made = self.client.get("/api/jobs/" + made["id"], headers=self.headers).json()
+            if made["status"] not in ("queued", "running"):
+                break
+            time.sleep(0.01)
+        self.assertEqual("finished", made["status"], made["error"])
+        body = {"task": "openmm_run", "job": made["id"],
+                "simulation": {"steps": 5000, "dt": 1, "temperature": 300}}
+
+        def post(send=False, **cluster):
+            return self.client.post("/api/cluster/jobs", headers=self.headers,
+                                    json=dict(body, cluster=cluster, send=send))
+        shown = post(name="md-1", gpu=True, minutes=30).json()
+        self.assertIn("\npython3 run.py\n", shown["script"])
+        self.assertIn("#SBATCH --gres=", shown["script"])
+        self.assertEqual(["conf.pdb", "openmm.xml", "run.py", "simulation.dat"],
+                         sorted(f["name"] for f in shown["files"]))
+        self.assertLessEqual({"energy.xvg", "temperature.xvg", "final.pdb", "output.txt"},
+                             set(shown["fetch"]))
+        for wrong in (dict(body, job="nosuchjob"), dict(body, simulation={"steps": 0}),
+                      dict(body, simulation={"steps": 10, "script": "x"})):
+            answer = self.client.post("/api/cluster/jobs", headers=self.headers,
+                                      json=dict(wrong, cluster={"name": "md-2"}))
+            self.assertEqual(400, answer.status_code, wrong)
+        self.assertEqual(0, self.logins())
+        sent = post(send=True, name="md-1", gpu=True, minutes=30)
+        self.assertEqual(200, sent.status_code, sent.text)
+        checked = self.client.post("/api/cluster/jobs/check", headers=self.headers).json()
+        job = [j for j in checked["jobs"] if j["name"] == "md-1"][0]
+        self.assertEqual(("finished", True), (job["state"], job["fetched"]), job["error"])
+        opened = self.client.post("/api/cluster/jobs/md-1/open", headers=self.headers).json()
+        self.assertEqual("openmm_run", opened["task"])
+        result = self.client.get("/api/jobs/" + opened["job"], headers=self.headers).json()
+        self.assertLessEqual({"energy", "temperature", "final", "output"}, set(result["files"]))
+        told = self.client.get("/api/jobs/%s/files/output" % opened["job"], headers=self.headers)
+        # The simulation ran on the GPU
+        self.assertIn("CUDA", told.text)
+        energy = self.client.get("/api/jobs/%s/files/energy" % opened["job"], headers=self.headers)
+        self.assertIn("-12", energy.text)
+
+    def test_second_virial_on_the_cluster(self):
+        """!
+        @brief The second virial coefficient goes to the cluster as well,
+        on the processes of the job, with its plot among what comes back.
+        """
+        body = {"task": "b2", "molecule": {"smiles": "O.O"},
+                "options": {"T1": 300, "T2": 400, "dT": 50, "maxdimer": 64}}
+        answer = self.client.post("/api/cluster/jobs", headers=self.headers,
+                                  json=dict(body, cluster={"name": "virial-1", "tasks": 8}))
+        self.assertEqual(200, answer.status_code, answer.text)
+        shown = answer.json()
+        self.assertIn("#SBATCH -n 8\n", shown["script"])
+        self.assertIn("srun alexandria b2 ", shown["script"])
+        self.assertIn(" -T1 300 ", shown["script"])
+        self.assertIn("B2T.xvg", shown["fetch"])
+        self.assertEqual(0, self.logins())
+
     def test_training_on_the_cluster(self):
         """!
         @brief A training has an individual for each process of the job
@@ -319,6 +390,11 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.assertEqual(200, answer.status_code, answer.text)
         shown = answer.json()
         self.assertIn("#SBATCH -n 4\n", shown["script"])
+        # What comes back: also the files that train_ff writes under their
+        # default names, but not one that the job names otherwise
+        self.assertLessEqual({"train_ff.log", "sensitivity.json", "genepool.csv", "trained.xml"},
+                             set(shown["fetch"]))
+        self.assertNotIn("ff_train.xml", shown["fetch"])
         self.assertIn("srun alexandria train_ff -ff ff.xml -mp mp.xml -fc_inter 1 "
                       "-fit 'sigma epsilon' -optimizer HYBRID -max_generations 3 -max_iter 20 "
                       "-pop_size 4 -json train_ff.json -progress progress.jsonl "
@@ -360,7 +436,27 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.assertIn("Train", result["result"]["statistics"])
         self.assertEqual(["start", "generation", "generation", "step"],
                          [report["event"] for report in result["progress"]])
-        self.assertLessEqual({"o", "progress", "INTERACTION", "json"}, set(result["files"]))
+        self.assertLessEqual({"o", "progress", "INTERACTION", "json", "g", "sensout"},
+                             set(result["files"]))
+        # The output files of the job can be saved
+        listed = self.client.get("/api/cluster/jobs/train-1/files", headers=self.headers)
+        self.assertEqual(200, listed.status_code, listed.text)
+        names = [entry["name"] for entry in listed.json()["files"]]
+        self.assertLessEqual({"train_ff.log", "sensitivity.json", "trained.xml", "train_ff.json",
+                              "INTERACTION.xvg"}, set(names))
+        # The files that were sent along are not output
+        self.assertNotIn("selection.dat", names)
+        self.assertTrue(all(entry["size"] > 0 for entry in listed.json()["files"]))
+        log = self.client.get("/api/cluster/jobs/train-1/files/train_ff.log", headers=self.headers)
+        self.assertEqual(200, log.status_code)
+        self.assertEqual("The log of train_ff\n", log.text)
+        self.assertIn("attachment", log.headers["content-disposition"])
+        for wrong in ("selection.dat", "../train-1/train_ff.log", "nothing.log", ".act-job.json"):
+            self.assertEqual(404, self.client.get("/api/cluster/jobs/train-1/files/" + wrong,
+                                                  headers=self.headers).status_code, wrong)
+        self.assertEqual(404, self.client.get("/api/cluster/jobs/nojob/files",
+                                              headers=self.headers).status_code)
+        self.assertEqual(401, self.client.get("/api/cluster/jobs/train-1/files").status_code)
         # The trained force field is one to calculate with
         trained = self.client.get("/api/jobs/%s/files/o" % opened.json()["job"],
                                   headers=self.headers)

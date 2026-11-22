@@ -107,7 +107,19 @@ class Plan:
                 "command": cluster.remote_command(self.words), "script": self.script,
                 "files": [{"name": name, "size": path.stat().st_size}
                           for name, path in sorted(self.files.items())],
-                "tasks": self.tasks, "minutes": self.minutes, "gpu": self.gpu}
+                "tasks": self.tasks, "minutes": self.minutes, "gpu": self.gpu,
+                "fetch": self.fetched_names()}
+
+    def fetched_names(self) -> List[str]:
+        """!
+        @brief The files that are fetched when the job is done, those that
+        are there then.
+        @return Their names in the directory of the job.
+        """
+        names = {name for listed in self.outputs.values() for name in listed}
+        names.update(self.collect.values())
+        names.add(cluster.OUTPUT_FILE)
+        return sorted(names)
 
 
 def make_plan(name: str, task: str, command: str, options: Mapping[str, Any],
@@ -203,6 +215,42 @@ def make_plan(name: str, task: str, command: str, options: Mapping[str, Any],
                 inputs={key: path.name for key, path in written.items()},
                 collect=kept, tasks=tasks, minutes=minutes, gpu=gpu,
                 observables=tuple(observables))
+
+
+def make_script_plan(name: str, task: str, words: Sequence[str], contents: Mapping[str, bytes],
+                     fetch: Mapping[str, str], staging: Path, settings: ClusterSettings, *,
+                     minutes: int = 60, gpu: bool = False) -> Plan:
+    """!
+    @brief A job for the cluster that runs another program than alexandria,
+    such as a Python script for OpenMM, with files that the interface made.
+    @param name     The name of the job.
+    @param task     The name of the task.
+    @param words    The command, a fixed one with the names of files of the job.
+    @param contents The files of the job by name, as bytes.
+    @param fetch    The files that the command writes, by the name under
+    which they are kept, to fetch when the job is done.
+    @param staging  The directory on this machine that stands for that of the job.
+    @param settings The settings of the cluster.
+    @param minutes  The longest time the job may take.
+    @param gpu      Whether the job needs a GPU.
+    @return The plan.
+    @throws ClusterError for a name of a file that is not possible.
+    """
+    staging = Path(staging)
+    files: Dict[str, Path] = {}
+    for filename, data in contents.items():
+        if not _FILE_NAME.fullmatch(filename):
+            raise ClusterError("'%s' cannot be the name of a file of a job" % filename)
+        path = staging / filename
+        path.write_bytes(data)
+        files[filename] = path
+    for filename in fetch.values():
+        if not _FILE_NAME.fullmatch(filename):
+            raise ClusterError("'%s' cannot be the name of a file of a job" % filename)
+    script = cluster.batch_script(settings, name, list(words), tasks=1, minutes=minutes, gpu=gpu)
+    return Plan(name=name, task=task, command=words[0], words=list(words), script=script,
+                files=files, outputs={}, inputs={}, collect=dict(fetch), tasks=1,
+                minutes=minutes, gpu=gpu)
 
 
 @dataclass
@@ -425,6 +473,25 @@ class ClusterQueue:
         @return The directory in which each job has a directory.
         """
         return self._dir
+
+    def output_files(self, name: str) -> Dict[str, Path]:
+        """!
+        @brief The output files of a job that were fetched: those that its
+        command wrote and the output of Slurm, not the files that were
+        sent along.
+        @param name The name of the job.
+        @return The files by their name.
+        @throws ClusterError if there is no such job.
+        """
+        job = self.get(name)
+        if job is None:
+            raise ClusterError("There is no job %s" % name)
+        names = {item for listed in job.outputs.values() for item in listed}
+        names.update(job.collect.values())
+        names.add(cluster.OUTPUT_FILE)
+        directory = self._dir / job.name
+        return {item: directory / item for item in sorted(names)
+                if _FILE_NAME.fullmatch(item) and (directory / item).is_file()}
 
     def directory(self, name: str) -> Path:
         """!

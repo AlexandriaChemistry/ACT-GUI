@@ -88,6 +88,7 @@ class Settings:
         "geometry_ff": {"bfactor": (0.01, 1), "afactor": (0.01, 1), "factor": (0.01, 1)},
         "train": {"max_iter": (1, 100000), "max_generations": (1, 10000),
                   "temp": (1e-6, 1e6), "seed": (0, 2147483647)},
+        "b2": {"T1": (1, 10000), "T2": (1, 10000), "dT": (0, 10000), "maxdimer": (1, 10000000)},
     })
 
     def __post_init__(self) -> None:

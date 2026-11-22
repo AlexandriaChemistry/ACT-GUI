@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import evaluation, ffgen, training
+from . import dimerscan, evaluation, ffgen, geometry, training, virial
 from .jobs import InputFile
 from .settings import Settings
 from .uploads import UploadStore
@@ -41,6 +41,12 @@ SELECTION, OBSERVABLES = "selection", "observables"
 CHOSEN = "chosen"
 ## What is trained of a force field
 TRAINING = "training"
+## The settings of a scan of the distance between the compounds of a dimer
+SCAN = "scan"
+## What an OpenMM simulation of the package writes, by the name under which it is fetched
+OPENMM_RESULTS = {"energy": "energy.xvg", "temperature": "temperature.xvg", "final": "final.pdb",
+                  "trajectory": "trajectory.pdb", "output": "output.txt"}
+OPENMM_FILES = tuple(OPENMM_RESULTS)
 
 ## What the name of a parameter looks like, such as chi or bondlength
 _PARAMETER_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}$")
@@ -102,6 +108,14 @@ class Task:
     ## Whether the command runs on several processes, with an individual
     ## of the population of train_ff for each
     parallel: bool = False
+    ## A job that runs the command more than once, such as a scan, by the
+    ## name of the function that does it; None for one run of the command
+    runner: Optional[str] = None
+    ## Whether the command runs on several processes that share the work,
+    ## without a population
+    mpi: bool = False
+    ## Whether the task runs only as a job on the cluster
+    cluster_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -160,6 +174,25 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          outputs={"openmm": "openmm.xml", "c": "conf.pdb"},
          downloads=("openmm", "c", "g"),
          package=True),
+    Task(name="dimer_scan", command="minimize",
+         title="Interaction energy as a function of the distance in a dimer",
+         options=_CHARGE_OPTIONS,
+         progress=True,
+         downloads=("xvg",),
+         needs=(MOLECULE, FORCEFIELD, SCAN), runner="dimer_scan"),
+    Task(name="b2", command="b2",
+         title="Second virial coefficient of a dimer",
+         options=_CHARGE_OPTIONS + ("T1", "T2", "dT", "maxdimer"),
+         fixed={"json": True},
+         outputs={"b2": "B2T.xvg"},
+         downloads=("b2", "g"),
+         plots=("b2",),
+         digest=virial.digest, cluster=True, mpi=True),
+    Task(name="openmm_run", command="run.py",
+         title="Simulation of the molecule with OpenMM",
+         downloads=OPENMM_FILES,
+         plots=("energy", "temperature"),
+         needs=(), cluster=True, cluster_only=True),
     # --- the force field workspace ---
     Task(name="gen_ff", command="gen_ff",
          title="Generate a force field",
@@ -170,10 +203,12 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
     Task(name="geometry_ff", command="geometry_ff",
          title="Bonds, angles and dihedrals from a molprop file",
          options=("gen_bcc", "bfactor", "afactor", "factor"),
-         fixed={"json": True},
+         # The histograms, with for each bin where some of its values come from
+         fixed={"json": True, "samples": geometry.MAX_SAMPLES},
          outputs={"o": "forcefield.xml"},
          downloads=("o", "g"),
-         needs=(FORCEFIELD, MOLPROP, CHOSEN), forcefield="o", workspace="forcefield"),
+         needs=(FORCEFIELD, MOLPROP, CHOSEN), forcefield="o", workspace="forcefield",
+         digest=geometry.digest),
     Task(name="ff_describe", command="edit_ff",
          title="Read and check a force field",
          fixed={"json": True},
@@ -201,6 +236,15 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          fixed={"json": True, "validate": True, "molinfo": False},
          downloads=("g",),
          needs=(MOLPROP,), workspace="molprop", digest=evaluation.described),
+    Task(name="mp_clean", command="edit_mp",
+         title="Write a molprop file without calculations that are there twice",
+         # As it is validated: the calculations that are there twice with
+         # the same results once, as train_ff uses them, and the names of
+         # the file
+         fixed={"validate": True, "molinfo": False},
+         outputs={"o": "cleaned.xml"},
+         downloads=("o", "g"),
+         needs=(MOLPROP,), workspace="molprop"),
     Task(name="evaluate", command="train_ff",
          title="Compare a force field with the data of a molprop file",
          fixed={"json": True, "optimize": False},
@@ -414,6 +458,12 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
             except (evaluation.EvaluationError, training.TrainingError) as exc:
                 raise RequestError(str(exc)) from exc
 
+    if SCAN in task.needs:
+        try:
+            options["scan"] = dimerscan.settings(request.get("scan"))
+        except dimerscan.DimerScanError as exc:
+            raise RequestError(str(exc)) from exc
+
     observables: Tuple[str, ...] = ()
     if OBSERVABLES in task.needs:
         try:
@@ -487,6 +537,14 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
                         chosen["optimizer"], individuals, pools(earlier) if pools else None))
             except training.TrainingError as exc:
                 raise RequestError(str(exc)) from exc
+    elif task.mpi:
+        # Processes that share the work, as many as asked for, or as the job on the cluster has
+        try:
+            number = training.processes(request.get("processes") if processes is None else processes,
+                                        training.DEFAULT_OPTIMIZER,
+                                        settings.max_processes if processes is None else processes)
+        except training.TrainingError as exc:
+            raise RequestError(str(exc)) from exc
     elif request.get("processes") not in (None, 1):
         raise RequestError("%s runs on one process" % task.title)
     options.update(chosen)

@@ -32,7 +32,8 @@
         <button class="btn" id="upload" type="button">Upload molecule file…</button>
         <input class="visually-hidden" type="file" id="molfile" accept=".sdf,.pdb,.xyz" tabindex="-1" aria-hidden="true">
         <div class="field"><label for="ffsel">Force field</label>
-          <select id="ffsel"><option value="default">Default</option><option value="workspace" hidden disabled>From the force field tab</option><option value="upload">Upload force field…</option></select></div>
+          <select id="ffsel"><option value="default">Default</option><option value="workspace" hidden disabled>From the force field tab</option><option value="upload" hidden disabled></option></select></div>
+        <button class="btn" id="ffopen" type="button" title="Use a force field file from this computer">Open file…</button>
         <input class="visually-hidden" type="file" id="fffile" accept=".xml" tabindex="-1" aria-hidden="true">
         <button class="btn primary" id="load" type="button">Load molecule</button>
       </div>
@@ -63,6 +64,8 @@
           <button role="tab" data-tab="modes" aria-selected="false">Normal modes</button>
           <button role="tab" data-tab="simulate" aria-selected="false">Simulate</button>
           <button role="tab" data-tab="openmm" aria-selected="false">OpenMM</button>
+          <button role="tab" data-tab="scan" aria-selected="false">Dimer scan</button>
+          <button role="tab" data-tab="b2" aria-selected="false">Second virial</button>
           <span class="ink"></span>
         </nav>
 
@@ -88,6 +91,7 @@
             <span class="spacer"></span><span class="pill" id="nma-pill" hidden></span></div>
           <div><div class="row"><h3>Infrared spectrum</h3><span class="spacer"></span>
               <button class="btn small toggle" id="ir-flip" type="button" aria-pressed="false" title="Draw the wavenumbers from high to low, as in measured spectra">Reverse axis</button>
+              <button class="btn small" id="ir-xvg" type="button" hidden title="The spectrum as alexandria nma -ir writes it, for xmgrace or plotXVG">Save as xvg</button>
               <button class="btn small" id="ir-pdf" type="button" hidden>Save as PDF</button></div>
             <div class="plot mt8" id="irplot"></div>
             <p class="muted fine">Click a line under the spectrum or a row in the table to see the vibration.</p></div>
@@ -129,6 +133,49 @@
             <button class="btn primary end" id="run-omm" type="button" disabled>Create package</button>
             <span class="spacer"></span><span class="pill" id="omm-pill" hidden></span>
           </div>
+          <div id="omm-cluster"></div>
+          <div id="omm-result" hidden>
+            <h3 id="omm-resulttitle">Simulation on the cluster</h3>
+            <div class="plot mt8" id="ommplot"></div>
+            <p class="muted fine" id="omm-note"></p>
+          </div>
+        </div>
+        <div class="body panel" id="tab-b2" hidden>
+          <p>The second virial coefficient B<sub>2</sub>(T) of a dimer, as <code>alexandria b2</code> computes it: from the interaction energy of many orientations of the two compounds at many distances, with corrections for the force and the torque. A good result needs many orientations, which the cluster can do.</p>
+          <p class="muted fine" id="b2-note"></p>
+          <div class="row top">
+            <div class="field"><label for="b2-t1">From (K)</label><input type="number" id="b2-t1" value="300" min="1" max="10000" step="10"></div>
+            <div class="field"><label for="b2-t2">To (K)</label><input type="number" id="b2-t2" value="400" min="1" max="10000" step="10"></div>
+            <div class="field"><label for="b2-dt">Step (K)</label><input type="number" id="b2-dt" value="25" min="0" max="10000" step="5"></div>
+            <div class="field"><label for="b2-maxdimer">Orientations</label><input type="number" id="b2-maxdimer" value="1024" min="1" max="10000000" step="1"></div>
+            <div class="field" id="b2-procfield"><label for="b2-procs">Processes</label><input type="number" id="b2-procs" value="1" min="1" step="1"></div>
+          </div>
+          <div id="b2-cluster"></div>
+          <div class="row"><button class="btn primary" id="run-b2" type="button" disabled>Compute</button>
+            <button class="btn" id="stop-b2" type="button" hidden>Stop</button>
+            <span class="pill" id="b2-pill" hidden></span><span class="spacer"></span>
+            <button class="btn small" id="b2-xvg" type="button" hidden>Save as xvg</button></div>
+          <div class="plot mt8" id="b2plot"></div>
+          <p class="muted fine" id="b2-plotnote"></p>
+          <div class="xscroll"><table class="data" id="b2-table"></table></div>
+        </div>
+        <div class="body panel" id="tab-scan" hidden>
+          <p>The interaction energy of a dimer as a function of the distance between its compounds, as the script <code>dimer_scan</code> computes it. For each distance the second compound is moved along the line between the two atoms, and the dimer is minimized with these two atoms frozen. A click on a point shows that structure.</p>
+          <p class="muted fine" id="scan-note"></p>
+          <div class="row top">
+            <div class="field"><label for="scan-atom1">Atom of the first compound</label><select id="scan-atom1"></select></div>
+            <div class="field"><label for="scan-atom2">Atom of the second compound</label><select id="scan-atom2"></select></div>
+            <div class="field"><label for="scan-rmin">From (nm)</label><input type="number" id="scan-rmin" value="0.24" min="0.05" max="3" step="0.01"></div>
+            <div class="field"><label for="scan-rmax">To (nm)</label><input type="number" id="scan-rmax" value="0.6" min="0.05" max="3" step="0.01"></div>
+            <div class="field"><label for="scan-step">Step (nm)</label><input type="number" id="scan-step" value="0.01" min="0.001" step="0.005"></div>
+            <div class="field"><span class="lab">Bonds</span><label class="check"><input type="checkbox" id="scan-constrain"> Constrain their lengths</label></div>
+          </div>
+          <div class="row"><button class="btn primary" id="run-scan" type="button" disabled>Scan</button>
+            <button class="btn" id="stop-scan" type="button" hidden>Stop</button>
+            <span class="pill" id="scan-pill" hidden></span><span class="spacer"></span>
+            <button class="btn small" id="scan-xvg" type="button" hidden>Save as xvg</button></div>
+          <div class="plot mt8" id="scanplot"></div>
+          <p class="muted fine" id="scan-plotnote"></p>
         </div>
       </div>
     </div>
@@ -273,6 +320,21 @@
         <div class="body"><p class="empty" id="geo-empty">Nothing yet. Choose a molprop file with the compounds, with a force field in this workspace.</p>
           <div class="stats" id="geo-stats" hidden><div class="stat"><span class="lab">Compounds used</span><span class="v" id="geo-ncomp">–</span></div></div>
           <div class="xscroll"><table class="data" id="geo-table"></table></div></div></div>
+      <div class="card span-all" id="geo-hist" hidden>
+        <div class="head"><h2>Histograms</h2><span class="spacer"></span>
+          <div class="field"><select id="geo-htype" aria-label="Kind of geometry"></select></div>
+          <div class="field"><select id="geo-hid" aria-label="Bond, angle or dihedral type"></select></div>
+          <span class="row tight"><button class="btn small" id="geo-zoomin" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+            <button class="btn small" id="geo-zoomout" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+            <button class="btn small" id="geo-zoomall" type="button" title="Show all of it">All</button></span></div>
+        <div class="cols plot-left">
+          <div class="body"><div class="plot" id="geoplot"></div>
+            <p class="muted fine" id="geo-histnote"></p></div>
+          <div class="body"><h3 id="geo-bintitle">Where the values come from</h3>
+            <div class="scroll flat maxh380"><table class="data" id="geo-samples"></table></div>
+            <p class="muted fine" id="geo-binnote">Click a bar to see from which compounds, calculations and atoms its values come.</p></div>
+        </div>
+      </div>
     </div>
 
     <div class="panel cols side-right" id="fftab-edit" hidden>
