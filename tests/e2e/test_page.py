@@ -163,12 +163,18 @@ class PageTest(unittest.TestCase):
 
     def shot(self, name):
         """!
-        @brief Save a picture of the page, if pictures are asked for.
+        @brief Save a picture of the page, if pictures are asked for. The
+        message that comes and goes at the bottom is not in the picture,
+        which can then go into the manual as it is.
         @param name The name of the picture.
         """
         if SHOTS:
             os.makedirs(SHOTS, exist_ok=True)
+            self.browser.execute_script(
+                "const t = document.getElementById('toast');"
+                "t.classList.remove('on'); t.style.transition = 'none';")
             self.browser.save_screenshot(os.path.join(SHOTS, name + ".png"))
+            self.browser.execute_script("document.getElementById('toast').style.transition = '';")
 
     def errors(self):
         """!
