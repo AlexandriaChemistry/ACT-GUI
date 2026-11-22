@@ -385,6 +385,23 @@ that asks for the state, and the list shows the generation and the lowest
 the cluster is not asked again until you press the button: a cluster may
 block an account that keeps trying.
 
+A job that failed says why, under its row: the interface reads the
+output of Slurm and the log files that came back, and picks the lines that
+tell. These are the message with which `alexandria` stopped (told once,
+with the number of processes that said it), the compounds that got no
+topology and what the force field lacks for them, `mpirun` that found
+fewer cores than processes, a program, module or conda environment that
+the job did not find, the time limit, memory, the GPU, or a crash. With
+the reason comes what to change. Each line opens the file it is from, at
+that line, and the output, the log and the script can be read on the page.
+Send again makes a new job of one that is done, with other processes, time
+or GPU, and the settings of the cluster as they are now. It is called
+`name-r2`, `name-r3` and so on. Its files are copied from the directory of
+the old job on the cluster, so nothing is sent from your machine, also
+after the interface was started again. The number of individuals of a
+training and the time at which it stops follow the new job. A job with
+other input is sent from its tab.
+
 What is known about the jobs, and their results, are kept in the
 directory `act-gui/cluster-jobs` of your data directory (`~/.local/share`,
 or `XDG_DATA_HOME`), so that the jobs are there when the interface starts

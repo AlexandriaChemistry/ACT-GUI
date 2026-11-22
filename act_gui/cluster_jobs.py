@@ -33,6 +33,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .cluster import (STATUS_FILE, ClusterError, ClusterSettings, remote_command,
                       ssh_command)
+from .diagnosis import submit_hint
 
 ## The name of the batch script in the directory of a job
 SCRIPT_NAME = "job.sh"
@@ -148,9 +149,12 @@ def _text(done: Any) -> str:
 
 def submit(settings: ClusterSettings, name: str, script: str,
            files: Mapping[str, Union[Path, bytes]], *, program: str = "ssh",
-           run: Optional[Callable[..., Any]] = None) -> str:
+           run: Optional[Callable[..., Any]] = None,
+           copy: Optional[Tuple[str, Sequence[str]]] = None) -> str:
     """!
     @brief Send a job with its files and put it in the queue, in one login.
+    A job that is sent again gets files of the job it comes from, which
+    are copied on the cluster instead of sent.
     @param settings The settings of the cluster.
     @param name     The name of the job. A directory with this name is made
     in the working directory; it must not be there yet.
@@ -159,13 +163,28 @@ def submit(settings: ClusterSettings, name: str, script: str,
     job the file on this machine, or its content.
     @param program  The ssh program.
     @param run      The function that runs a command, subprocess.run() if None.
+    @param copy     The name of an earlier job and the names of its files to
+    copy into the directory of this one, before the files that are sent;
+    None to copy nothing.
     @return The number that Slurm gave the job.
-    @throws ClusterError if the job could not be sent or was not accepted.
+    @throws ClusterError if the job could not be sent or was not accepted,
+    or if a file to copy is not there.
     """
     directory = _job_dir(settings, name)
     names = _check_files(list(files))
     if SCRIPT_NAME in names:
         raise ClusterError("A file of a job cannot be called %s" % SCRIPT_NAME)
+    steps = []
+    earlier = _job_dir(settings, copy[0]) if copy is not None else ""
+    copied = _check_files(copy[1]) if copy is not None else []
+    if SCRIPT_NAME in copied:
+        raise ClusterError("A file of a job cannot be called %s" % SCRIPT_NAME)
+    if copied:
+        # All files are there before anything is made: a job that cannot
+        # be sent leaves nothing behind
+        steps.append("for f in %s; do test -f %s/\"$f\" || { echo \"ACT-MISSING $f\" >&2; "
+                     "exit 1; }; done" % (" ".join(remote_command([n]) for n in copied),
+                                          remote_command([earlier])))
     # The files and the script in one archive, which the server unpacks
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
@@ -179,16 +198,25 @@ def submit(settings: ClusterSettings, name: str, script: str,
             info.size = len(content)
             info.mode = 0o755 if filename == SCRIPT_NAME else 0o644
             archive.addfile(info, io.BytesIO(content))
-    remote = " && ".join([
-        # Without -p: a directory that is there already belongs to another job
-        remote_command(["mkdir", "--", directory]),
-        remote_command(["cd", "--", directory]),
-        "tar xf -",
-        remote_command(["sbatch", "--parsable", SCRIPT_NAME])])
-    done = _run(settings, remote, program=program, run=run, timeout=TRANSFER_TIMEOUT,
-                data=buffer.getvalue())
+    # Without -p: a directory that is there already belongs to another job
+    steps.append(remote_command(["mkdir", "--", directory]))
+    if copied:
+        steps.append(remote_command(["cp", "-p", "--"] + ["%s/%s" % (earlier, n) for n in copied]
+                                    + [directory]))
+    steps += [remote_command(["cd", "--", directory]), "tar xf -",
+              remote_command(["sbatch", "--parsable", SCRIPT_NAME])]
+    done = _run(settings, " && ".join(steps), program=program, run=run,
+                timeout=TRANSFER_TIMEOUT, data=buffer.getvalue())
     if done.returncode != 0:
-        raise ClusterError("The job could not be sent to %s: %s" % (settings.server, _text(done)))
+        said = _text(done)
+        missing = re.search(r"ACT-MISSING (\S+)", said)
+        if missing and copy is not None:
+            raise ClusterError("The file %s of the job %s is not on %s any more. Send the "
+                               "calculation as a new job from its tab."
+                               % (missing.group(1), copy[0], settings.server))
+        hint = submit_hint(said)
+        raise ClusterError("The job could not be sent to %s: %s%s"
+                           % (settings.server, said, " " + hint if hint else ""))
     # With --parsable sbatch prints the number, and the cluster after a semicolon
     words = done.stdout.decode("utf-8", errors="replace").split()
     slurm_id = words[-1].split(";")[0] if words else ""

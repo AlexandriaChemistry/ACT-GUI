@@ -18,6 +18,11 @@
  * asks the server of the interface for their state; that server decides
  * when the cluster itself is asked, which is seldom.
  *
+ * A job that failed tells why, with the lines of its output that tell it,
+ * and what to change. Below the table one job at a time is shown: its
+ * output, log and script as text, or the job sent again with other
+ * processes, time or GPU, of which the files are copied on the cluster.
+ *
  * All text that comes from the server is put on the page as text.
  */
 import { $, alertBox, call, el, num, pill, saveFile, session, toast } from "./common.js";
@@ -78,6 +83,8 @@ const STATES = {
 };
 /** The jobs as the server last told them, and the timer of the next question. */
 const jobs = { listing: null, timer: null, busy: false, files: new Map() };  // files: the output files that are shown, by job
+/** The job below the table: its name, what is shown (view or again) and the job to send again. */
+const panel = { name: "", mode: "", pending: null };
 
 /**
  * The size of a file for people.
@@ -85,6 +92,9 @@ const jobs = { listing: null, timer: null, busy: false, files: new Map() };  // 
  * @returns {string} The size in bytes, kB or MB.
  */
 const size = bytes => (bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} kB` : `${(bytes / 1048576).toFixed(1)} MB`);
+
+/** The files that are shown as text on the page. */
+const TEXT_FILE = /\.(out|log|txt|err|sh|dat|json|xvg|csv)$/;
 
 /**
  * The output files of a job with a button to save each.
@@ -96,6 +106,7 @@ function fileList(name, list) {
   if (!list.length) return el("p", { class: "muted fine" }, "The job has no output files here.");
   return el("ul", { class: "sites" }, ...list.map(file => el("li", {},
     el("span", {}, `${file.name} · ${size(file.size)}`),
+    TEXT_FILE.test(file.name) ? el("button", { class: "btn small", type: "button", data: { act: "view", file: file.name, name } }, "View") : "",
     el("button", { class: "btn small", type: "button", data: { save: file.name, name } }, "Save"))));
 }
 
@@ -149,6 +160,32 @@ function progressOf(job) {
 const action = (label, act, name) => el("button", { class: "btn small", type: "button", data: { act, name } }, label);
 
 /**
+ * Why a job failed, what to change, and the lines of its output that tell it.
+ * @param {object} job The job, with its diagnosis.
+ * @returns {Element} What is shown under the row of the job.
+ */
+function diagnosisOf(job) {
+  const d = job.diagnosis;
+  const box = el("div", { class: "diag" }, el("p", { class: "diag-reason" }, d.reason), el("p", {}, d.hint));
+  for (const detail of d.details) box.append(el("p", { class: "muted" }, detail));
+  if (d.lines.length) {
+    box.append(el("ul", { class: "diag-lines" }, ...d.lines.map(line => el("li", {},
+      // Where the line is: the file opens there
+      el("button", { type: "button", title: "Show the file at this line", data: { act: "view", name: job.name, file: line.file, line: line.line ?? "" } },
+         line.line ? `${line.file}:${line.line}` : line.file),
+      el("code", {}, line.text), line.count > 1 ? el("span", { class: "times" }, `×${line.count}`) : ""))));
+  }
+  const buttons = el("div", { class: "row" });
+  if (job.again) buttons.append(action("Send again…", "again", job.name));
+  if (d.fix === "settings") buttons.append(el("button", { class: "btn small", type: "button", data: { act: "settings", name: job.name } }, "Change the settings…"));
+  for (const file of d.files) buttons.append(el("button", { class: "btn small", type: "button", data: { act: "view", name: job.name, file } }, `View ${file}`));
+  buttons.append(el("button", { class: "btn small", type: "button", data: { act: "view", name: job.name, file: "job.sh" } }, "View the script"));
+  box.append(buttons);
+  if (!job.again) box.append(el("p", { class: "muted fine" }, "The interface that sent this job did not note its files, so it cannot be sent again from here: send the calculation as a new job from its tab."));
+  return box;
+}
+
+/**
  * Show the jobs, and ask the cluster again when it is time.
  * @param {object} listing What the server says: jobs, poll_seconds, wait, paused, unread, directory and, after a question, problem.
  */
@@ -169,6 +206,8 @@ function showJobs(listing) {
       if (job.state === "finished" && job.fetched) buttons.append(action("Show results", "open", job.name));
       if (job.fetched) buttons.append(action(jobs.files.has(job.name) ? "Hide files" : "Files", "files", job.name));
       if (done && job.state !== "cancelled" && !job.fetched) buttons.append(action("Fetch results", "fetch", job.name));
+      // A job that failed has the button with why it failed
+      if (job.again && !job.diagnosis) buttons.append(action("Send again…", "again", job.name));
       if (done) buttons.append(action("Forget", "forget", job.name));
       body.append(el("tr", { data: { job: job.name } }, el("td", { class: "mono" }, job.name), el("td", {}, job.title),
         el("td", {}, el("span", { class: "pill" + (kind ? " " + kind : "") }, label),
@@ -176,7 +215,8 @@ function showJobs(listing) {
         el("td", { class: "mono" }, job.slurm + (job.slurm_state && !done ? ` ${job.slurm_state.toLowerCase()}` : "")),
         el("td", {}, when(job.created)), el("td", {}, asked(job)), el("td", { class: "mono" }, `${job.server}:${job.directory}`),
         el("td", {}, buttons)));
-      if (job.error) body.append(el("tr", { class: "more" }, el("td", { colSpan: 8 }, el("pre", { class: "code" }, job.error))));
+      if (job.diagnosis) body.append(el("tr", { class: "more" }, el("td", { colSpan: 8 }, diagnosisOf(job))));
+      else if (job.error) body.append(el("tr", { class: "more" }, el("td", { colSpan: 8 }, el("pre", { class: "code" }, job.error))));
       if (jobs.files.has(job.name)) body.append(el("tr", { class: "more" }, el("td", { colSpan: 8 }, fileList(job.name, jobs.files.get(job.name)))));
     }
     table.append(body);
@@ -194,6 +234,8 @@ function showJobs(listing) {
   $("#cj-kept").textContent = (listing.jobs.length ? `What is known about the jobs, and their results, are kept in ${listing.directory}. ` : "")
     + (listing.unread.length ? `Not read, because the file job.json there is not as the interface wrote it: ${listing.unread.join(", ")}.` : "");
   $("#cj-foot").hidden = !problem && !$("#cj-kept").textContent;
+  // The job below the table may have been forgotten
+  if (panel.name && !listing.jobs.some(job => job.name === panel.name)) closePanel();
   // The next question, when there is something to ask and no failed login in the way
   clearTimeout(jobs.timer);
   if (active.length && !listing.paused) jobs.timer = setTimeout(() => ask(false), (Math.max(listing.wait, 5) + 1) * 1000);
@@ -240,6 +282,9 @@ async function jobAction(button) {
     setTimeout(() => { if (button.isConnected) { button.dataset.sure = ""; button.textContent = "Forget"; } }, 5000);
     return;
   }
+  if (act === "view") { viewFile(name, button.dataset.file, Number(button.dataset.line) || 0); return; }
+  if (act === "again") { showAgain(name); return; }
+  if (act === "settings") { $('#nav button[data-view="settings"]').click(); return; }
   button.disabled = true;
   alertBox("");
   try {
@@ -267,6 +312,160 @@ async function jobAction(button) {
     alertBox({ stop: "The job could not be stopped. ", forget: "The job could not be forgotten. ",
                fetch: "The results could not be fetched. ", open: "The results could not be shown. ",
                files: "The files of the job could not be listed. " }[act] + e.message);
+  }
+}
+
+/* ---------- one job below the table ---------- */
+
+/**
+ * Show the panel of a job.
+ * @param {string} name The name of the job.
+ * @param {string} mode view, for its files, or again, to send it again.
+ * @param {string} title The title of the panel.
+ */
+function openPanel(name, mode, title) {
+  panel.name = name;
+  panel.mode = mode;
+  panel.pending = null;
+  $("#cj-paneltitle").textContent = title;
+  $("#cj-viewer").hidden = mode !== "view";
+  $("#cj-again").hidden = mode !== "again";
+  $("#cj-panel").hidden = false;
+}
+
+/** Close the panel of a job. */
+function closePanel() {
+  panel.name = panel.mode = "";
+  panel.pending = null;
+  $("#cj-panel").hidden = true;
+  $("#cj-view").textContent = "";
+}
+
+/**
+ * Show a file of a job as text, with the lines that tell why it failed
+ * marked, and scroll to one of them.
+ * @param {string} name The name of the job.
+ * @param {string} file The name of the file.
+ * @param {number} line The number of the line to show, 0 for the first that is marked.
+ */
+async function viewFile(name, file, line = 0) {
+  const job = (jobs.listing ? jobs.listing.jobs : []).find(j => j.name === name);
+  let list = jobs.files.get(name);
+  try {
+    if (!list) list = (await (await call(`/cluster/jobs/${encodeURIComponent(name)}/files`)).json()).files;
+    const told = await (await call(`/cluster/jobs/${encodeURIComponent(name)}/text/${encodeURIComponent(file)}`)).json();
+    openPanel(name, "view", `${name} · ${file}`);
+    // The other files of the job that can be read here
+    const files = $("#cj-viewfiles");
+    files.textContent = "";
+    for (const other of list.filter(f => TEXT_FILE.test(f.name))) {
+      files.append(el("button", { type: "button", "aria-pressed": String(other.name === file), data: { v: other.name } }, other.name));
+    }
+    const marked = new Set((job && job.diagnosis ? job.diagnosis.lines : []).filter(l => l.file === file && l.line).map(l => l.line));
+    const view = $("#cj-view");
+    view.textContent = "";
+    const lines = told.text.split("\n");
+    if (lines.length && lines[lines.length - 1] === "") lines.pop();
+    let plain = [];
+    const flush = () => { if (plain.length) { view.append(plain.join("\n") + "\n"); plain = []; } };
+    lines.forEach((text, i) => {
+      const number = told.first + i;
+      if (!marked.has(number) && number !== line) { plain.push(text); return; }
+      flush();
+      view.append(el("mark", { class: number === line ? "here" : "", data: { line: number } }, text), "\n");
+    });
+    flush();
+    const last = told.first + lines.length - 1;
+    $("#cj-viewnote").textContent = `${size(told.size)} · ` + (told.cut ? `the last part, lines ${told.first}–${last}` : `${lines.length} lines`)
+      + (marked.size ? " · the lines that tell why the job failed are marked" : "");
+    const target = view.querySelector(`mark[data-line="${line}"]`) || view.querySelector("mark");
+    if (target) view.scrollTop = target.offsetTop - view.offsetTop - 60;
+    else view.scrollTop = file === "job.sh" ? 0 : view.scrollHeight;
+    $("#cj-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (e) {
+    alertBox(`The file ${file} could not be shown. ` + e.message);
+  }
+}
+
+/**
+ * Show the form to send a job again, filled in with what the job asked
+ * for, or with what its diagnosis proposes.
+ * @param {string} name The name of the job.
+ */
+function showAgain(name) {
+  const job = jobs.listing.jobs.find(j => j.name === name);
+  if (!job) return;
+  const suggest = (job.diagnosis && job.diagnosis.suggest) || {};
+  openPanel(name, "again", `Send ${name} again`);
+  $("#cj-again-name").value = "";
+  $("#cj-again-name").placeholder = `${name}-r2 or the next free one`;
+  $("#cj-again-tasks").value = String(job.tasks);
+  $("#cj-again-tasksfield").hidden = job.task === "openmm_run";
+  $("#cj-again-hours").value = String(Math.round(((suggest.minutes || job.minutes) / 60) * 100) / 100);
+  $("#cj-again-gpu").checked = suggest.gpu ?? job.gpu;
+  $("#cj-again-job").hidden = true;
+  const changed = [suggest.minutes ? "more time" : "", suggest.gpu === false ? "no GPU" : ""].filter(Boolean);
+  $("#cj-againnote").textContent = `The new job gets the files of ${name}, which are copied on the cluster, and the settings of the cluster as they are now. `
+    + (changed.length ? `It asks for ${changed.join(" and ")}, as proposed above; change what you like.`
+      : job.diagnosis && job.diagnosis.fix === "processes" ? "Give it fewer processes, as proposed above." : "Change what it asks for.");
+  $("#cj-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  (job.diagnosis && job.diagnosis.fix === "processes" ? $("#cj-again-tasks") : $("#cj-again-hours")).focus();
+}
+
+/**
+ * What the form says the new job asks for.
+ * @returns {object} The choices, as the server takes them.
+ */
+function againChoices() {
+  const chosen = { minutes: Math.round(Number($("#cj-again-hours").value) * 60), gpu: $("#cj-again-gpu").checked };
+  if (!$("#cj-again-tasksfield").hidden) chosen.tasks = Number($("#cj-again-tasks").value);
+  if ($("#cj-again-name").value.trim()) chosen.name = $("#cj-again-name").value.trim();
+  return chosen;
+}
+
+/** Show the job that would be sent again: nobody logs in for it. */
+async function showAgainJob() {
+  const button = $("#cj-again-show"), name = panel.name;
+  button.disabled = true;
+  alertBox("");
+  try {
+    const cluster = againChoices();
+    const shown = await (await call(`/cluster/jobs/${encodeURIComponent(name)}/again`, { method: "POST", json: { cluster, send: false } })).json();
+    panel.pending = { cluster: { ...cluster, name: shown.name }, send: true };
+    $("#cj-again-name").value = shown.name;
+    $("#cj-again-where").textContent = `${shown.name} · ${shown.server}:${shown.directory}`;
+    const table = $("#cj-again-files");
+    table.textContent = "";
+    table.append(el("thead", {}, el("tr", {}, el("th", {}, "Name on the cluster"), el("th", {}, "From"))),
+      el("tbody", {}, ...shown.files.map(f => el("tr", {}, el("td", { class: "mono" }, f.name),
+        el("td", {}, f.from ? `copied from ${f.from}` : `sent, ${size(f.size)}`)))));
+    $("#cj-again-script").textContent = shown.script;
+    $("#cj-again-taken").hidden = !shown.taken;
+    $("#cj-again-send").disabled = shown.taken;
+    pill("cj-againpill", "");
+    $("#cj-again-job").hidden = false;
+    $("#cj-again-job").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (e) {
+    alertBox("The job cannot be sent again. " + e.message);
+  } finally { button.disabled = false; }
+}
+
+/** Send the job that is shown again: one login. */
+async function sendAgain() {
+  if (!panel.pending) return;
+  const button = $("#cj-again-send"), name = panel.name;
+  button.disabled = true;
+  alertBox("");
+  pill("cj-againpill", "Logging in and sending…");
+  try {
+    const sent = await (await call(`/cluster/jobs/${encodeURIComponent(name)}/again`, { method: "POST", json: panel.pending })).json();
+    closePanel();
+    showJobs(sent);
+    toast(`Sent ${sent.name} to the cluster, job ${sent.slurm} of Slurm`);
+  } catch (e) {
+    pill("cj-againpill", "Not sent", "bad");
+    alertBox("The job was not sent. " + e.message);
+    button.disabled = false;
   }
 }
 
@@ -378,6 +577,17 @@ export async function startCluster(told) {
     if (field.tagName === "INPUT") field.addEventListener("keydown", e => { if (e.key === "Enter") save(); });
   }
   $("#cj-ask").onclick = () => ask(true);
+  $("#cj-panelclose").onclick = closePanel;
+  $("#cj-viewfiles").addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (b && panel.name) viewFile(panel.name, b.dataset.v);
+  });
+  $("#cj-again-show").onclick = showAgainJob;
+  $("#cj-again-send").onclick = sendAgain;
+  // What is shown is what is sent: a change has to be shown again
+  for (const id of ["cj-again-name", "cj-again-tasks", "cj-again-hours", "cj-again-gpu"]) {
+    $("#" + id).addEventListener("input", () => { $("#cj-again-job").hidden = true; panel.pending = null; });
+  }
   $("#cj-table").addEventListener("click", e => {
     const save = e.target.closest("button[data-save]");
     if (save) {

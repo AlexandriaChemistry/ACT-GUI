@@ -241,6 +241,96 @@ class ClusterJobsApiTest(unittest.TestCase):
                                                  headers=self.headers).json()["jobs"][0]["job"])
         self.assertEqual(3, self.logins())
 
+    def test_failed_job_is_told_and_sent_again(self):
+        """!
+        @brief A job that failed tells why, its output can be read on the
+        page, and it is sent again with other processes: its files are
+        copied on the cluster, nothing is sent from here.
+        """
+        (self.server.dir / "fail").write_text(
+            "Fatal: Training set is empty on one or more of the nodes\n" * 3)
+        self.assertEqual(200, self.post(send=True, name="compare-1", tasks=4).status_code)
+        checked = self.client.post("/api/cluster/jobs/check", headers=self.headers).json()
+        job = checked["jobs"][0]
+        self.assertEqual(("failed", True, True), (job["state"], job["fetched"], job["again"]))
+        found = job["diagnosis"]
+        self.assertEqual(("processes", 3), (found["fix"], found["lines"][0]["count"]))
+        self.assertIn("Each of the 4 processes", found["hint"])
+        self.assertNotIn(str(self.dir), str(found))
+        logins = self.logins()
+
+        # The output and the script, as text
+        def text(filename, name="compare-1"):
+            return self.client.get("/api/cluster/jobs/%s/text/%s" % (name, filename),
+                                   headers=self.headers)
+        told = text("slurm.out").json()
+        self.assertEqual((1, False), (told["first"], told["cut"]))
+        self.assertIn("Fatal: Training set is empty", told["text"])
+        self.assertIn("#SBATCH -n 4", text("job.sh").json()["text"])
+        self.assertIn("job.sh", [f["name"] for f in self.client.get(
+            "/api/cluster/jobs/compare-1/files", headers=self.headers).json()["files"]])
+        for wrong in (text("mp.xml"), text("nothing.out"), text("slurm.out", "nojob")):
+            self.assertEqual(404, wrong.status_code)
+
+        def again(previous="compare-1", send=False, **chosen):
+            return self.client.post("/api/cluster/jobs/%s/again" % previous,
+                                    headers=self.headers, json={"cluster": chosen, "send": send})
+        shown = again(tasks=1, minutes=30)
+        self.assertEqual(200, shown.status_code, shown.text)
+        shown = shown.json()
+        self.assertEqual(("compare-1-r2", "compare-1", False, False),
+                         tuple(shown[key] for key in ("name", "previous", "sent", "taken")))
+        self.assertEqual([{"name": name, "size": None, "from": "compare-1"} for name in
+                          ("ff.xml", "mp.xml", "selection.dat")], shown["files"])
+        self.assertIn("#SBATCH -n 1\n", shown["script"])
+        self.assertIn("#SBATCH --time=0-00:30:00\n", shown["script"])
+        self.assertIn("\nalexandria train_ff -ff ff.xml -mp mp.xml", shown["script"])
+        self.assertNotIn("srun", shown["script"])
+        self.assertEqual(logins, self.logins())
+
+        (self.server.dir / "fail").unlink()
+        sent = again(send=True, tasks=1, minutes=30)
+        self.assertEqual(200, sent.status_code, sent.text)
+        self.assertEqual(("compare-1-r2", "4242"), (sent.json()["name"], sent.json()["slurm"]))
+        self.assertEqual(logins + 1, self.logins())
+        self.assertEqual(MP, (self.remote / "compare-1-r2" / "mp.xml").read_bytes())
+        new = [j for j in sent.json()["jobs"] if j["name"] == "compare-1-r2"][0]
+        self.assertEqual(("compare-1", 1, 30, "waiting"),
+                         (new["previous"], new["tasks"], new["minutes"], new["state"]))
+        # Asked at once, as after the time between two questions
+        self.apps[-1].state.cluster_queue.check(0)
+        listed = self.client.get("/api/cluster/jobs", headers=self.headers).json()["jobs"]
+        new = [j for j in listed if j["name"] == "compare-1-r2"][0]
+        self.assertEqual(("finished", None), (new["state"], new["diagnosis"]))
+        opened = self.client.post("/api/cluster/jobs/compare-1-r2/open", headers=self.headers)
+        self.assertEqual(200, opened.status_code, opened.text)
+        result = self.client.get("/api/jobs/" + opened.json()["job"], headers=self.headers).json()
+        # The selection that was made here for the first job is there for its results
+        self.assertIn("sel", result["files"])
+        # The next name, and a job sent again from one that was sent again
+        self.assertEqual("compare-1-r3", again().json()["name"])
+        self.assertEqual("compare-1-r3", again("compare-1-r2").json()["name"])
+        logins = self.logins()
+
+        # What cannot be sent again
+        self.assertEqual(409, again(send=True, name="compare-1-r2").status_code)
+        self.assertEqual(404, again("nojob").status_code)
+        for chosen in ({"tasks": 0}, {"minutes": "long"}, {"gpu": "yes"}, {"name": "a b"},
+                       {"partition": "x"}):
+            self.assertEqual(400, again(**chosen).status_code, chosen)
+        (self.remote / "compare-1" / "mp.xml").unlink()
+        gone = again(send=True)
+        self.assertEqual(502, gone.status_code)
+        self.assertIn("The file mp.xml of the job compare-1 is not on good any more",
+                      gone.json()["detail"])
+        self.assertFalse((self.remote / "compare-1-r3").exists())
+        self.assertFalse((self.dir / "kept" / "compare-1-r3").exists())
+        self.client.put("/api/cluster", headers=self.headers, json=dict(CLUSTER, workdir="other"))
+        moved = again()
+        self.assertEqual(409, moved.status_code)
+        self.assertIn("another cluster", moved.json()["detail"])
+        self.assertEqual(logins + 1, self.logins())
+
     def test_training_stops_in_the_time_of_the_job(self):
         """!
         @brief A training on the cluster is told to stop before the time
@@ -265,10 +355,36 @@ class ClusterJobsApiTest(unittest.TestCase):
             return answer.json()["script"]
         # Two hours less a tenth, a day less half an hour, ten minutes less two
         self.assertIn(" -maxh 1.8 ", script(body, name="t1", tasks=1, minutes=120))
+        # Sent again: the time to stop in and the individuals follow the job
+        body2 = dict(body, options={"max_iter": 20, "optimizer": "HYBRID"})
+        sent = self.client.post("/api/cluster/jobs", headers=self.headers,
+                                json=dict(body2, cluster={"name": "t2", "tasks": 4,
+                                                          "minutes": 120}, send=True))
+        self.assertEqual(200, sent.status_code, sent.text)
+        self.apps[-1].state.cluster_queue.check(0)
+        logins = self.logins()
+        shown = self.client.post("/api/cluster/jobs/t2/again", headers=self.headers,
+                                 json={"cluster": {"tasks": 2, "minutes": 1440}})
+        self.assertEqual(200, shown.status_code, shown.text)
+        self.assertIn(" -maxh 23.5 ", shown.json()["script"])
+        self.assertIn(" -pop_size 2 ", shown.json()["script"])
+        refused = self.client.post("/api/cluster/jobs/t2/again", headers=self.headers,
+                                   json={"cluster": {"tasks": 3}})
+        self.assertEqual(400, refused.status_code)
+        self.assertIn("even number of individuals", refused.json()["detail"])
+        self.assertEqual(logins, self.logins())
+        # Not before the job is done
+        (self.server.dir / "queue").write_text("RUNNING\n")
+        self.client.post("/api/cluster/jobs", headers=self.headers,
+                         json=dict(body2, cluster={"name": "t3", "tasks": 2}, send=True))
+        self.assertEqual(409, self.client.post("/api/cluster/jobs/t3/again",
+                                               headers=self.headers, json={}).status_code)
+        (self.server.dir / "queue").unlink()
+        logins = self.logins()
         self.assertIn(" -maxh 23.5 ", script(body, name="t1", tasks=1, minutes=1440))
         self.assertIn(" -maxh 0.13333 ", script(body, name="t1", tasks=1, minutes=10))
         self.assertNotIn("-maxh", script(self.body, name="c1", tasks=1, minutes=120))
-        self.assertEqual(0, self.logins())
+        self.assertEqual(logins, self.logins())
 
     def test_training_continued_on_the_cluster(self):
         """!
@@ -355,6 +471,18 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.assertIn("CUDA", told.text)
         energy = self.client.get("/api/jobs/%s/files/energy" % opened["job"], headers=self.headers)
         self.assertIn("-12", energy.text)
+        # Sent again without a GPU: the simulation is told to run on the processor
+        again = self.client.post("/api/cluster/jobs/md-1/again", headers=self.headers,
+                                 json={"cluster": {"gpu": False, "tasks": 8}, "send": True})
+        self.assertEqual(200, again.status_code, again.text)
+        remote = self.remote / "md-1-r2"
+        self.assertIn("CPU", (remote / "simulation.dat").read_text())
+        self.assertEqual((self.remote / "md-1" / "conf.pdb").read_bytes(),
+                         (remote / "conf.pdb").read_bytes())
+        script = (remote / "job.sh").read_text()
+        self.assertIn("\npython3 run.py\n", script)
+        self.assertNotIn("--gres", script)
+        self.assertIn("#SBATCH -n 1\n", script)
 
     def test_second_virial_on_the_cluster(self):
         """!

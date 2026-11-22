@@ -263,9 +263,13 @@ class QueueTest(QueueCase):
                                                               job.fetched))
         self.assertEqual(1, self.logins())
         self.assertTrue((self.remote / "job1" / "train_ff.json").is_file())
-        # The job is noted with the script that was sent
+        # The job is noted with the script that was sent, its command and
+        # the files it had on the cluster, to send it again
         self.assertEqual(["job.json", "job.sh", "selection.dat"],
                          sorted(p.name for p in (self.local / "job1").iterdir()))
+        self.assertEqual(["ff.xml", "mp.xml", "selection.dat"], job.sent)
+        self.assertEqual(["alexandria", "train_ff", "-ff", "ff.xml"], job.words[:4])
+        self.assertFalse(job.can_send_again)
         self.clock.now += 200
         answer = self.queue.check(120)
         self.assertEqual((True, "", False), (answer["asked"], answer["problem"],
@@ -433,10 +437,62 @@ class QueueTest(QueueCase):
         self.clock.now += 200
         self.queue.check(120)
         self.assertEqual(("failed", 3, True), (job.state, job.exit, job.fetched))
-        self.assertIn("The program ended with status 3", job.error)
-        self.assertIn("running train_ff", job.error)
+        self.assertEqual("The program ended with status 3.", job.error)
+        self.assertEqual(job.error, job.diagnosis["reason"])
+        self.assertIn("running train_ff", " ".join(line["text"]
+                                                   for line in job.diagnosis["lines"]))
         with self.assertRaises(cluster.ClusterError):
             self.queue.results("job1")
+        # Kept with the job, and what can be sent again
+        summary = self.new_queue().summaries()[0]
+        self.assertEqual((job.diagnosis, True), (summary["diagnosis"], summary["again"]))
+
+    def test_why_a_job_failed(self):
+        """!
+        @brief What the program said is the reason, also from a log file
+        that came back with the output; a job of an older version, which
+        was noted without a reason, gets one when it is read.
+        """
+        (self.server.dir / "fail").write_text(
+            "Error: Cannot make topology for ethane\n"
+            + "Fatal: Training set is empty on one or more of the nodes\n" * 4)
+        job = self.send()
+        self.clock.now += 200
+        self.queue.check(120)
+        self.assertEqual(("failed", 1), (job.state, job.exit))
+        found = job.diagnosis
+        self.assertEqual("alexandria stopped: Training set is empty on one or more of the "
+                         "nodes", found["reason"])
+        self.assertEqual(("processes", 4), (found["fix"], found["lines"][0]["count"]))
+        self.assertIn("ethane", found["details"][0])
+        self.assertEqual(found["reason"], job.error)
+        # As an older version noted it
+        record = self.local / "job1" / "job.json"
+        content = json.loads(record.read_text())
+        for key in ("diagnosis", "words", "sent", "request", "previous"):
+            content.pop(key)
+        record.write_text(json.dumps(content))
+        older = self.new_queue().get("job1")
+        self.assertEqual(found, older.diagnosis)
+        # Its command and files are read from the script that was sent
+        self.assertEqual((job.words, job.sent, True),
+                         (older.words, older.sent, older.can_send_again))
+        script = self.local / "job1" / "job.sh"
+        text = script.read_text()
+        self.assertIn("\nsrun alexandria train_ff ", text)
+        script.write_text(text.replace("srun alexandria", "mpirun -n 16 alexandria"))
+        self.assertEqual(job.words, self.new_queue().get("job1").words)
+        script.write_text("#!/bin/bash\necho\n")
+        self.assertFalse(self.new_queue().get("job1").can_send_again)
+        script.write_text(text)
+        # What is not as it was written is left out, or the job is not read
+        content["diagnosis"] = {"reason": 5}
+        record.write_text(json.dumps(content))
+        self.assertEqual(found, self.new_queue().get("job1").diagnosis)
+        for key, wrong in (("words", "rm -rf"), ("words", ["a\nb"]), ("sent", ["../x"]),
+                           ("previous", "../x"), ("request", [1])):
+            record.write_text(json.dumps(dict(content, **{key: wrong})))
+            self.assertEqual(["job1"], self.new_queue().unread, key)
 
     def test_job_that_slurm_lost(self):
         """!
@@ -456,6 +512,7 @@ class QueueTest(QueueCase):
         self.queue.check(120)
         self.assertEqual("lost", job.state)
         self.assertIn("longer than the 90 minutes", job.error)
+        self.assertEqual({"minutes": 180}, job.diagnosis["suggest"])
         self.assertIsNotNone(job.ended)
 
     def test_login_that_fails_is_not_tried_again_by_itself(self):

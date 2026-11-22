@@ -328,6 +328,8 @@ class FileTest(unittest.TestCase):
 
 ## The stand-in for the program on the cluster
 ALEXANDRIA = r'''#!/bin/sh
+# Fails with the output that the file "fail" next to the programs has
+if [ -f "$(dirname "$0")/../fail" ]; then cat "$(dirname "$0")/../fail"; exit 1; fi
 echo "{\"asked\": \"$*\"}" > result.json
 echo running "$@"
 command=$1
@@ -384,7 +386,8 @@ class FakeServer:
         (self.dir / "nobin").mkdir()
         # Stand-ins for the commands of Slurm and for alexandria. sbatch
         # runs the script at once and gives the job the number 4242, unless
-        # the file "queue" next to the programs says that jobs wait; squeue
+        # the file "queue" next to the programs says that jobs wait (and
+        # alexandria fails if there is a file "fail" there); squeue
         # prints what that file says; scancel notes what it was asked.
         programs = {
             "sbatch": '#!/bin/sh\n'

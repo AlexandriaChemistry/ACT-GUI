@@ -112,6 +112,47 @@ class ClusterJobTest(unittest.TestCase):
                                 program=str(self.dir / "no-ssh"))
         self.assertIn("could not be started", str(caught.exception))
 
+    def test_job_sent_again_with_the_files_of_another(self):
+        """!
+        @brief A job that is sent again gets the files of the job it comes
+        from, copied on the cluster, and those that are sent over them; a
+        file that is not there any more stops it before anything is made.
+        """
+        self.send()
+        script = cluster.batch_script(self.settings, "job1-r2", ["alexandria", "train_ff",
+                                                                 "-ff", "ff.xml"])
+        self.assertEqual("4242", cluster_jobs.submit(
+            self.settings, "job1-r2", script, {"selection.dat": b"ethane|Train\n"},
+            program=self.ssh, copy=("job1", ["ff.xml", "selection.dat"])))
+        again = self.remote / "job1-r2"
+        self.assertEqual("<alexandria_chemistry/>\n", (again / "ff.xml").read_text())
+        self.assertEqual("ethane|Train\n", (again / "selection.dat").read_text())
+        self.assertEqual("0\n", (again / "act-exit-status").read_text())
+        self.assertEqual(2, len(self.server.calls()))
+        with self.assertRaises(cluster.ClusterError) as caught:
+            cluster_jobs.submit(self.settings, "job1-r3", script, {}, program=self.ssh,
+                                copy=("job1", ["ff.xml", "gone.xml"]))
+        self.assertIn("The file gone.xml of the job job1 is not on good any more",
+                      str(caught.exception))
+        self.assertFalse((self.remote / "job1-r3").exists())
+        for copy in (("../job1", ["ff.xml"]), ("job1", ["../ff.xml"]), ("job1", ["job.sh"])):
+            with self.assertRaises(cluster.ClusterError):
+                cluster_jobs.submit(self.settings, "job1-r4", script, {}, program=self.ssh,
+                                    copy=copy)
+        self.assertFalse((self.remote / "job1-r4").exists())
+
+    def test_job_that_sbatch_refuses(self):
+        """!
+        @brief What sbatch says comes with what to change.
+        """
+        sbatch = self.server.dir / "bin" / "sbatch"
+        sbatch.write_text("#!/bin/sh\necho 'sbatch: error: invalid partition specified: X' >&2\n"
+                          "exit 1\n")
+        with self.assertRaises(cluster.ClusterError) as caught:
+            self.send()
+        self.assertIn("invalid partition specified", str(caught.exception))
+        self.assertIn("“sinfo” lists them", str(caught.exception))
+
     def test_state_of_a_job(self):
         """!
         @brief Waiting and running come from Slurm; the end comes from the
