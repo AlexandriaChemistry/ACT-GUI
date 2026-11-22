@@ -67,7 +67,7 @@ there or opened from a file:
   that value from files with a line
   `interaction|potential|atom type|parameter|value|unit` for each, as
   `actgui` read them. It does what the program `actgui` of
-  ACT-utilities did. The table of atom types and the virtual sites that
+  ACT-utilities, which it replaces, did. The table of atom types and the virtual sites that
   `gen_ff` got can be saved as well.
 - *Virtual sites* defines sites by point and click: two, three or four
   atoms of a molecule are picked in the viewer or in a table, the kind of
@@ -361,9 +361,10 @@ run as well.
 ## The atom types and virtual sites of the generator
 
 `act_gui/data/generator/` has the atom types that a new force field can be
-made of (`atomtypes_gui.csv`) and the predefined virtual sites, copied from
-the directory `share` of ACT-utilities. They move here for good when
-`actgui` is removed from ACT-utilities.
+made of (`atomtypes_gui.csv`) and the predefined virtual sites. The atom
+types are only here since `actgui` was removed from ACT-utilities; the
+virtual sites are also in the directory `share` of ACT-utilities, as
+examples for `alexandria gen_ff`.
 
 ## The logo
 
