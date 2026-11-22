@@ -183,6 +183,7 @@ class SettingsTest(unittest.TestCase):
 #SBATCH --job-name=act-1a2b
 #SBATCH --partition=CLUSTER,CLUSTER-AMD
 #SBATCH -n 1
+#SBATCH --hint=nomultithread
 #SBATCH --time=0-01:00:00
 #SBATCH --output=slurm.out
 
@@ -201,7 +202,8 @@ exit $status
                                       gpu=True)
         lines = script.splitlines()
         for line in ("#SBATCH --partition=GPU,CLUSTER-AMD", "#SBATCH --gres=gpu:1",
-                     "#SBATCH -n 16", "#SBATCH --time=1-12:05:00",
+                     "#SBATCH -n 16", "#SBATCH --hint=nomultithread",
+                     "#SBATCH --time=1-12:05:00",
                      "#SBATCH --account=proj1", 'eval "$(conda shell.bash hook)"',
                      "conda activate act",
                      "srun alexandria train_ff -ff ff.xml -mp 'my data.xml' -fc_inter 1"):
@@ -213,7 +215,7 @@ exit $status
                                "launcher": "mpirun", "load": "source",
                                "load_name": "/opt/act/bin/ACTRC"})
         script = cluster.batch_script(other, "j", ["alexandria", "train_ff"], tasks=4)
-        self.assertIn("source /opt/act/bin/ACTRC\nmpirun -n 4 alexandria train_ff\n", script)
+        self.assertIn("source /opt/act/bin/ACTRC\nmpirun -n $SLURM_NTASKS alexandria train_ff\n", script)
         self.assertNotIn("module", cluster.batch_script(
             cluster.parse({"server": "csb", "user": "u", "workdir": "w", "load": "none"}),
             "j", ["alexandria"]))

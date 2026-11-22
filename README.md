@@ -357,7 +357,10 @@ the cluster": the comparison of a force field with a molprop file, the
 training of a force field, the second virial coefficient and a simulation
 with OpenMM. A training has one set of parameters for
 each process of the job. You give the job a name (or leave that to the interface),
-the number of processes, a time limit and whether it needs a GPU. The
+the number of processes, a time limit and whether it needs a GPU. Each
+process gets a physical core of its own (`--hint=nomultithread`): Slurm
+counts the hardware threads of a core as CPUs, while `mpirun` starts no
+more processes than there are cores. The
 interface then shows the job before anything is sent: the script for
 Slurm, the command and the files that go along. The files get a name
 after the option they are for (`ff.xml`, `mp.xml`), so no name of a file
