@@ -259,12 +259,24 @@ The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 
 ## Running on the desktop
 
-    python -m act_gui
+    act-gui
 
-prints an address and opens it in the browser. The server listens on the
-local machine only, and the address has a key without which the server does
-not answer. Uploads and results are kept in a temporary directory that is
-removed at the end; `--data DIR` keeps them in a directory.
+(or `actgui`, the name of the program that this interface replaces, or
+`python -m act_gui`) prints an address and opens it in the browser. The
+server listens on the local machine only, and the address has a key
+without which the server does not answer. Uploads and results are kept in
+a temporary directory that is removed at the end; `--data DIR` keeps them
+in a directory.
+
+Without installing ACT-GUI, the script `actgui` in this directory starts
+it from here, with the Python of `.venv` here if there is one (or that of
+`ACT_GUI_PYTHON`, or `python3`). The Python package `act` and the program
+`alexandria` are found as always; from the source and the build of ACT,
+for instance:
+
+    PYTHONPATH=/path/to/ACT/python ACT_ALEXANDRIA=/path/to/ACT/build/bin/alexandria ./actgui
+
+A link to the script in a directory of your `PATH` works too.
 
 ## The cluster for long jobs
 

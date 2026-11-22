@@ -1,0 +1,19 @@
+#!/bin/sh
+#
+# This source file is part of the Alexandria Chemistry Toolkit.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# Start ACT-GUI from this directory, without installing it, with the Python
+# of .venv here if there is one (or that of ACT_GUI_PYTHON, or python3). The
+# Python package act and the program alexandria are found as always: where
+# they are installed, or through PYTHONPATH and ACT_ALEXANDRIA. The options
+# are those of act-gui, see actgui --help.
+#
+here=$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")
+python=${ACT_GUI_PYTHON:-$here/.venv/bin/python}
+[ -x "$python" ] || python=python3
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python" -m act_gui "$@"

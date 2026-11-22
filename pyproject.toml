@@ -20,6 +20,8 @@ browser = ["selenium"]
 
 [project.scripts]
 act-gui = "act_gui.__main__:main"
+# The name of the program that ACT-GUI replaces in ACT-utilities
+actgui = "act_gui.__main__:main"
 
 [tool.setuptools]
 packages = ["act_gui"]
