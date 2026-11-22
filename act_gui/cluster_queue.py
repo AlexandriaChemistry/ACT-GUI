@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import threading
 import time
@@ -36,7 +37,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import cluster, cluster_jobs, evaluation
+from . import cluster, cluster_jobs, diagnosis, evaluation
 from .cluster import ClusterError, ClusterSettings
 from .jobs import InputFile, place_files
 
@@ -55,12 +56,13 @@ MANUAL_SECONDS = 30
 ## The number of times in a row that Slurm must not know a job before it
 ## counts as lost: Slurm may not answer for a moment
 LOST_AFTER = 2
-## The number of characters of the output of a job that are kept as the
-## reason why it failed
-ERROR_TAIL = 2000
+## The largest number of words of a command that is kept
+MAX_WORDS = 2000
 ## The name of a file of a job, and the ending of the name of a file
 _FILE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._+@#-]{0,199}$")
 _SUFFIX = re.compile(r"^\.[A-Za-z0-9]{1,10}$")
+## The ending of a file that a job was sent with, not a number such as 1.5
+_SENT_FILE = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,9}$")
 
 
 @dataclass(frozen=True)
@@ -93,22 +95,31 @@ class Plan:
     gpu: bool
     ## The properties that a comparison compares, in the order they were chosen
     observables: Tuple[str, ...] = ()
+    ## For a job that is sent again: the job it comes from, and the files
+    ## that are copied from its directory on the cluster instead of sent
+    previous: str = ""
+    copied: Tuple[str, ...] = ()
+    ## The request of the calculation, without what it says about the job
+    request: Optional[Dict[str, Any]] = None
 
     def describe(self, settings: ClusterSettings) -> Dict[str, Any]:
         """!
         @brief The job for the user to look at before it is sent.
         @param settings The settings of the cluster.
         @return The name, where the job goes, the command, the script and
-        the files with their size.
+        the files with their size; a file that is copied on the cluster
+        has no size but the job it comes "from".
         """
+        files: List[Dict[str, Any]] = [{"name": name, "size": path.stat().st_size}
+                                       for name, path in self.files.items()]
+        files += [{"name": name, "size": None, "from": self.previous} for name in self.copied]
         return {"name": self.name, "task": self.task,
                 "server": "%s@%s" % (settings.user, settings.server),
                 "directory": "%s/%s" % (settings.workdir, self.name),
                 "command": cluster.remote_command(self.words), "script": self.script,
-                "files": [{"name": name, "size": path.stat().st_size}
-                          for name, path in sorted(self.files.items())],
+                "files": sorted(files, key=lambda entry: entry["name"]),
                 "tasks": self.tasks, "minutes": self.minutes, "gpu": self.gpu,
-                "fetch": self.fetched_names()}
+                "fetch": self.fetched_names(), "previous": self.previous}
 
     def fetched_names(self) -> List[str]:
         """!
@@ -300,6 +311,17 @@ class ClusterJob:
     ## How far the job was when the cluster was last asked, for a job that
     ## reports its progress: what cluster_jobs.progress_summary() gives
     progress: Optional[Dict[str, Any]] = None
+    ## The command on the cluster, the program first, and the names of the
+    ## files that the job had in its directory there before it ran: what
+    ## is needed to send it again. Empty for a job of an older version.
+    words: List[str] = field(default_factory=list)
+    sent: List[str] = field(default_factory=list)
+    ## The request of the calculation, without what it says about the job
+    request: Optional[Dict[str, Any]] = None
+    ## The job that this one is sent again from, if it is
+    previous: str = ""
+    ## Why the job failed and what to change, see diagnosis.diagnose()
+    diagnosis: Optional[Dict[str, Any]] = None
     ## The identifier of the job in the job engine, once its results are
     ## shown. Not kept in the file.
     job: str = ""
@@ -326,7 +348,17 @@ class ClusterJob:
                 "server": "%s@%s" % (self.cluster.user, self.cluster.server),
                 "directory": "%s/%s" % (self.cluster.workdir, self.name),
                 "fetched": self.fetched, "error": self.error, "job": self.job,
-                "progress": self.progress}
+                "progress": self.progress, "diagnosis": self.diagnosis,
+                "previous": self.previous, "again": self.can_send_again}
+
+    @property
+    def can_send_again(self) -> bool:
+        """!
+        @brief Whether the job can be sent again from its files on the cluster.
+        @return True for a job that is done, of which the command and the
+        files are known.
+        """
+        return self.state not in ACTIVE and bool(self.words) and bool(self.sent)
 
 
 def _names(given: Any, lists: bool) -> Dict[str, Any]:
@@ -385,7 +417,121 @@ def _from_record(content: Any) -> ClusterJob:
         fetched=bool(content.get("fetched", False)), error=content.get("error", ""),
         missing=int(content.get("missing", 0)),
         observables=_observables(content.get("observables", [])),
-        progress=cluster_jobs.progress_summary(content.get("progress")), **numbers)
+        progress=cluster_jobs.progress_summary(content.get("progress")),
+        words=_words(content.get("words", [])),
+        sent=list(_names({"sent": content.get("sent", [])}, True)["sent"]),
+        request=_request(content.get("request")),
+        previous=_previous(content.get("previous", "")),
+        diagnosis=_diagnosis(content.get("diagnosis")), **numbers)
+
+
+def from_script(script: str, job: ClusterJob) -> Tuple[List[str], List[str]]:
+    """!
+    @brief The command of a job and the files it was sent with, read from
+    its batch script, for a job of an older version that did not note them.
+    @param script The batch script, see cluster.batch_script().
+    @param job    The job, with the files that its command writes.
+    @return The command, the program first, and the names of the files
+    that the command reads: the words that are names of files with an
+    ending, other than those that the job writes.
+    @throws ValueError if the script has no command as the interface writes it.
+    """
+    lines = script.splitlines()
+    if "status=$?" not in lines or lines.index("status=$?") == 0:
+        raise ValueError("no command")
+    words = shlex.split(lines[lines.index("status=$?") - 1])
+    if words and words[0] in ("srun", "mpirun", "mpiexec"):
+        # The launcher and its options, such as -n 16
+        index = 1
+        while index < len(words) and words[index].startswith("-"):
+            index += 2
+        words = words[index:]
+    words = _words(words)
+    if len(words) < 2:
+        raise ValueError("no command")
+    written = {name for names in job.outputs.values() for name in names}
+    written.update(job.collect.values())
+    sent = sorted({word for word in words[2:] if _FILE_NAME.fullmatch(word)
+                   and _SENT_FILE.search(word) and word not in written})
+    return words, sent
+
+
+def _words(value: Any) -> List[str]:
+    """!
+    @brief The command of a job as its file has it. The words become a
+    command on the cluster again, each quoted.
+    @param value What the file has.
+    @return The words.
+    @throws ValueError if it is no command.
+    """
+    if not isinstance(value, list) or len(value) > MAX_WORDS or not all(
+            isinstance(word, str) and word and "\n" not in word and "\0" not in word
+            for word in value):
+        raise ValueError("not a command")
+    return list(value)
+
+
+def _request(value: Any) -> Optional[Dict[str, Any]]:
+    """!
+    @brief The request of a calculation as the file of its job has it.
+    @param value What the file has.
+    @return The request, None if there is none.
+    @throws ValueError if it is no object.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("the request is not an object")
+    return value
+
+
+def _previous(value: Any) -> str:
+    """!
+    @brief The job that a job was sent again from, as its file has it.
+    @param value What the file has.
+    @return The name, empty for none.
+    """
+    if value == "":
+        return ""
+    return cluster_jobs.check_name(value)
+
+
+def _diagnosis(value: Any) -> Optional[Dict[str, Any]]:
+    """!
+    @brief Why a job failed, as its file has it: only what the page shows,
+    as text and numbers.
+    @param value What the file has.
+    @return The diagnosis, None if there is none or it is not as it was written.
+    """
+    if not isinstance(value, dict):
+        return None
+    texts = ("reason", "hint", "fix")
+    if not all(isinstance(value.get(key), str) for key in texts) \
+            or value["fix"] not in diagnosis.FIXES:
+        return None
+    kept: Dict[str, Any] = {key: value[key] for key in texts}
+    suggest = value.get("suggest") if isinstance(value.get("suggest"), dict) else {}
+    kept["suggest"] = {}
+    minutes = suggest.get("minutes")
+    if isinstance(minutes, int) and not isinstance(minutes, bool) \
+            and 1 <= minutes <= cluster.MAX_MINUTES:
+        kept["suggest"]["minutes"] = minutes
+    if isinstance(suggest.get("gpu"), bool):
+        kept["suggest"]["gpu"] = suggest["gpu"]
+    details = value.get("details")
+    kept["details"] = [text for text in details if isinstance(text, str)] \
+        if isinstance(details, list) else []
+    files = value.get("files")
+    kept["files"] = [name for name in files if isinstance(name, str)
+                     and _FILE_NAME.fullmatch(name)] if isinstance(files, list) else []
+    lines = value.get("lines") if isinstance(value.get("lines"), list) else []
+    kept["lines"] = []
+    for line in lines:
+        if isinstance(line, dict) and isinstance(line.get("file"), str) \
+                and isinstance(line.get("text"), str) and isinstance(line.get("count"), int) \
+                and (line.get("line") is None or isinstance(line.get("line"), int)):
+            kept["lines"].append({key: line.get(key) for key in ("file", "line", "text", "count")})
+    return kept
 
 
 def _observables(value: Any) -> List[str]:
@@ -447,6 +593,17 @@ class ClusterQueue:
             except (OSError, ValueError, KeyError, TypeError):
                 self.unread.append(directory.name)
                 continue
+            if not job.words and job.state not in ACTIVE:
+                # A job of an older version: what is needed to send it
+                # again, from the script that was sent
+                try:
+                    script = (directory / cluster_jobs.SCRIPT_NAME).read_text(encoding="utf-8")
+                    job.words, job.sent = from_script(script, job)
+                except (OSError, ValueError):
+                    pass
+            if job.state in (FAILED, LOST) and job.fetched and job.diagnosis is None:
+                # A job of an older version: why it failed, from its files here
+                job.diagnosis = self._diagnose(job)
             self._jobs[job.name] = job
             self._asked = max(self._asked, job.checked)
 
@@ -486,9 +643,18 @@ class ClusterQueue:
         job = self.get(name)
         if job is None:
             raise ClusterError("There is no job %s" % name)
+        return self._output_files(job)
+
+    def _output_files(self, job: ClusterJob) -> Dict[str, Path]:
+        """!
+        @brief The output files of a job that were fetched, see output_files().
+        @param job The job.
+        @return The files by their name.
+        """
         names = {item for listed in job.outputs.values() for item in listed}
         names.update(job.collect.values())
-        names.add(cluster.OUTPUT_FILE)
+        # The output of Slurm, and the script as it was sent
+        names.update((cluster.OUTPUT_FILE, cluster_jobs.SCRIPT_NAME))
         directory = self._dir / job.name
         return {item: directory / item for item in sorted(names)
                 if _FILE_NAME.fullmatch(item) and (directory / item).is_file()}
@@ -582,12 +748,15 @@ class ClusterQueue:
         @throws ClusterError if it could not be sent.
         """
         slurm = cluster_jobs.submit(settings, plan.name, plan.script, plan.files,
-                                    program=self._program, run=self._run)
+                                    program=self._program, run=self._run,
+                                    copy=(plan.previous, plan.copied) if plan.previous else None)
         job = ClusterJob(name=plan.name, task=plan.task, command=plan.command,
                          cluster=settings, slurm=slurm, created=self._clock(),
                          tasks=plan.tasks, minutes=plan.minutes, gpu=plan.gpu,
                          outputs=dict(plan.outputs), inputs=dict(plan.inputs),
-                         collect=dict(plan.collect), observables=list(plan.observables))
+                         collect=dict(plan.collect), observables=list(plan.observables),
+                         words=list(plan.words), sent=sorted(set(plan.files) | set(plan.copied)),
+                         request=plan.request, previous=plan.previous)
         with self._lock:
             self._jobs[job.name] = job
         try:
@@ -712,21 +881,38 @@ class ClusterQueue:
                 job.fetched = False
                 job.error = "The results could not be fetched. %s" % exc
             return job.error
-        said = ""
-        try:
-            said = (directory / cluster.OUTPUT_FILE).read_text(
-                encoding="utf-8", errors="replace").strip()[-ERROR_TAIL:]
-        except OSError:
-            pass
         with self._lock:
             job.fetched = True
             job.error = ""
-            if job.state == FAILED:
-                job.error = "The program ended with status %s. %s" % (job.exit, said)
-            elif job.state == LOST:
-                job.error = ("The job ended without a result: it was stopped, or it took "
-                             "longer than the %d minutes it asked for. %s" % (job.minutes, said))
+            job.diagnosis = None
+        if job.state in (FAILED, LOST):
+            found = self._diagnose(job)
+            with self._lock:
+                job.diagnosis = found
+                job.error = found["reason"]
         return ""
+
+    def _diagnose(self, job: ClusterJob) -> Dict[str, Any]:
+        """!
+        @brief Why a job failed, from the output of Slurm and the log files
+        that were fetched.
+        @param job The job.
+        @return See diagnosis.diagnose().
+        """
+        directory = self._dir / job.name
+        names = [cluster.OUTPUT_FILE] + sorted(
+            name for name in self._output_files(job)
+            if name != cluster.OUTPUT_FILE and name.endswith(diagnosis.TEXT_ENDINGS))
+        texts: Dict[str, Any] = {}
+        for name in names:
+            try:
+                texts[name] = diagnosis.read_text(directory / name)
+            except OSError:
+                continue
+        return diagnosis.diagnose(texts, state=job.state, exit_status=job.exit,
+                                  tasks=job.tasks, minutes=job.minutes,
+                                  most_minutes=cluster.MAX_MINUTES,
+                                  program=job.words[0] if job.words else job.cluster.program)
 
     def fetch(self, name: str) -> ClusterJob:
         """!

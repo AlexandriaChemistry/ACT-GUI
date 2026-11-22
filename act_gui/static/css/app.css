@@ -284,6 +284,21 @@ table.data tr.more td { white-space: normal; padding-top: 0; }
 table.data tr.more pre.code { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; }
 #ev-jobscript { max-height: 340px; overflow-y: auto; }
 .jobcard { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 12px; }
+/* Why a job on the cluster failed, and one job below the table */
+.diag { display: grid; gap: 6px; }
+.diag p { margin: 0; }
+.diag-reason { color: var(--bad); font-weight: 600; }
+.diag-lines { margin: 2px 0 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.diag-lines li { display: flex; gap: 10px; align-items: baseline; font-size: 12.5px; min-width: 0; }
+.diag-lines button { flex: none; font: 12px var(--mono); color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; }
+.diag-lines button:hover { text-decoration: underline; }
+.diag-lines code { font: 12.5px var(--mono); overflow-wrap: anywhere; }
+.diag-lines .times { flex: none; color: var(--muted); }
+.jobpanel { border-top: 1px solid var(--line); display: grid; gap: 10px; }
+.jobpanel h3.paneltitle { margin: 0; text-transform: none; letter-spacing: normal; font-size: 15px; color: inherit; }
+pre.jobtext { max-height: 420px; overflow: auto; white-space: pre; }
+pre.jobtext mark { background: color-mix(in srgb, var(--bad) 22%, transparent); color: inherit; border-radius: 3px; }
+pre.jobtext mark.here { outline: 2px solid var(--bad); }
 .jobcard pre.code { max-height: 300px; overflow-y: auto; }
 #ev-clusteropts input[type="number"] { width: 7.5em; }
 #ev-jobname { width: 16em; }

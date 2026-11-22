@@ -62,6 +62,11 @@ tests:
         # For the test client of FastAPI
         - httpx
     script:
+      # MPICH of conda-forge uses UCX, which on some GitHub runners fails to
+      # open the network card, such that alexandria stops in MPI_Init. The
+      # test runs on one machine, which needs only shared memory and TCP, as
+      # in the tests of the ACT packages.
+      - export UCX_TLS=self,sm,tcp
       - act-gui --version
       - actgui --version
       - act-gui --help

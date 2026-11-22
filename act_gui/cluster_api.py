@@ -21,6 +21,9 @@ so that the server does other things while ssh waits.
 """
 from __future__ import annotations
 
+import dataclasses
+import re
+import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -30,9 +33,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import cluster_jobs, openmm_package
+from . import cluster, cluster_jobs, openmm_package, training
 from .cluster import MAX_TASKS, ClusterError, ClusterSettings
-from .cluster_queue import ACTIVE, PROGRESS, ClusterQueue, Plan, make_plan, make_script_plan
+from .cluster_queue import (ACTIVE, PROGRESS, ClusterJob, ClusterQueue, Plan, make_plan,
+                            make_script_plan)
 from .jobs import JobManager
 from .tasks import OPENMM_RESULTS, TASKS, Prepared, Task
 
@@ -42,6 +46,42 @@ CHOICES = ("name", "tasks", "minutes", "gpu")
 MAX_ACTIVE = 50
 ## The largest number of reports of its progress that are read of a job
 MAX_REPORTS = 5000
+## The largest part of a file of a job that is shown on the page, its end
+MAX_SHOWN_BYTES = 1024 ** 2
+## What is left out of a request when it is kept with its job
+_NOT_KEPT = ("cluster", "send")
+
+
+def _replace_value(words: List[str], option: str, value: str) -> bool:
+    """!
+    @brief Give an option of a command another value.
+    @param words  The command, changed in place.
+    @param option The option, with its dash.
+    @param value  The new value.
+    @return Whether the command has the option.
+    """
+    if option not in words[:-1]:
+        return False
+    words[words.index(option) + 1] = value
+    return True
+
+
+def next_name(name: str, taken: Callable[[str], bool]) -> str:
+    """!
+    @brief The name of a job that is sent again: the name with -r2, -r3 and
+    so on, the first that is not taken.
+    @param name  The name of the job that is sent again.
+    @param taken Whether a name is taken.
+    @return The name.
+    """
+    match = re.fullmatch(r"(.+)-r(\d+)", name)
+    base, number = (match.group(1), int(match.group(2))) if match else (name, 1)
+    while True:
+        number += 1
+        suffix = "-r%d" % number
+        candidate = base[:64 - len(suffix)] + suffix
+        if not taken(candidate):
+            return candidate
 
 
 def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
@@ -219,7 +259,9 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         except ClusterError as exc:
             raise fail(409, str(exc)) from exc
         try:
-            job = queue.send(plan_for(body, staging, name), current)
+            plan = dataclasses.replace(plan_for(body, staging, name), request={
+                key: value for key, value in body.items() if key not in _NOT_KEPT})
+            job = queue.send(plan, current)
         except ClusterError as exc:
             queue.release(name)
             raise fail(502, str(exc)) from exc
@@ -227,6 +269,159 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
             queue.release(name)
             raise
         return listing(sent=True, name=job.name, slurm=job.slurm)
+
+    def taken(name: str) -> bool:
+        """!
+        @brief Whether there is a job with a name, here or noted.
+        @param name The name.
+        @return True if the name is taken.
+        """
+        return queue.get(name) is not None or queue.directory(name).exists()
+
+    def again_plan(job: ClusterJob, chosen: Mapping[str, Any], name: str,
+                   staging: Path) -> Plan:
+        """!
+        @brief A job that is done, made again with other processes, time or
+        GPU and the settings of the cluster as they are now. Its files are
+        copied from its directory on the cluster; what follows from the
+        processes and the time is made anew: the individuals of a training
+        and the time it stops in.
+        @param job     The job that is sent again.
+        @param chosen  What the request says about the new job.
+        @param name    The name of the new job.
+        @param staging The directory that stands for that of the new job.
+        @return The plan.
+        """
+        current = app.state.cluster
+        here = (current.server, current.user, current.workdir)
+        if here != (job.cluster.server, job.cluster.user, job.cluster.workdir):
+            raise fail(409, "The files of %s are on %s@%s in %s, and the settings name "
+                       "another cluster now. Send the calculation as a new job from its tab."
+                       % (job.name, job.cluster.user, job.cluster.server, job.cluster.workdir))
+        tasks = chosen.get("tasks", job.tasks)
+        minutes = chosen.get("minutes", job.minutes)
+        gpu = chosen.get("gpu", job.gpu)
+        if isinstance(tasks, bool) or not isinstance(tasks, int) or not 1 <= tasks <= MAX_TASKS:
+            raise fail(400, "The number of processes is between 1 and %d" % MAX_TASKS)
+        if isinstance(minutes, bool) or not isinstance(minutes, int) or minutes < 1:
+            raise fail(400, "The time of a job is a whole number of minutes")
+        task = TASKS.get(job.task)
+        words = list(job.words)
+        contents: Dict[str, bytes] = {}
+        request = job.request or {}
+        if job.task == "openmm_run":
+            tasks = 1
+            # The platform of OpenMM follows from the GPU
+            simulation = request.get("simulation") or {}
+            try:
+                settings = openmm_package.parse_settings(**simulation)
+            except (openmm_package.PackageError, TypeError) as exc:
+                raise fail(400, "The simulation of %s cannot be made again: %s"
+                           % (job.name, exc)) from exc
+            contents[openmm_package.DAT_NAME] = openmm_package.simulation_dat(
+                settings, "CUDA" if gpu else "CPU").encode("utf-8")
+        else:
+            # The program as the settings name it now
+            words[0] = current.program
+        if task is not None and task.parallel and "-pop_size" in words:
+            optimizer = words[words.index("-optimizer") + 1] if "-optimizer" in words[:-1] \
+                else training.DEFAULT_OPTIMIZER
+            before = words[words.index("-pop_size") + 1]
+            spec = request.get("training")
+            if job.request is None and before != str(job.tasks):
+                # A job of an older version: a number of individuals that
+                # was not one for each process was given by the user
+                spec = {"population": int(before)} if before.isdigit() else None
+            try:
+                training.processes(tasks, optimizer, tasks)
+                individuals = training.population(spec, optimizer, tasks)
+            except training.TrainingError as exc:
+                raise fail(400, str(exc)) from exc
+            if "-gpin" in words and str(individuals) != before:
+                raise fail(400, "The training continues one with %s individuals, which it "
+                           "keeps: give it processes for %s individuals" % (before, before))
+            _replace_value(words, "-pop_size", str(individuals))
+        _replace_value(words, "-maxh", repr(float(training.max_hours(60.0 * minutes))))
+        for filename, data in contents.items():
+            (staging / filename).write_bytes(data)
+        try:
+            script = cluster.batch_script(current, name, words, tasks=tasks, minutes=minutes,
+                                          gpu=gpu)
+        except ClusterError as exc:
+            raise fail(400, str(exc)) from exc
+        return Plan(name=name, task=job.task, command=job.command, words=words, script=script,
+                    files={filename: staging / filename for filename in contents},
+                    outputs=dict(job.outputs), inputs=dict(job.inputs),
+                    collect=dict(job.collect), tasks=tasks, minutes=minutes, gpu=gpu,
+                    observables=tuple(job.observables), previous=job.name,
+                    copied=tuple(n for n in job.sent if n not in contents),
+                    request=job.request)
+
+    def handle_again(previous: str, body: Any) -> Dict[str, Any]:
+        """!
+        @brief Show a job that is sent again, or send it.
+        @param previous The name of the job that is sent again.
+        @param body     The request: "cluster" with what the new job asks
+        for, and "send".
+        @return The job as it would be sent, or the jobs after it was sent.
+        """
+        job = queue.get(previous)
+        if job is None:
+            raise fail(404, "There is no such job")
+        if app.state.cluster is None:
+            raise fail(400, "Give the server, your user name and a working directory in the "
+                       "tab Settings first")
+        if job.state in ACTIVE:
+            raise fail(409, "The job %s is not done" % previous)
+        if not job.can_send_again:
+            raise fail(409, "The job %s was sent by an older version of the interface, which "
+                       "did not note its files. Send the calculation as a new job from its tab."
+                       % previous)
+        if not isinstance(body, dict):
+            raise fail(400, "The request must be an object")
+        chosen = body.get("cluster") or {}
+        if not isinstance(chosen, dict) or any(key not in CHOICES for key in chosen):
+            raise fail(400, "A job has a name, a number of processes (tasks), a time in "
+                       "minutes and a GPU or not")
+        if not isinstance(chosen.get("gpu", False), bool):
+            raise fail(400, "Whether the job needs a GPU is true or false")
+        send = body.get("send", False)
+        if not isinstance(send, bool):
+            raise fail(400, "Whether the job is sent is true or false")
+        name = chosen.get("name") or next_name(previous, taken)
+        try:
+            cluster_jobs.check_name(name)
+        except ClusterError as exc:
+            raise fail(400, "%s: use letters, digits and . _ -, and no spaces" % exc) from exc
+        current = app.state.cluster
+        if not send:
+            with tempfile.TemporaryDirectory(prefix="act-gui-job-") as tmp:
+                staging = Path(tmp) / name
+                staging.mkdir()
+                return dict(again_plan(job, chosen, name, staging).describe(current),
+                            sent=False, taken=taken(name))
+        if sum(1 for other in queue.list() if other.state in ACTIVE) >= MAX_ACTIVE:
+            raise fail(429, "There are %d jobs waiting or running on the cluster, wait until "
+                       "one is done" % MAX_ACTIVE)
+        try:
+            staging = queue.reserve(name)
+        except ClusterError as exc:
+            raise fail(409, str(exc)) from exc
+        try:
+            plan = again_plan(job, chosen, name, staging)
+            # The files that were made for the job here, for its results
+            for filename in job.inputs.values():
+                source = queue.directory(previous) / filename
+                if source.is_file() and not (staging / filename).exists():
+                    shutil.copyfile(source, staging / filename)
+            sent = queue.send(plan, current)
+        except ClusterError as exc:
+            queue.release(name)
+            raise fail(502, str(exc)) from exc
+        except BaseException:
+            queue.release(name)
+            raise
+        return listing(sent=True, name=sent.name, slurm=sent.slurm)
 
     @app.get("/api/cluster/jobs")
     async def cluster_jobs_list() -> Dict[str, Any]:
@@ -255,6 +450,25 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         except ValueError as exc:
             raise fail(400, "The request is not valid JSON") from exc
         return await run_in_threadpool(handle, body)
+
+    @app.post("/api/cluster/jobs/{name}/again")
+    async def cluster_again(name: str, request: Request) -> Dict[str, Any]:
+        """!
+        @brief Show a job that is done as it would be sent again, or send
+        it again: one login. Its files are copied on the cluster.
+        @param name    The name of the job that is sent again.
+        @param request The request, with a JSON object: "cluster" with the
+        "name" of the new job, its "tasks", "minutes" and "gpu", each the
+        same as before if not given; and "send", true to send it.
+        @return Without "send" the job to look at, as for a new job, with
+        the files that are copied and the job they come from ("previous").
+        With it the jobs, see listing(), and the name and number of the new one.
+        """
+        try:
+            body = await request.json()
+        except ValueError as exc:
+            raise fail(400, "The request is not valid JSON") from exc
+        return await run_in_threadpool(handle_again, name, body)
 
     @app.post("/api/cluster/jobs/check")
     def cluster_check(manual: bool = False) -> Dict[str, Any]:
@@ -345,6 +559,46 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
             raise fail(404, "The job has no such file")
         return FileResponse(files[filename], media_type="application/octet-stream",
                             filename=filename)
+
+    @app.get("/api/cluster/jobs/{name}/text/{filename}")
+    def cluster_text(name: str, filename: str) -> Dict[str, Any]:
+        """!
+        @brief An output file of a job that was fetched, as text to show on
+        the page: its end, if it is long.
+        @param name     The name of the job.
+        @param filename The name of the file, one of cluster_files().
+        @return "name", "text", "size" in bytes, "first", the number of the
+        first line that is shown, and "cut", whether the start is left out.
+        """
+        try:
+            files = queue.output_files(name)
+        except ClusterError as exc:
+            raise fail(404, str(exc)) from exc
+        if filename not in files:
+            raise fail(404, "The job has no such file")
+        path = files[filename]
+        size = path.stat().st_size
+        start = max(0, size - MAX_SHOWN_BYTES)
+        skipped = 0
+        with open(path, "rb") as handle:
+            # The lines that are left out are counted, so that the numbers
+            # of the lines are those of the file
+            left = start
+            while left > 0:
+                block = handle.read(min(left, 1024 ** 2))
+                if not block:
+                    break
+                skipped += block.count(b"\n")
+                left -= len(block)
+            data = handle.read()
+        if start:
+            # From the start of a line
+            end = data.find(b"\n")
+            if end >= 0:
+                data = data[end + 1:]
+                skipped += 1
+        return {"name": filename, "text": data.decode("utf-8", errors="replace"), "size": size,
+                "first": skipped + 1, "cut": start > 0}
 
     @app.delete("/api/cluster/jobs/{name}")
     def cluster_stop(name: str, forget: bool = False) -> Dict[str, Any]:

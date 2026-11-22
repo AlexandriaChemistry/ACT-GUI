@@ -600,6 +600,39 @@
       <div class="body" id="cj-foot" hidden>
         <p class="outcome bad" id="cj-problem" role="status" hidden></p>
         <p class="muted fine" id="cj-kept"></p></div>
+      <!-- One job: its files as text, or the job sent again -->
+      <div class="body jobpanel" id="cj-panel" hidden>
+        <div class="row"><h3 class="grow paneltitle" id="cj-paneltitle"></h3>
+          <button class="btn small" id="cj-panelclose" type="button">Close</button></div>
+        <div id="cj-viewer" hidden>
+          <div class="seg" id="cj-viewfiles" role="group" aria-label="File"></div>
+          <p class="muted fine" id="cj-viewnote"></p>
+          <pre class="code jobtext" id="cj-view" tabindex="0"></pre>
+        </div>
+        <div id="cj-again" hidden>
+          <p class="muted fine" id="cj-againnote"></p>
+          <div class="row bottom">
+            <div class="field"><label for="cj-again-name">Name of the new job</label>
+              <input class="mono" type="text" id="cj-again-name" maxlength="64" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
+            <div class="field" id="cj-again-tasksfield"><label for="cj-again-tasks">Processes</label>
+              <input type="number" id="cj-again-tasks" min="1" max="4096" step="1"></div>
+            <div class="field"><label for="cj-again-hours">Time limit (hours)</label>
+              <input type="number" id="cj-again-hours" min="0.25" max="720" step="0.25"></div>
+            <div class="field"><span class="lab">Hardware</span>
+              <label class="check"><input type="checkbox" id="cj-again-gpu"> Needs a GPU</label></div>
+          </div>
+          <div class="row"><button class="btn" id="cj-again-show" type="button">Show the job…</button></div>
+          <div class="jobcard" id="cj-again-job" hidden>
+            <h3>Job for the cluster <span class="muted" id="cj-again-where"></span></h3>
+            <p class="muted fine">This is what would be sent. Nothing has been sent yet, and nobody has logged in.</p>
+            <p class="outcome bad" id="cj-again-taken" hidden>There is a job with this name already. Give another name and show the job again.</p>
+            <div class="xscroll"><table class="data" id="cj-again-files"></table></div>
+            <pre class="code" id="cj-again-script"></pre>
+            <div class="row"><button class="btn primary" id="cj-again-send" type="button">Send the job</button>
+              <span class="pill" id="cj-againpill" hidden></span></div>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 

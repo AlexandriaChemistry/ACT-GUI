@@ -2393,6 +2393,130 @@ class PageTest(unittest.TestCase):
         self.click('#nav button[data-view="molprop"]')
         self.assertFalse(self.browser.find_element(By.ID, "ev-where").is_displayed())
 
+    def test_e_failed_job_on_the_cluster(self):
+        """!
+        @brief A job that fails tells why in the tab Cluster, with the lines
+        of its output that tell it; the output is shown at such a line, and
+        the job is sent again with other processes, its files copied on the
+        cluster. A directory stands in for the cluster.
+        """
+        data = Path(TESTDATA)
+        fail = self.cluster.dir / "fail"
+        self.addCleanup(lambda: fail.unlink(missing_ok=True))
+        fail.write_text("Error: Cannot make topology for water\n"
+                        + "Fatal: Training set is empty on one or more of the nodes\n" * 4)
+        self.open_page()
+        self.click('#nav button[data-view="cluster"]')
+        self.click('#nav button[data-view="settings"]')
+        for field, value in (("cl-server", "good"), ("cl-user", "spoel"),
+                             ("cl-workdir", "act/jobs")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        Select(self.browser.find_element(By.ID, "cl-load")).select_by_value("none")
+        self.click("#cl-save")
+        self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
+        self.click('#nav button[data-view="molprop"]')
+        self.browser.find_element(By.ID, "mpw-file").send_keys(
+            str(data / "molprop" / "mpdimer.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "ev-card").is_displayed())
+        self.browser.find_element(By.ID, "ev-fffile").send_keys(
+            str(data / "forcefields" / "ACS-pol.xml"))
+        Select(self.browser.find_element(By.ID, "ev-ff")).select_by_value("upload")
+        self.click('#ev-place button[data-v="cluster"]')
+        for field, value in (("ev-jobname", "failing-1"), ("ev-tasks", "4")):
+            box = self.browser.find_element(By.ID, field)
+            box.clear()
+            box.send_keys(value)
+        self.browser.execute_script("document.getElementById('run-ev').scrollIntoView()")
+        self.click("#run-ev")
+        self.wait(lambda b: b.find_element(By.ID, "ev-job").is_displayed())
+        self.click("#ev-send")
+        self.wait(lambda b: b.find_element(By.ID, "view-cluster").is_displayed())
+
+        def state(name):
+            return self.browser.execute_script(
+                "const r = document.querySelector('#cj-table tbody tr[data-job=\"%s\"]');"
+                "return r ? r.cells[2].textContent : null" % name)
+        self.wait(lambda b: state("failing-1") == "Waiting")
+        # The user may ask once in half a minute: an earlier test may just have asked
+        clicked = [0.0]
+
+        def failed(browser):
+            if state("failing-1") == "Failed":
+                return True
+            ask = browser.find_element(By.ID, "cj-ask")
+            if ask.is_enabled() and time.time() - clicked[0] > 5:
+                clicked[0] = time.time()
+                ask.click()
+            return False
+        self.wait(failed)
+        self.assertEqual("", self.errors())
+        reason = self.text("#cj-table .diag-reason")
+        self.assertEqual("alexandria stopped: Training set is empty on one or more of the nodes",
+                         reason)
+        self.assertIn("Each of the 4 processes", self.text("#cj-table .diag"))
+        self.assertIn("1 compound got no topology with this force field: water.",
+                      self.text("#cj-table .diag"))
+        lines = self.browser.execute_script(
+            "return [...document.querySelectorAll('#cj-table .diag-lines li')]"
+            ".map(li => li.textContent)")
+        self.assertEqual("slurm.out:2Fatal: Training set is empty on one or more of the nodes×4",
+                         lines[0])
+        self.shot("35-cluster-failed")
+
+        # The output, at the line that tells
+        self.click('#cj-table .diag-lines button[data-line="2"]')
+        self.wait(lambda b: b.find_element(By.ID, "cj-viewer").is_displayed())
+        self.assertEqual("failing-1 · slurm.out", self.text("#cj-paneltitle"))
+        marked = self.browser.execute_script(
+            "return [...document.querySelectorAll('#cj-view mark')].map(m => [m.dataset.line, "
+            "m.className])")
+        self.assertIn(["2", "here"], marked)
+        self.assertIn(["1", ""], marked)
+        self.shot("35b-cluster-output")
+        files = self.browser.execute_script(
+            "return [...document.querySelectorAll('#cj-viewfiles button')].map(b => b.textContent)")
+        self.assertIn("job.sh", files)
+        self.click('#cj-viewfiles button[data-v="job.sh"]')
+        self.wait(lambda b: "#SBATCH -n 4" in b.find_element(By.ID, "cj-view").get_attribute("textContent"))
+        self.assertEqual("failing-1 · job.sh", self.text("#cj-paneltitle"))
+
+        # Sent again with one process: the files are copied on the cluster
+        fail.unlink()
+        logins = len(self.cluster.calls())
+        self.click('#cj-table .diag button[data-act="again"]')
+        self.wait(lambda b: b.find_element(By.ID, "cj-again").is_displayed())
+        self.assertFalse(self.browser.find_element(By.ID, "cj-viewer").is_displayed())
+        self.assertEqual("4", self.browser.find_element(By.ID, "cj-again-tasks").get_attribute("value"))
+        self.assertIn("fewer processes", self.text("#cj-againnote"))
+        box = self.browser.find_element(By.ID, "cj-again-tasks")
+        box.clear()
+        box.send_keys("1")
+        self.click("#cj-again-show")
+        self.wait(lambda b: b.find_element(By.ID, "cj-again-job").is_displayed())
+        self.assertEqual("failing-1-r2", self.browser.find_element(
+            By.ID, "cj-again-name").get_attribute("value"))
+        self.assertIn("#SBATCH -n 1", self.text("#cj-again-script"))
+        rows = self.browser.execute_script(
+            "return [...document.querySelectorAll('#cj-again-files tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertEqual([["ff.xml", "copied from failing-1"], ["mp.xml", "copied from failing-1"],
+                          ["selection.dat", "copied from failing-1"]], rows)
+        self.assertEqual(logins, len(self.cluster.calls()))
+        self.shot("36-cluster-again")
+        self.click("#cj-again-send")
+        self.wait(lambda b: state("failing-1-r2") == "Waiting")
+        self.assertEqual("", self.errors())
+        self.assertFalse(self.browser.find_element(By.ID, "cj-panel").is_displayed())
+        self.assertEqual(logins + 1, len(self.cluster.calls()))
+        remote = self.cluster.dir / "home" / "act" / "jobs" / "failing-1-r2"
+        self.assertEqual("0\n", (remote / "act-exit-status").read_text())
+        self.assertEqual((remote.parent / "failing-1" / "mp.xml").read_bytes(),
+                         (remote / "mp.xml").read_bytes())
+        self.click('#nav button[data-view="settings"]')
+        self.click("#cl-forget")
+
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_c_training_on_the_cluster(self):
         """!
