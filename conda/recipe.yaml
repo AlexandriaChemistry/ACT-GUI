@@ -11,7 +11,7 @@
 # checks that the version below is the one in act_gui/__init__.py.
 
 context:
-  version: "0.1.0.dev0"
+  version: "1.95b"
   # The oldest Python for which there is an alexandria-python
   python_min: "3.11"
 
