@@ -1077,6 +1077,8 @@ class PageTest(unittest.TestCase):
         self.assertEqual("Valid", self.text("#mpw-vpill"))
         self.assertEqual("3 compounds", self.text("#mpw-count"))
         self.assertIn("InteractionEnergy", self.text("#mpw-props"))
+        self.assertEqual("Valid", self.text("#mpw-vpill"))
+        self.assertTrue(self.browser.find_element(By.ID, "mpw-pickhint").is_displayed())
         rows = self.browser.find_elements(By.CSS_SELECTOR, "#mpw-table tbody tr")
         self.assertEqual(3, len(rows))
         self.assertIn("1-propanol#ethane", rows[0].text)
@@ -1086,7 +1088,26 @@ class PageTest(unittest.TestCase):
         self.assertEqual("1-propanol#ethane", self.text("#mpw-dname"))
         self.assertEqual(2, len(self.browser.find_elements(By.CSS_SELECTOR, "#mpw-dfrag tbody tr")))
         self.assertIn("InChI=1S/C2H6", self.text("#mpw-dfrag"))
+        self.assertFalse(self.browser.find_element(By.ID, "mpw-pickhint").is_displayed())
         self.shot("20-molprop")
+        # The details are under the table, not next to it
+        table = self.browser.find_element(By.ID, "mpw-table").rect
+        detail = self.browser.find_element(By.ID, "mpw-detail").rect
+        self.assertGreater(detail["y"], table["y"] + table["height"] - 1)
+        self.assertLess(abs(detail["x"] - table["x"]), 40)
+        self.click("#mpw-dclose")
+        self.assertFalse(self.browser.find_element(By.ID, "mpw-detail").is_displayed())
+        self.assertTrue(self.browser.find_element(By.ID, "mpw-pickhint").is_displayed())
+        self.assertEqual(0, len(self.browser.find_elements(By.CSS_SELECTOR, "#mpw-table tr.sel")))
+        # A property shows the compounds that have it, and again all of them
+        chip = '#mpw-props button[data-prop="InteractionEnergy"]'
+        self.click(chip)
+        self.assertEqual("true", self.browser.find_element(By.CSS_SELECTOR, chip).get_attribute("aria-pressed"))
+        self.assertEqual("InteractionEnergy", self.browser.find_element(By.ID, "mpw-prop").get_attribute("value"))
+        self.assertEqual(3, len(self.browser.find_elements(By.CSS_SELECTOR, "#mpw-table tbody tr")))
+        self.click(chip)
+        self.assertEqual("", self.browser.find_element(By.ID, "mpw-prop").get_attribute("value"))
+        self.assertEqual("false", self.browser.find_element(By.CSS_SELECTOR, chip).get_attribute("aria-pressed"))
         # Finding a compound
         box = self.browser.find_element(By.ID, "mpw-search")
         box.send_keys("no such compound")

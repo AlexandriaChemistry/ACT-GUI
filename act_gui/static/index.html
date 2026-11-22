@@ -395,8 +395,17 @@
       </div>
     </div>
     <div class="cols side-right" id="mpw-content" hidden>
+      <div class="facts" id="mpw-facts" hidden>
+        <div class="fact"><div class="row tight"><span class="lab">Validation</span><span class="pill" id="mpw-vpill" hidden></span></div>
+          <div class="scroll flat maxh250"><ul class="list" id="mpw-vlist"></ul></div>
+          <p class="muted fine">Checked: every calculation of a compound has the same atoms in the same order, and the compounds of a dimer are in the same order everywhere.</p></div>
+        <div class="fact"><span class="lab">Properties in the file</span>
+          <div class="chips" id="mpw-props"></div>
+          <p class="muted fine">The number of values of each. Click one to see only the compounds that have it.</p></div>
+      </div>
       <div class="card"><div class="head"><h2>Compounds</h2><span class="muted" id="mpw-count"></span><span class="spacer"></span>
           <div class="field"><select id="mpw-prop" aria-label="Show the compounds with data for a property"><option value="">All compounds</option></select></div>
+      <div class="stack">
           <div class="field"><input type="text" id="mpw-search" placeholder="Find name or formula" aria-label="Find a compound" spellcheck="false" autocomplete="off"></div></div>
         <div class="setbar" id="mpw-setbar"><span class="muted fine" id="mpw-sets"></span><span class="spacer"></span>
           <span class="muted fine">Use the compounds in the table for</span>
@@ -404,11 +413,15 @@
           <button class="btn small" type="button" data-set="test">Testing</button>
           <button class="btn small" type="button" data-set="ignore">Nothing</button></div>
         <div class="scroll flat maxh560"><table class="data" id="mpw-table"></table></div>
-        <p class="empty pad" id="mpw-empty" hidden>No compound with this text.</p></div>
+        <p class="empty pad" id="mpw-empty" hidden>No compound with this text.</p>
+        <p class="muted fine pad tight" id="mpw-pickhint">Click a compound to see its details here.</p></div>
+        <div class="card" id="mpw-detail" hidden><div class="head"><h2 id="mpw-dname"></h2><span class="spacer"></span>
+            <button class="btn small" id="mpw-dclose" type="button">Close</button></div>
+          <div class="body"><div class="chips" id="mpw-dchips"></div>
+            <div class="pair"><div class="xscroll"><table class="data" id="mpw-dfrag"></table></div>
+              <div class="xscroll"><table class="data" id="mpw-dprop"></table></div></div></div></div>
+      </div>
       <div class="stack">
-        <div class="card"><div class="head"><h2>Validation</h2><span class="spacer"></span><span class="pill" id="mpw-vpill" hidden></span></div>
-          <div class="body"><ul class="list" id="mpw-vlist"></ul>
-            <p class="muted fine">Checked: every calculation of a compound has the same atoms in the same order, and the compounds of a dimer are in the same order everywhere.</p></div></div>
         <div class="card" id="sel-card"><div class="head"><h2>Selection file</h2><span class="spacer"></span>
             <span class="row tight"><button class="btn small" id="sel-open" type="button">Open…</button>
               <button class="btn small primary" id="sel-save" type="button">Save</button></span>
@@ -430,12 +443,6 @@
               <button class="btn small" id="sel-draw" type="button" title="Use this part of the ticked compounds for testing, drawn at random, and the others for training">Draw at random</button>
               <button class="btn small" id="sel-clear" type="button" title="Use all ticked compounds for training, none for testing">None</button></div>
           </div></div>
-        <div class="card" id="mpw-detail" hidden><div class="head"><h2 id="mpw-dname"></h2></div>
-          <div class="body"><div class="chips" id="mpw-dchips"></div>
-            <div class="xscroll"><table class="data" id="mpw-dfrag"></table></div>
-            <div class="xscroll"><table class="data" id="mpw-dprop"></table></div></div></div>
-        <div class="card"><div class="head"><h2>Properties in the file</h2></div>
-          <div class="scroll flat maxh380"><table class="data" id="mpw-props"></table></div></div>
       </div>
     </div>
     <div class="card" id="ev-card" hidden>

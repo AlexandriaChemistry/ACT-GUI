@@ -238,6 +238,16 @@ table.data tr.off td:first-child { color: var(--ink); }
 #ev-result .plot { margin-inline: auto; width: 100%; max-width: 600px; }
 
 /* ---------- virtual sites ---------- */
+/* The validation and the properties of a file, next to each other under its name */
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 14px 28px;
+  padding: 14px 16px 16px; border-top: 1px solid var(--line); }
+.fact { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.fact .fine { margin-top: 0; }
+.fact .scroll { max-height: 250px; }
+/* The fragments and the properties of a compound, next to each other where there is room */
+.pair { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+@media (max-width: 760px) { .pair { grid-template-columns: minmax(0, 1fr); } }
+.pad.tight { padding-block: 8px 12px; margin: 0; }
 .stage.square { height: clamp(300px, 48vh, 480px); border-radius: 0; }
 .maxh200 { max-height: 200px; }
 .vsparam { display: grid; grid-template-columns: minmax(0, 7em) minmax(0, 1fr) auto auto; gap: 8px 12px; align-items: end; }

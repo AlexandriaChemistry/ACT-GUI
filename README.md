@@ -103,7 +103,10 @@ the molecule workspace can use for its calculations.
 The molprop workspace opens a molprop file and shows what is in it: the
 compounds with their formula, the compounds they consist of, the number of
 calculations and the methods, the number of values of each property, and
-the result of the validation of `alexandria edit_mp -validate`. A click on
+the result of the validation of `alexandria edit_mp -validate`. The
+validation and the properties are shown under the name of the file; a
+click on a property shows only the compounds that have it, and a click on
+a compound shows its details under the table. A click on
 the header of a column sorts the table by it, a second click the other way
 around and a third gives the order of the file again. Calculations that are
 in the file twice with the same results, which `train_ff` uses once, are
