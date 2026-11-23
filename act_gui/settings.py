@@ -24,18 +24,25 @@ from . import library
 PACKAGE_DIR = Path(__file__).resolve().parent
 
 
-def _default_forcefield() -> Path:
+## The installed force field that is used when the user gives none, see
+## library. A test force field of ACT until the new default force field
+## exists; changing the default means changing this one place.
+DEFAULT_LIBRARY_ID = "Alexandria/ACS-pg1"
+
+
+def find_default_forcefield(dirs: List[Path]) -> Optional[Path]:
     """!
     @brief The force field that is used when the user gives none.
+    @param dirs The directories of the installed force fields.
     @return The file named by the environment variable ACT_GUI_FORCEFIELD if
-    it is set, otherwise the force field in the data of the package. This
-    is a test force field of ACT until the new default force field exists;
-    changing the default means changing this one place.
+    it is set, otherwise the installed force field DEFAULT_LIBRARY_ID, None
+    if that is not installed.
     """
     env = os.environ.get("ACT_GUI_FORCEFIELD")
     if env:
         return Path(env)
-    return PACKAGE_DIR / "data" / "forcefields" / "ACS-pg1.xml"
+    found = library.find(dirs, DEFAULT_LIBRARY_ID)
+    return found.path if found is not None else None
 
 
 @dataclass
@@ -52,8 +59,9 @@ class Settings:
     mode: str = "desktop"
     ## The secret that the browser must present, made at start-up
     token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
-    ## The force field that is used when the user gives none
-    default_forcefield: Path = field(default_factory=_default_forcefield)
+    ## The force field that is used when the user gives none, see
+    ## find_default_forcefield. None if there is none.
+    default_forcefield: Optional[Path] = None
     ## What the interface calls the default force field
     default_forcefield_label: str = "ACS-pg1 (test force field, polarizable)"
     ## The directories with the force fields that can be chosen, see
@@ -102,10 +110,13 @@ class Settings:
         @throws ValueError for an unknown mode.
         """
         self.data_dir = Path(self.data_dir).expanduser().resolve()
-        self.default_forcefield = Path(self.default_forcefield).expanduser()
         if self.forcefield_dirs is None:
             self.forcefield_dirs = library.default_dirs()
         self.forcefield_dirs = [Path(d).expanduser() for d in self.forcefield_dirs]
+        if self.default_forcefield is None:
+            self.default_forcefield = find_default_forcefield(self.forcefield_dirs)
+        if self.default_forcefield is not None:
+            self.default_forcefield = Path(self.default_forcefield).expanduser()
         if self.config_file is not None:
             self.config_file = Path(self.config_file).expanduser()
         if self.cluster_jobs_dir is None:

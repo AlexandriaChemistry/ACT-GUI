@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from act_gui import library
 from act_gui.app import TOKEN_HEADER, create_app
-from act_gui.settings import Settings
+from act_gui.settings import DEFAULT_LIBRARY_ID, Settings
 from tests.test_api import fake_program_info
 from tests.test_jobs import FakeRun
 from tests.test_uploads import FF
@@ -198,6 +198,77 @@ class LibraryApiTest(unittest.TestCase):
             self.assertEqual(400, answer.status_code, ref)
             self.assertTrue(answer.json()["detail"])
         self.assertEqual([], self.run.calls)
+
+
+
+class DefaultForceFieldTest(unittest.TestCase):
+    """!
+    @brief The default force field is an installed one.
+    """
+
+    def setUp(self):
+        """!
+        @brief A library with the default force field and one without.
+        """
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.lib = self.dir / "with"
+        write(self.lib / (DEFAULT_LIBRARY_ID + ".xml"), forcefield())
+        self.empty = self.dir / "without"
+        write(self.empty / "Water" / "SPC.xml", forcefield())
+
+    def tearDown(self):
+        """!
+        @brief Remove the files.
+        """
+        self._tmp.cleanup()
+
+    def settings(self, dirs):
+        """!
+        @brief Settings without ACT_GUI_FORCEFIELD.
+        @param dirs The directories of the library.
+        @return The settings.
+        """
+        env = {k: v for k, v in os.environ.items() if k != "ACT_GUI_FORCEFIELD"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            return Settings(data_dir=self.dir / "data", token="t", forcefield_dirs=dirs)
+
+    def test_from_the_library(self):
+        """!
+        @brief The default is found in the library, the environment variable comes first.
+        """
+        self.assertEqual(self.lib / (DEFAULT_LIBRARY_ID + ".xml"),
+                         self.settings([self.empty, self.lib]).default_forcefield)
+        own = self.dir / "own.xml"
+        with mock.patch.dict(os.environ, {"ACT_GUI_FORCEFIELD": str(own)}):
+            self.assertEqual(own, Settings(data_dir=self.dir / "data",
+                                           forcefield_dirs=[self.lib]).default_forcefield)
+
+    def test_without_default(self):
+        """!
+        @brief Without the default installed the page is told so, and a
+        request that needs the default is refused, others work.
+        """
+        settings = self.settings([self.empty])
+        self.assertIsNone(settings.default_forcefield)
+        run = FakeRun()
+        app = create_app(settings, run=run, program_info=fake_program_info)
+        try:
+            client = TestClient(app)
+            headers = {TOKEN_HEADER: "t"}
+            session = client.get("/api/session", headers=headers).json()
+            self.assertIs(False, session["has_default_forcefield"])
+            answer = client.post("/api/jobs", headers=headers, json={
+                "task": "minimize", "molecule": {"smiles": "O"}})
+            self.assertEqual(400, answer.status_code)
+            self.assertIn("no default force field", answer.json()["detail"])
+            answer = client.post("/api/jobs", headers=headers, json={
+                "task": "minimize", "molecule": {"smiles": "O"},
+                "forcefield": {"library": "Water/SPC"}})
+            self.assertEqual(200, answer.status_code, answer.text)
+        finally:
+            run.release.set()
+            app.state.jobs.shutdown()
 
 
 if __name__ == "__main__":

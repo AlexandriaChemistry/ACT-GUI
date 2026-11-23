@@ -443,7 +443,9 @@ for OpenMM when OpenMM and ACT-utilities are installed. The tests in
 with the real program; with `ACT_GUI_SHOTS` set to a directory they save
 pictures of the page there. With `ACT_TESTDATA` set to the directory
 `src/act/testdata` of the source of ACT, the tests that need a molprop file
-run as well.
+run as well. The tests with the real program use the default force field,
+see below, or else `forcefields/ACS-pg1.xml` of `ACT_TESTDATA`, and are
+skipped without either.
 
 ## The atom types and virtual sites of the generator
 
@@ -461,10 +463,14 @@ made from `docs/act_logo.png` of ACT.
 
 ## The default force field
 
-`act_gui/data/forcefields/ACS-pg1.xml` is a test force field of ACT, a copy
-of `src/act/testdata/forcefields/ACS-pg1.xml`. It is used until the new
-default force field of ACT exists. The environment variable
-`ACT_GUI_FORCEFIELD` selects another file.
+The default force field is the installed force field `Alexandria/ACS-pg1`
+(see *Installed force fields*), which the package `forcefields` has, or the
+file of the environment variable `ACT_GUI_FORCEFIELD`. It is a test force
+field of ACT, the same as `src/act/testdata/forcefields/ACS-pg1.xml`, used
+until the new default force field of ACT exists; `DEFAULT_LIBRARY_ID` in
+`act_gui/settings.py` names it. Without it the server still starts: the
+page offers the installed force fields and files of the user, and says
+that the default is not installed.
 
 Its missing bonds, angles, linear angles and dihedrals were filled in with
 `admin/fill_forcefield.py` of ACT, so that it describes many more small

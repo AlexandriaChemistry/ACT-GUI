@@ -57,6 +57,8 @@ class PageTest(unittest.TestCase):
         import uvicorn  # pylint: disable=import-outside-toplevel
         from act_gui.app import create_app  # pylint: disable=import-outside-toplevel
         from act_gui.settings import Settings  # pylint: disable=import-outside-toplevel
+        from tests.test_alexandria import require_forcefield  # pylint: disable=import-outside-toplevel
+        forcefield = require_forcefield()
         cls._executable = act.config.executable
         act.config.executable = ALEXANDRIA
         cls._tmp = tempfile.TemporaryDirectory()
@@ -66,7 +68,7 @@ class PageTest(unittest.TestCase):
         cls.cluster = FakeServer(Path(cls._tmp.name) / "cluster")
         cls.config = Path(cls._tmp.name) / "config" / "settings.json"
         cls.settings = Settings(data_dir=Path(cls._tmp.name), token="e2e-token",
-                                config_file=cls.config,
+                                config_file=cls.config, default_forcefield=forcefield,
                                 ssh_program=str(cls.cluster.program))
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))

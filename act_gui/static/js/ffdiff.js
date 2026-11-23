@@ -15,7 +15,7 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, addLibrary, alertBox, el, libraryChoice, num, pill, runTask, upload } from "./common.js";
+import { $, addLibrary, withoutDefault, alertBox, el, libraryChoice, num, pill, runTask, upload } from "./common.js";
 
 /** What the comparison knows. */
 const state = {
@@ -169,6 +169,7 @@ export function startDiff(current, told) {
   state.told = told;
   $('#fd-other option[value="default"]').textContent = told.default_forcefield;
   addLibrary($("#fd-other"), told.forcefields);
+  withoutDefault($("#fd-other"), told);
   // A file of the user, chosen with a button: a choice in the list cannot
   // open the file chooser in every browser
   $("#fd-open").onclick = () => $("#fd-file").click();

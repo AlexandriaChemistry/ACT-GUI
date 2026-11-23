@@ -361,6 +361,9 @@ def _forcefield(reference: Any, settings: Settings, uploads: UploadStore,
         return path
     if not default and reference.get("default") is not True:
         raise RequestError("The request has no force field")
+    if settings.default_forcefield is None:
+        raise RequestError("There is no default force field: choose one, or install the "
+                           "force fields of ACT (the conda package forcefields)")
     return settings.default_forcefield
 
 

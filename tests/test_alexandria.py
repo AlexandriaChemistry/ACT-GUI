@@ -21,13 +21,41 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from act_gui import library
 from act_gui.app import TOKEN_HEADER, create_app
-from act_gui.settings import Settings
+from act_gui.settings import Settings, find_default_forcefield
 
 ## The program, if it is given
 ALEXANDRIA = os.environ.get("ACT_ALEXANDRIA", "")
 ## The directory src/act/testdata of the source of ACT, if it is given
 TESTDATA = os.environ.get("ACT_TESTDATA", "")
+
+
+def real_forcefield():
+    """!
+    @brief The default force field for the tests with the real program.
+    @return The one the interface uses, see find_default_forcefield, or
+    else the same force field in the test data of ACT, None if neither is
+    there.
+    """
+    found = find_default_forcefield(library.default_dirs())
+    if found is None and TESTDATA:
+        candidate = Path(TESTDATA) / "forcefields" / "ACS-pg1.xml"
+        found = candidate if candidate.is_file() else None
+    return found
+
+
+def require_forcefield():
+    """!
+    @brief The default force field for the tests with the real program.
+    @return The file.
+    @throws unittest.SkipTest if there is none.
+    """
+    found = real_forcefield()
+    if found is None:
+        raise unittest.SkipTest("No default force field: install the force fields of ACT, "
+                                "or set ACT_GUI_FORCEFIELD or ACT_TESTDATA")
+    return found
 
 
 @unittest.skipUnless(ALEXANDRIA, "ACT_ALEXANDRIA is not set")
@@ -42,10 +70,12 @@ class RealProgramTest(unittest.TestCase):
         @brief Make an application that runs the real program.
         """
         import act  # pylint: disable=import-outside-toplevel
+        forcefield = require_forcefield()
         cls._executable = act.config.executable
         act.config.executable = ALEXANDRIA
         cls._tmp = tempfile.TemporaryDirectory()
-        cls.settings = Settings(data_dir=Path(cls._tmp.name), token="t")
+        cls.settings = Settings(data_dir=Path(cls._tmp.name), token="t",
+                                default_forcefield=forcefield)
         cls.app = create_app(cls.settings)
         cls.client = TestClient(cls.app)
         cls.headers = {TOKEN_HEADER: "t"}
@@ -571,7 +601,8 @@ class RealProgramTest(unittest.TestCase):
             self.skipTest("This alexandria has no train_ff -maxh")
         # Calculations of eight seconds at most, of which a training gets half
         with tempfile.TemporaryDirectory() as tmp:
-            app = create_app(Settings(data_dir=Path(tmp), token="t", job_timeout=8.0))
+            app = create_app(Settings(data_dir=Path(tmp), token="t", job_timeout=8.0,
+                                      default_forcefield=self.settings.default_forcefield))
             client = TestClient(app)
             try:
                 def send(directory, name, kind):
