@@ -94,7 +94,17 @@ there or opened from a file:
   of the bond lengths, angles and dihedrals are shown, one type at a
   time; a click on a bar lists from which compounds, calculations and
   atoms its values come (`geometry_ff -samples`), to understand odd
-  values.
+  values. The bond lengths and angles of each type are also tested for a
+  normal distribution (`geometry_ff -analyse`, the Anderson-Darling test
+  at a significance level of 0.01): the card *What was extracted* tells
+  how many types of each kind were tested, how many are not normal and
+  how many are wide (a sigma above the tolerance of `-bond_tol` or
+  `-angle_tol`), and lists the types with a warning with their p-value,
+  skewness and kurtosis. A click on one shows its histogram, which says
+  the same; the list of types marks them. A type that is not normal may
+  cover different kinds of bonds or angles, or have structures that are
+  off. An `alexandria` without `-analyse` extracts the geometries without
+  this, and the page says so.
 - *Edit and validate* lists the parameters with their value, bounds and
   mutability, changes them with `alexandria edit_ff`, and shows the
   problems that `edit_ff -validate` finds, with a button to write the force

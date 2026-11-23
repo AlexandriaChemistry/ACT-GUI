@@ -330,8 +330,17 @@
       <div class="card"><div class="head"><h2>What was extracted</h2><span class="spacer"></span>
           <button class="btn small" id="geo-log" type="button" hidden>Save log file</button></div>
         <div class="body"><p class="empty" id="geo-empty">Nothing yet. Choose a molprop file with the compounds, with a force field in this workspace.</p>
-          <div class="stats" id="geo-stats" hidden><div class="stat"><span class="lab">Compounds used</span><span class="v" id="geo-ncomp">–</span></div></div>
-          <div class="xscroll"><table class="data" id="geo-table"></table></div></div></div>
+          <div class="stats" id="geo-stats" hidden><div class="stat"><span class="lab">Compounds used</span><span class="v" id="geo-ncomp">–</span></div>
+            <div class="stat" id="geo-nnotnormal-stat" hidden><span class="lab">Types not normally distributed</span><span class="v" id="geo-nnotnormal">–</span></div>
+            <div class="stat" id="geo-nwide-stat" hidden><span class="lab">Types with a wide distribution</span><span class="v" id="geo-nwide">–</span></div></div>
+          <div class="xscroll"><table class="data" id="geo-table"></table></div>
+          <div id="geo-analysis" hidden>
+            <h3 class="mt8">Distributions of the bond lengths and angles</h3>
+            <p class="muted fine" id="geo-ananote"></p>
+            <div class="xscroll"><table class="data" id="geo-anatable"></table></div>
+            <div class="scroll flat maxh380 mt8"><table class="data" id="geo-warnings"></table></div>
+            <p class="muted fine" id="geo-warnnote"></p>
+          </div></div></div>
       <div class="card span-all" id="geo-hist" hidden>
         <div class="head"><h2>Histograms</h2><span class="spacer"></span>
           <div class="field"><select id="geo-htype" aria-label="Kind of geometry"></select></div>

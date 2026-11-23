@@ -1042,6 +1042,27 @@ class PageTest(unittest.TestCase):
         self.assertEqual("3", self.text("#geo-ncomp"))
         self.assertIn("BONDS", self.text("#geo-table"))
         self.assertIn("(1 change)", self.text("#ffchips"))
+        # The distributions of the bond lengths and angles: how many types
+        # of each kind are not normal or wide, and those with a warning
+        self.assertTrue(self.browser.find_element(By.ID, "geo-analysis").is_displayed())
+        self.assertIn("Anderson-Darling test, significance level 0.01", self.text("#geo-ananote"))
+        kinds = self.browser.execute_script(
+            "return [...document.querySelectorAll('#geo-anatable tbody tr')]"
+            ".map(r => [...r.cells].map(c => c.textContent))")
+        self.assertEqual(["Bond lengths", "Angles"], [row[0] for row in kinds[:2]])
+        failed = sum(int(row[3]) for row in kinds)
+        self.assertEqual(str(failed), self.text("#geo-nnotnormal"))
+        self.assertEqual(str(sum(int(row[4]) for row in kinds)), self.text("#geo-nwide"))
+        self.assertGreater(sum(int(row[2]) for row in kinds), 0)
+        self.assertEqual("8 pm", kinds[0][5])
+        # These few compounds give no warning
+        self.assertEqual(0, failed)
+        self.assertIn("No warnings: none of the %d types that were tested" % sum(int(row[2]) for row in kinds),
+                      self.text("#geo-warnnote"))
+        self.assertEqual([], self.browser.find_elements(By.CSS_SELECTOR, "#geo-warnings tbody tr"))
+        self.browser.execute_script("document.getElementById('geo-analysis').scrollIntoView()")
+        self.shot("15b-ff-geometry-analysis")
+        self.browser.execute_script("window.scrollTo(0, 0)")
         self.shot("15-ff-geometry")
         # The bond lengths are those of the compounds, and with SQE the
         # electronegativity of hydrogen is fixed
@@ -1079,6 +1100,77 @@ class PageTest(unittest.TestCase):
     # --- the molprop workspace ---
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+
+    def test_7b_bond_type_that_is_not_normal(self):
+        """!
+        @brief A bond type of which the values are not normally distributed
+        is listed with its p-value, skewness and kurtosis; a click shows its
+        histogram, which says the same. The compounds of the test give no
+        such type, so the result of the server is changed on its way to
+        the page: one bond type that was tested is said to be not normal
+        and wide.
+        """
+        data = Path(TESTDATA)
+        self.open_force_fields()
+        self.click('#fftabs button[data-tab="geom"]')
+        self.browser.find_element(By.ID, "ff-openfile").send_keys(
+            str(data / "forcefields" / "ACS-g1.xml"))
+        self.wait(lambda b: "ACS-g1.xml" in b.find_element(By.ID, "ffchips").text)
+        self.browser.find_element(By.ID, "mp-file").send_keys(str(data / "molprop" / "molprop.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "mp-name").text == "molprop.xml")
+        self.browser.execute_script("""
+            const send = window.fetch;
+            window.fetch = async (url, init) => {
+              const answer = await send(url, init);
+              if (!/\\/api\\/jobs\\/[0-9a-f]+$/.test(new URL(String(url)).pathname)) return answer;
+              const job = await answer.clone().json();
+              if (job.task !== "geometry_ff" || !job.result || !job.result.analysis) return answer;
+              const type = job.result.histograms.BONDS.find(h => h.analysis && h.analysis.tested);
+              Object.assign(type.analysis, { normal: false, wide: true, pvalue: 2.7e-6, skewness: 0.01, kurtosis: -1.99 });
+              job.result.analysis.kinds.BONDS.not_normal += 1;
+              job.result.analysis.kinds.BONDS.wide += 1;
+              window.changedType = type.identifier;
+              return new Response(JSON.stringify(job), { status: 200, headers: { "Content-Type": "application/json" } });
+            };""")
+        self.click("#run-geo")
+        self.wait(lambda b: b.find_element(By.ID, "geo-pill").text == "Done")
+        self.assertEqual("", self.errors())
+        changed = self.browser.execute_script("return window.changedType")
+        self.assertTrue(changed)
+        self.assertEqual(("1", "1"), (self.text("#geo-nnotnormal"), self.text("#geo-nwide")))
+        warned = self.browser.execute_script(
+            "return [...document.querySelectorAll('#geo-warnings tbody tr')]"
+            ".map(r => [r.dataset.kind, r.dataset.id].concat([...r.cells].map(c => c.textContent)))")
+        self.assertEqual(1, len(warned))
+        kind, identifier, shown, kindname, _values, _average, _sigma, pvalue, skewness, kurtosis, warning = warned[0]
+        self.assertEqual(("BONDS", changed, changed, "Bond lengths"), (kind, identifier, shown, kindname))
+        self.assertEqual(("2.7e-6", "0.01", "−1.99"), (pvalue, skewness, kurtosis))
+        self.assertEqual("not normal wide", warning)
+        self.assertIn("1 type with a warning", self.text("#geo-warnnote"))
+        self.browser.execute_script("document.getElementById('geo-analysis').scrollIntoView()")
+        self.shot("15c-ff-geometry-not-normal")
+        # Its histogram says the same, and the list of types marks it
+        self.click("#geo-warnings tbody tr td")
+        self.wait(lambda b: "Not a normal distribution (p 2.7e-6, skewness 0.01, kurtosis −1.99), and sigma is above the tolerance."
+                  in b.find_element(By.ID, "geo-histnote").text)
+        self.assertEqual(changed, self.browser.find_element(By.ID, "geo-hid").get_attribute("value"))
+        chosen = Select(self.browser.find_element(By.ID, "geo-hid")).first_selected_option.text
+        self.assertTrue(chosen.endswith(" · not normal · wide"), chosen)
+        # A type that passed says so, one with few values that it was not tested
+        notes = set()
+        for option in Select(self.browser.find_element(By.ID, "geo-hid")).options:
+            if option.get_attribute("value") == changed:
+                continue
+            Select(self.browser.find_element(By.ID, "geo-hid")).select_by_value(option.get_attribute("value"))
+            self.wait(lambda b: option.get_attribute("value") in b.find_element(By.ID, "geo-histnote").text
+                      or "values in bins" in b.find_element(By.ID, "geo-histnote").text)
+            time.sleep(0.2)
+            note = self.text("#geo-histnote")
+            notes.add("not tested" if "Not tested for a normal distribution" in note
+                      else "passed" if "A normal distribution is not rejected (p " in note else note)
+        self.assertEqual({"not tested"}, notes - {"passed"})
+        self.assertEqual("", self.errors())
+
     def test_8_molprop_file(self):
         """!
         @brief A molprop file is opened: what is in it, the details of a

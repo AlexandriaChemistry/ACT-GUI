@@ -497,6 +497,9 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             # instead of being stopped without them, if the program can
             limit = settings.job_timeout if seconds is None else seconds
             command = info.commands.get(task.command) if info is not None else None
+            for name, value in task.optional.items():
+                if command is not None and command.has_option(name):
+                    prepared.options[name] = value
             if task.name == "train" and limit and limit > 0 and command is not None \
                     and command.has_option("maxh"):
                 prepared.options["maxh"] = training.max_hours(limit)

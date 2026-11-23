@@ -37,7 +37,7 @@ const state = {
   filter: "",          // the interaction of which the parameters are listed
   query: "",           // the text that identifiers must contain
   picked: null,        // the parameter that is being changed: { interaction, identifier, param }
-  hist: null,          // the histograms of geometry_ff: { job, summary, data, marked }
+  hist: null,          // the histograms of geometry_ff: { job, summary, analysis, data, marked }
   fixed: [],           // the files with fixed parameters: { name, entries }
 };
 
@@ -432,6 +432,108 @@ function extracted(job) {
   }
   table.append(body);
   $("#geo-log").hidden = !job.files.includes("g");
+  analysed(job);
+}
+
+/** The kinds of geometry of which the distributions are analysed, in the order of the page. */
+const ANALYSED_KINDS = ["BONDS", "ANGLES", "LINEAR_ANGLES"];
+
+/**
+ * A p-value as text.
+ * @param {number} p The p-value; zero stands for less than 1e-30.
+ * @returns {string} The text.
+ */
+const pText = p => (p > 0 ? (p < 1e-4 ? p.toExponential(1) : num(p, 2)) : "< 1e-30");
+
+/**
+ * A skewness or kurtosis as text, with two decimals.
+ * @param {number} value The number, or nothing.
+ * @returns {string} The text, a dash without a number.
+ */
+const shapeText = value => (typeof value === "number" ? value.toFixed(2).replace("-", "−") : "–");
+
+/**
+ * What the analysis found for one type, in words.
+ * @param {object} found  What geometry_ff -analyse says about the type.
+ * @param {object} told   The analysis as a whole: the test and its settings.
+ * @returns {string} A sentence, empty without an analysis.
+ */
+function verdict(found, told) {
+  if (!found || !told) return "";
+  const shape = `skewness ${shapeText(found.skewness)}, kurtosis ${shapeText(found.kurtosis)}`;
+  const normal = !found.tested ? "Not tested for a normal distribution" + (found.sigma > 0 ? "" : ": its values are all the same")
+    : found.normal ? `A normal distribution is not rejected (p ${pText(found.pvalue)}, ${shape})`
+    : `Not a normal distribution (p ${pText(found.pvalue)}, ${shape})`;
+  return normal + (found.wide ? ", and sigma is above the tolerance." : ".");
+}
+
+/**
+ * Show what geometry_ff -analyse found: how many types of each kind are not
+ * normally distributed or wide, and the types with a warning.
+ * @param {object} job The calculation.
+ */
+function analysed(job) {
+  const told = job.result.analysis, histograms = job.result.histograms || {};
+  $("#geo-analysis").hidden = false;
+  $("#geo-anatable").textContent = ""; $("#geo-warnings").textContent = ""; $("#geo-warnnote").textContent = "";
+  $("#geo-nnotnormal-stat").hidden = $("#geo-nwide-stat").hidden = !told;
+  if (!told) {
+    $("#geo-ananote").textContent = "This alexandria does not test whether the bond lengths and angles are normally distributed (geometry_ff -analyse): install a newer version of ACT.";
+    return;
+  }
+  const kinds = ANALYSED_KINDS.filter(kind => told.kinds[kind]);
+  const total = key => kinds.reduce((sum, kind) => sum + (told.kinds[kind][key] || 0), 0);
+  $("#geo-nnotnormal").textContent = String(total("not_normal"));
+  $("#geo-nwide").textContent = String(total("wide"));
+  $("#geo-ananote").textContent = `Each bond and angle type with at least ${told.minimum} values was tested for a normal distribution (${told.test} test, significance level ${told.alpha}). `
+    + "Values that are not normally distributed can mean that a type covers different kinds of bonds or angles, or that structures are off. "
+    + "With thousands of values the test finds small deviations as well: the skewness and the kurtosis tell how large they are. A distribution is wide if its sigma is above the tolerance.";
+  $("#geo-anatable").append(el("thead", {}, el("tr", {}, el("th", {}, "Kind"), el("th", { class: "n" }, "Types"), el("th", { class: "n" }, "Tested"),
+      el("th", { class: "n" }, "Not normal"), el("th", { class: "n" }, "Wide"), el("th", { class: "n" }, "Tolerance for sigma"))),
+    el("tbody", {}, ...kinds.map(kind => {
+      const k = told.kinds[kind], unit = k.unit === "degree" ? "°" : ` ${k.unit}`;
+      return el("tr", {}, el("td", {}, GEOMETRY_KINDS[kind] || kind), el("td", { class: "n" }, String(k.distributions)), el("td", { class: "n" }, String(k.tested)),
+        el("td", { class: "n" }, String(k.not_normal)), el("td", { class: "n" }, String(k.wide)), el("td", { class: "n" }, `${k.tolerance}${unit}`));
+    })));
+  // The types with a warning: those that are not normal first, the lowest p-value first
+  const warned = [];
+  for (const kind of kinds) {
+    for (const h of histograms[kind] || []) {
+      const a = h.analysis;
+      if (a && (a.wide || (a.tested && !a.normal))) warned.push({ kind, h, a, failed: a.tested && !a.normal });
+    }
+  }
+  warned.sort((p, q) => (q.failed - p.failed) || (p.failed ? p.a.pvalue - q.a.pvalue : q.a.sigma - p.a.sigma) || (q.h.count - p.h.count));
+  if (!warned.length) {
+    $("#geo-warnnote").textContent = `No warnings: none of the ${total("tested")} types that were tested differs from a normal distribution, and no sigma is above the tolerance.`;
+    return;
+  }
+  const number = (value, digits) => (typeof value === "number" ? num(value, digits) : "–");
+  $("#geo-warnings").append(el("thead", {}, el("tr", {}, el("th", {}, "Type"), el("th", {}, "Kind"), el("th", { class: "n" }, "Values"),
+      el("th", { class: "n" }, "Average"), el("th", { class: "n" }, "Sigma"), el("th", { class: "n" }, "p"),
+      el("th", { class: "n" }, "Skewness"), el("th", { class: "n" }, "Kurtosis"), el("th", {}, "Warning"))),
+    el("tbody", {}, ...warned.map(({ kind, h, a, failed }) => el("tr", { class: "pick", title: "Show the histogram", data: { kind, id: h.identifier } },
+      el("td", { class: "mono" }, h.identifier), el("td", {}, GEOMETRY_KINDS[kind] || kind), el("td", { class: "n" }, String(h.count)),
+      el("td", { class: "n" }, number(a.average, 5)), el("td", { class: "n" }, number(a.sigma, 3)),
+      el("td", { class: "n" }, a.tested ? pText(a.pvalue) : "–"), el("td", { class: "n" }, a.tested ? shapeText(a.skewness) : "–"),
+      el("td", { class: "n" }, a.tested ? shapeText(a.kurtosis) : "–"),
+      el("td", {}, failed ? el("span", { class: "pill warn" }, "not normal") : "", failed && a.wide ? " " : "", a.wide ? el("span", { class: "pill warn" }, "wide") : "")))));
+  $("#geo-warnnote").textContent = `${warned.length} ${warned.length === 1 ? "type" : "types"} with a warning. Click one to see its histogram. `
+    + "A negative kurtosis points to two peaks, a positive one to outliers, a skewness to a tail on one side.";
+}
+
+/**
+ * Show the histogram of a type, from the list of warnings.
+ * @param {string} kind       The kind of geometry.
+ * @param {string} identifier The type.
+ */
+function showHistogram(kind, identifier) {
+  if (!state.hist || !(state.hist.summary[kind] || []).some(h => h.identifier === identifier)) return;
+  $("#geo-htype").value = kind;
+  histogramKind();
+  $("#geo-hid").value = identifier;
+  histogramShown();
+  $("#geo-hist").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 /**
@@ -504,7 +606,7 @@ const GEOMETRY_KINDS = { BONDS: "Bond lengths", ANGLES: "Angles", LINEAR_ANGLES:
 function histogramsCard(job) {
   const histograms = job.result && job.result.histograms;
   const kinds = histograms ? Object.keys(histograms).filter(kind => histograms[kind].length) : [];
-  state.hist = { job: job.id, summary: histograms || {}, data: null, marked: null };
+  state.hist = { job: job.id, summary: histograms || {}, analysis: (job.result && job.result.analysis) || null, data: null, marked: null };
   $("#geo-hist").hidden = !kinds.length;
   if (!kinds.length) return;
   const select = $("#geo-htype");
@@ -517,7 +619,9 @@ function histogramsCard(job) {
 function histogramKind() {
   const listed = state.hist.summary[$("#geo-htype").value] || [], select = $("#geo-hid");
   select.textContent = "";
-  for (const h of listed) select.append(el("option", { value: h.identifier }, `${h.identifier} · ${h.count}`));
+  // A type with a warning says so
+  const warning = a => (!a ? "" : (a.tested && !a.normal ? " · not normal" : "") + (a.wide ? " · wide" : ""));
+  for (const h of listed) select.append(el("option", { value: h.identifier }, `${h.identifier} · ${h.count}${warning(h.analysis)}`));
   histogramShown();
 }
 
@@ -557,7 +661,9 @@ function histogramPlot() {
                     series: [{ type: "line", x, y, fill: true },
                              { type: "points", x: bins.map(b => b.value), y: bins.map(b => b.count), size: 7, pickable: true }],
                     onPoint: (series, index) => { state.hist.marked = { series, id: index }; markPoint("geoplot", state.hist.marked); binSamples(index); } });
-  $("#geo-histnote").textContent = `${data.count} values in bins of ${num(w, 4)} ${unit}. Zoom with the wheel or with + and −, drag to move, double-click or All to see all of it.`;
+  const listed = (state.hist.summary[$("#geo-htype").value] || []).find(h => h.identifier === data.identifier);
+  const found = verdict(listed && listed.analysis, state.hist.analysis);
+  $("#geo-histnote").textContent = `${data.count} values in bins of ${num(w, 4)} ${unit}. ${found ? found + " " : ""}Zoom with the wheel or with + and −, drag to move, double-click or All to see all of it.`;
 }
 
 /**
@@ -867,6 +973,7 @@ export async function startForceFields(told) {
   // The histograms of the geometries
   $("#geo-htype").onchange = histogramKind;
   $("#geo-hid").onchange = histogramShown;
+  $("#geo-warnings").onclick = e => { const row = e.target.closest("tr[data-kind]"); if (row) showHistogram(row.dataset.kind, row.dataset.id); };
   $("#geo-zoomin").onclick = () => zoomPlot("geoplot", 0.8);
   $("#geo-zoomout").onclick = () => zoomPlot("geoplot", 1.25);
   $("#geo-zoomall").onclick = () => resetZoom("geoplot");

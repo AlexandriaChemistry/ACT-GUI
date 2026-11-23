@@ -33,6 +33,22 @@ RESULT = {"compounds": 2, "extracted": {"BONDS": 2}, "forcefield": {"checksum": 
                           "count": 4, "bins": [{"value": 107.75, "count": 4}]}]}}
 
 
+## What geometry_ff -analyse adds to it
+ANALYSIS = {"test": "Anderson-Darling", "alpha": 0.01, "minimum": 8,
+            "BONDS": {"unit": "pm", "tolerance": 8, "distributions": 2, "wide": 1, "tested": 1,
+                      "not_normal": 1,
+                      "entries": [
+                          {"identifier": "c3_b~h_b", "count": 3, "average": 113.1, "sigma": 9.2,
+                           "wide": True, "tested": False},
+                          {"identifier": "c3_b~c3_b", "count": 9, "average": 153.4, "sigma": 0.6,
+                           "wide": False, "tested": True, "normal": False, "statistic": 2.49,
+                           "pvalue": 2.7e-06, "skewness": 0.01, "kurtosis": -1.99}]},
+            "ANGLES": {"unit": "degree", "tolerance": 8, "distributions": 1, "wide": 0,
+                       "tested": 0, "not_normal": 0,
+                       "entries": [{"identifier": "h_b~c3_b~h_b", "count": 4, "average": 107.8,
+                                    "sigma": 0.3, "wide": False, "tested": False}]}}
+
+
 class GeometryTest(unittest.TestCase):
     """!
     @brief The summary of the histograms and one histogram.
@@ -51,9 +67,58 @@ class GeometryTest(unittest.TestCase):
                                     {"identifier": "c3_b~h_b", "count": 3, "unit": "pm"}],
                           "ANGLES": [{"identifier": "h_b~c3_b~h_b", "count": 4, "unit": "degree"}]},
                          kept["histograms"])
+        # No analysis of the distributions without geometry_ff -analyse
+        self.assertNotIn("analysis", kept)
         # From an older alexandria, without histograms
         self.assertEqual({"compounds": 1}, geometry.digest({"compounds": 1}))
         self.assertEqual("text", geometry.digest("text"))
+
+    def test_analysis(self):
+        """!
+        @brief With geometry_ff -analyse the result has the numbers of each
+        kind of geometry, and each type in the list of histograms has what
+        was found for it.
+        """
+        kept = geometry.digest(dict(RESULT, analysis=ANALYSIS))
+        analysis = kept["analysis"]
+        self.assertEqual(("Anderson-Darling", 0.01, 8),
+                         (analysis["test"], analysis["alpha"], analysis["minimum"]))
+        self.assertEqual({"unit": "pm", "tolerance": 8, "distributions": 2, "wide": 1,
+                          "tested": 1, "not_normal": 1}, analysis["kinds"]["BONDS"])
+        self.assertEqual(["BONDS", "ANGLES"], list(analysis["kinds"]))
+        # The types are with their histograms, not twice in the result
+        self.assertNotIn("types", analysis)
+        self.assertNotIn("entries", analysis["kinds"]["BONDS"])
+        bonds = {h["identifier"]: h for h in kept["histograms"]["BONDS"]}
+        self.assertEqual({"average": 153.4, "sigma": 0.6, "statistic": 2.49, "pvalue": 2.7e-06,
+                          "skewness": 0.01, "kurtosis": -1.99, "wide": False, "tested": True,
+                          "normal": False}, bonds["c3_b~c3_b"]["analysis"])
+        self.assertEqual({"average": 113.1, "sigma": 9.2, "wide": True, "tested": False},
+                         bonds["c3_b~h_b"]["analysis"])
+        self.assertEqual(9, bonds["c3_b~c3_b"]["count"])
+        self.assertFalse(kept["histograms"]["ANGLES"][0]["analysis"]["tested"])
+        # One histogram is as before
+        self.assertEqual(3, geometry.histogram(dict(RESULT, analysis=ANALYSIS), "BONDS",
+                                               "c3_b~h_b")["count"])
+
+    def test_analysis_that_is_odd(self):
+        """!
+        @brief An analysis that is not as expected does not stop the result:
+        what cannot be used is left out.
+        """
+        for odd in ("text", [1], 5):
+            self.assertNotIn("analysis", geometry.digest(dict(RESULT, analysis=odd)))
+        odd = {"test": 5, "alpha": "x", "BONDS": {"unit": "pm", "tolerance": True, "entries": [
+                   "text", {"identifier": 5}, {"identifier": "c3_b~h_b", "wide": "yes",
+                                               "pvalue": "small", "tested": True},
+                   {"identifier": "nosuch", "wide": True}]},
+               "ANGLES": {"unit": "degree"}, "DIHEDRALS": "none"}
+        kept = geometry.digest(dict(RESULT, analysis=odd))
+        self.assertEqual({"test": "5", "kinds": {"BONDS": {"unit": "pm"}}}, kept["analysis"])
+        bonds = {h["identifier"]: h for h in kept["histograms"]["BONDS"]}
+        self.assertEqual({"tested": True}, bonds["c3_b~h_b"]["analysis"])
+        self.assertNotIn("analysis", bonds["c3_b~c3_b"])
+        self.assertEqual(["c3_b~c3_b", "c3_b~h_b"], list(bonds))
 
     def test_one_histogram(self):
         """!
