@@ -498,8 +498,78 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.assertIn("#SBATCH -n 8\n", shown["script"])
         self.assertIn("srun alexandria b2 ", shown["script"])
         self.assertIn(" -T1 300 ", shown["script"])
-        self.assertIn("B2T.xvg", shown["fetch"])
+        self.assertLessEqual({"B2T.xvg", "mayer.xvg"}, set(shown["fetch"]))
         self.assertEqual(0, self.logins())
+
+    def test_second_virial_comes_back(self):
+        """!
+        @brief When the job is done, its files are in the working directory
+        of the user, in a directory with the name of the job, and the page
+        is told to show the plots: the coefficients and the Mayer functions.
+        """
+        work = self.dir / "work"
+        work.mkdir()
+        client = self.new_client(work_dir=work)
+        session = client.get("/api/session", headers=self.headers).json()
+        self.assertEqual(str(work), session["work_dir"])
+        body = {"task": "b2", "molecule": {"smiles": "O.O"},
+                "options": {"T1": 300, "T2": 400, "dT": 100, "maxdimer": 64}}
+        sent = client.post("/api/cluster/jobs", headers=self.headers,
+                           json=dict(body, cluster={"name": "virial-2", "tasks": 2}, send=True))
+        self.assertEqual(200, sent.status_code, sent.text)
+        waiting = [j for j in sent.json()["jobs"] if j["name"] == "virial-2"][0]
+        self.assertEqual((True, ""), (waiting["auto"], waiting["delivered"]))
+        self.assertEqual([], list(work.iterdir()))
+        checked = client.post("/api/cluster/jobs/check", headers=self.headers).json()
+        self.assertEqual("", checked["problem"])
+        job = [j for j in checked["jobs"] if j["name"] == "virial-2"][0]
+        self.assertEqual(("finished", True, True), (job["state"], job["fetched"], job["auto"]),
+                         job["error"])
+        self.assertEqual(str(work / "virial-2"), job["delivered"])
+        self.assertLessEqual({"B2T.xvg", "mayer.xvg", "b2.json"},
+                             {p.name for p in (work / "virial-2").iterdir()})
+        self.assertNotIn("slurm.out", [p.name for p in (work / "virial-2").iterdir()])
+        self.assertIn("T = 300 K", (work / "virial-2" / "mayer.xvg").read_text())
+        opened = client.post("/api/cluster/jobs/virial-2/open", headers=self.headers).json()
+        self.assertEqual(("b2", str(work / "virial-2"), ""),
+                         (opened["task"], opened["delivered"], opened["problem"]))
+        result = client.get("/api/jobs/" + opened["job"], headers=self.headers).json()
+        self.assertEqual([300.0, 400.0], result["result"]["virial"]["temperatures"])
+        self.assertLessEqual({"b2", "eh"}, set(result["files"]))
+        mayer = client.get("/api/jobs/%s/files/eh" % opened["job"], headers=self.headers)
+        self.assertIn("0.28 904.9 76.3", mayer.text)
+        # A comparison does not come by itself
+        self.assertEqual(200, self.post(send=True, name="compare-1").status_code)
+        listed = self.client.get("/api/cluster/jobs", headers=self.headers).json()["jobs"]
+        self.assertEqual([False], [j["auto"] for j in listed if j["name"] == "compare-1"])
+
+    def test_job_of_before_gets_its_files_when_it_is_shown(self):
+        """!
+        @brief A job that was fetched by an interface without a working
+        directory gets its files there when its results are shown; a
+        working directory that cannot be written is told, and the results
+        are shown all the same.
+        """
+        body = {"task": "b2", "molecule": {"smiles": "O.O"},
+                "options": {"T1": 300, "T2": 400, "dT": 100, "maxdimer": 64}}
+        sent = self.client.post("/api/cluster/jobs", headers=self.headers,
+                                json=dict(body, cluster={"name": "virial-3"}, send=True))
+        self.assertEqual(200, sent.status_code, sent.text)
+        checked = self.client.post("/api/cluster/jobs/check", headers=self.headers).json()
+        job = [j for j in checked["jobs"] if j["name"] == "virial-3"][0]
+        self.assertEqual(("finished", True, ""), (job["state"], job["fetched"], job["delivered"]))
+        nowhere = self.dir / "file"
+        nowhere.write_text("no directory")
+        broken = self.new_client(work_dir=nowhere)
+        opened = broken.post("/api/cluster/jobs/virial-3/open", headers=self.headers)
+        self.assertEqual(200, opened.status_code, opened.text)
+        self.assertEqual("", opened.json()["delivered"])
+        self.assertIn("could not be put in the working directory", opened.json()["problem"])
+        work = self.dir / "work"
+        later = self.new_client(work_dir=work)
+        opened = later.post("/api/cluster/jobs/virial-3/open", headers=self.headers).json()
+        self.assertEqual((str(work / "virial-3"), ""), (opened["delivered"], opened["problem"]))
+        self.assertTrue((work / "virial-3" / "B2T.xvg").is_file())
 
     def test_training_on_the_cluster(self):
         """!

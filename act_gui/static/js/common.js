@@ -61,6 +61,7 @@ export const session = {
   molprop: null,        // the molprop file of the molprop workspace: { file, described, label, sets: { test, ignore }, used, total }
   clusterReady: false,  // whether the user has a cluster that jobs can be sent to
   maxProcesses: 1,      // the most processes of a calculation on this computer
+  workDir: "",          // where the files of some jobs on the cluster are put when they are done, if anywhere
 };
 
 /* ---------- messages ---------- */

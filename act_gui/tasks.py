@@ -116,6 +116,10 @@ class Task:
     mpi: bool = False
     ## Whether the task runs only as a job on the cluster
     cluster_only: bool = False
+    ## Whether the results of a job on the cluster come by themselves when
+    ## the job is done: the files that it wrote are put in the working
+    ## directory of the user and the page shows its plots
+    deliver: bool = False
 
 
 @dataclass(frozen=True)
@@ -184,10 +188,10 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          title="Second virial coefficient of a dimer",
          options=_CHARGE_OPTIONS + ("T1", "T2", "dT", "maxdimer"),
          fixed={"json": True},
-         outputs={"b2": "B2T.xvg"},
-         downloads=("b2", "g"),
-         plots=("b2",),
-         digest=virial.digest, cluster=True, mpi=True),
+         outputs={"b2": "B2T.xvg", "eh": "mayer.xvg"},
+         downloads=("b2", "eh", "g"),
+         plots=("b2", "eh"),
+         digest=virial.digest, cluster=True, mpi=True, deliver=True),
     Task(name="openmm_run", command="run.py",
          title="Simulation of the molecule with OpenMM",
          downloads=OPENMM_FILES,

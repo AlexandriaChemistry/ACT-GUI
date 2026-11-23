@@ -29,7 +29,7 @@ from tests.test_cluster import FakeServer
 ## The options of the stand-in for the commands that write a file, with
 ## the name of the file if none is given
 OUTPUTS = {"json": "%s.json", "epotcorr": "epot_corr.xvg", "o": "out.xml", "g": "%s.log",
-           "progress": "progress.jsonl", "b2": "B2T.xvg"}
+           "progress": "progress.jsonl", "b2": "B2T.xvg", "eh": "mayer.xvg"}
 
 
 def fake_arguments(command, options, workdir):
@@ -111,12 +111,14 @@ class QueueCase(unittest.TestCase):
         """
         self._tmp.cleanup()
 
-    def new_queue(self):
+    def new_queue(self, **more):
         """!
         @brief The list of jobs, as when the interface starts.
+        @param more What else the list is told, such as the working directory.
         @return The list.
         """
-        return ClusterQueue(self.local, program=str(self.server.program), clock=self.clock)
+        return ClusterQueue(self.local, program=str(self.server.program), clock=self.clock,
+                            **more)
 
     def plan(self, name, staging, **more):
         """!
@@ -575,6 +577,113 @@ class QueueTest(QueueCase):
         self.assertTrue(self.new_queue().get("job1").fetched)
         with self.assertRaises(cluster.ClusterError):
             self.queue.fetch("nosuchjob")
+
+    def test_files_go_to_the_working_directory(self):
+        """!
+        @brief When a job of a task that says so is done, the files that it
+        wrote are put in the working directory, in a directory with the
+        name of the job; what is there already is left alone.
+        """
+        work = self.dir / "work"
+        work.mkdir()
+        written = ["INTERACTION.xvg", "epot_corr.xvg", "train_ff.json", "train_ff.log"]
+        self.queue = self.new_queue(work_dir=work, deliver=["evaluate"])
+        job = self.send()
+        self.assertEqual("", job.delivered)
+        self.assertEqual([], list(work.iterdir()))
+        self.clock.now += 200
+        self.assertEqual("", self.queue.check(120)["problem"])
+        # Not the output of Slurm, the script or the files that were sent
+        self.assertEqual(written, sorted(p.name for p in (work / "job1").iterdir()))
+        self.assertEqual((self.local / "job1" / "train_ff.json").read_bytes(),
+                         (work / "job1" / "train_ff.json").read_bytes())
+        self.assertEqual(str(work / "job1"), job.delivered)
+        self.assertEqual(str(work / "job1"), self.queue.summaries()[0]["delivered"])
+        # Known when the interface starts again, also in another directory
+        later = self.new_queue(work_dir=self.dir, deliver=["evaluate"])
+        self.assertEqual(str(work / "job1"), later.get("job1").delivered)
+        self.assertEqual(str(work / "job1"), later.deliver("job1"))
+        self.assertFalse((self.dir / "job1").exists())
+        # Fetched again: the files are put there again
+        (work / "job1" / "train_ff.log").write_text("changed")
+        self.queue.fetch("job1")
+        self.assertIn("log of train_ff", (work / "job1" / "train_ff.log").read_text())
+        self.assertEqual(["job1"], [p.name for p in work.iterdir()])
+
+        # A directory of the user with the name of the job is not touched
+        (work / "job2").mkdir()
+        (work / "job2" / "train_ff.log").write_text("mine")
+        (work / "job2-2").write_text("mine as well")
+        second = self.send("job2")
+        self.clock.now += 200
+        self.assertEqual("", self.queue.check(120)["problem"])
+        self.assertEqual(str(work / "job2-3"), second.delivered)
+        self.assertEqual(written, sorted(p.name for p in (work / "job2-3").iterdir()))
+        self.assertEqual("mine", (work / "job2" / "train_ff.log").read_text())
+        self.assertEqual("mine as well", (work / "job2-2").read_text())
+
+    def test_files_that_do_not_go_to_the_working_directory(self):
+        """!
+        @brief Nothing is put there without a working directory, for
+        another task, or for a job that failed. A working directory that
+        cannot be written is told, and the results stay fetched; they can
+        be put there later.
+        """
+        work = self.dir / "work"
+        work.mkdir()
+        # No working directory, and a task of which the files stay where they are
+        for number, more in enumerate(({"deliver": ["evaluate"]},
+                                       {"work_dir": work, "deliver": ["b2"]},
+                                       {"work_dir": work})):
+            self.queue = self.new_queue(**more)
+            job = self.send("quiet%d" % number)
+            self.clock.now += 200
+            self.assertEqual("", self.queue.check(120)["problem"])
+            self.assertEqual(("finished", True, ""), (job.state, job.fetched, job.delivered))
+            self.assertEqual("", self.queue.deliver(job.name))
+        self.assertEqual([], list(work.iterdir()))
+        with self.assertRaises(cluster.ClusterError):
+            self.queue.deliver("nosuchjob")
+        # A job that failed
+        self.queue = self.new_queue(work_dir=work, deliver=["evaluate"])
+        failed = self.send("failed1", fail=True)
+        self.clock.now += 200
+        self.queue.check(120)
+        self.assertEqual(("failed", True, ""), (failed.state, failed.fetched, failed.delivered))
+        self.assertEqual([], list(work.iterdir()))
+        # The files of a job that was fetched before can be put there later, once
+        self.assertEqual(str(work / "quiet0"), self.queue.deliver("quiet0"))
+        self.assertTrue((work / "quiet0" / "train_ff.json").is_file())
+        self.assertEqual(str(work / "quiet0"), self.new_queue().get("quiet0").delivered)
+        (work / "quiet0" / "train_ff.json").unlink()
+        self.assertEqual(str(work / "quiet0"), self.queue.deliver("quiet0"))
+        self.assertFalse((work / "quiet0" / "train_ff.json").exists())
+
+        # A working directory that is no directory
+        nowhere = self.dir / "file"
+        nowhere.write_text("no directory")
+        self.queue = self.new_queue(work_dir=nowhere, deliver=["evaluate"])
+        job = self.send("job1")
+        self.clock.now += 200
+        problem = self.queue.check(120)["problem"]
+        self.assertIn("could not be put in the working directory %s" % nowhere, problem)
+        self.assertEqual(("finished", True, "", ""),
+                         (job.state, job.fetched, job.delivered, job.error))
+        self.assertIn("statistics", self.queue.results("job1")[0])
+        with self.assertRaises(cluster.ClusterError):
+            self.queue.deliver("job1")
+        self.assertEqual("no directory", nowhere.read_text())
+
+    def test_working_directory_where_the_jobs_are_kept(self):
+        """!
+        @brief The files are where they should be already: nothing is copied.
+        """
+        self.queue = self.new_queue(work_dir=self.local, deliver=["evaluate"])
+        job = self.send()
+        self.clock.now += 200
+        self.assertEqual("", self.queue.check(120)["problem"])
+        self.assertEqual(str(self.local / "job1"), job.delivered)
+        self.assertEqual(["job1"], [p.name for p in self.local.iterdir()])
 
     def test_stop_and_forget(self):
         """!

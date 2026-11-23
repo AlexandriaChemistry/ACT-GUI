@@ -119,14 +119,16 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         """!
         @brief The jobs for the browser.
         @param more What else to tell.
-        @return The jobs with the title of their task, the time between
+        @return The jobs with the title of their task and "auto", whether
+        their results are shown as soon as they are done, the time between
         two questions, the seconds until the cluster can be asked, why it
         is not asked by itself if so, and the directories that are no job.
         """
         jobs: List[Dict[str, Any]] = []
         for summary in queue.summaries():
             task = TASKS.get(summary["task"])
-            jobs.append(dict(summary, title=task.title if task else summary["task"]))
+            jobs.append(dict(summary, title=task.title if task else summary["task"],
+                             auto=bool(task and task.deliver)))
         answer = {"jobs": jobs, "poll_seconds": poll_seconds(),
                   "wait": queue.wait(poll_seconds()), "paused": queue.paused,
                   "unread": list(queue.unread), "directory": str(queue.root)}
@@ -505,13 +507,23 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         @brief Hand the results of a job that finished to the job engine,
         so that they are shown as those of a calculation on this machine.
         @param name The name of the job.
-        @return The identifier of the job in the job engine, and its task.
+        @return The identifier of the job in the job engine, its task,
+        "delivered", the directory in the working directory of the user
+        with the files that the job wrote, empty if they are put nowhere,
+        and "problem", why they could not be put there, if so.
         """
         job = queue.get(name)
         if job is None:
             raise fail(404, "There is no such job")
+        problem = ""
+        try:
+            # For a job that was fetched before the files were put there
+            queue.deliver(name)
+        except ClusterError as exc:
+            problem = str(exc)
         if job.job and manager.get(job.job) is not None:
-            return {"job": job.job, "task": job.task}
+            return {"job": job.job, "task": job.task, "delivered": job.delivered,
+                    "problem": problem}
         task = TASKS.get(job.task)
         if task is None:
             raise fail(400, "This version of the interface does not know the calculation "
@@ -527,7 +539,8 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
                                 progress=queue.progress_reports(name, MAX_REPORTS),
                                 observables=job.observables)
         queue.adopted(name, adopted.id)
-        return {"job": adopted.id, "task": task.name}
+        return {"job": adopted.id, "task": task.name, "delivered": job.delivered,
+                "problem": problem}
 
     @app.get("/api/cluster/jobs/{name}/files")
     def cluster_files(name: str) -> Dict[str, Any]:

@@ -322,6 +322,9 @@ class ClusterJob:
     previous: str = ""
     ## Why the job failed and what to change, see diagnosis.diagnose()
     diagnosis: Optional[Dict[str, Any]] = None
+    ## The directory in the working directory of the user in which the
+    ## files that the job wrote were put, empty if they were put nowhere
+    delivered: str = ""
     ## The identifier of the job in the job engine, once its results are
     ## shown. Not kept in the file.
     job: str = ""
@@ -339,7 +342,8 @@ class ClusterJob:
     def summary(self) -> Dict[str, Any]:
         """!
         @brief The job as it is sent to the browser.
-        @return A dict that can be written as JSON, without the names of files.
+        @return A dict that can be written as JSON, without the names of
+        files; with the directory in which the files of the job were put.
         """
         return {"name": self.name, "task": self.task, "state": self.state,
                 "slurm": self.slurm, "slurm_state": self.slurm_state, "exit": self.exit,
@@ -349,7 +353,8 @@ class ClusterJob:
                 "directory": "%s/%s" % (self.cluster.workdir, self.name),
                 "fetched": self.fetched, "error": self.error, "job": self.job,
                 "progress": self.progress, "diagnosis": self.diagnosis,
-                "previous": self.previous, "again": self.can_send_again}
+                "previous": self.previous, "again": self.can_send_again,
+                "delivered": self.delivered}
 
     @property
     def can_send_again(self) -> bool:
@@ -422,7 +427,8 @@ def _from_record(content: Any) -> ClusterJob:
         sent=list(_names({"sent": content.get("sent", [])}, True)["sent"]),
         request=_request(content.get("request")),
         previous=_previous(content.get("previous", "")),
-        diagnosis=_diagnosis(content.get("diagnosis")), **numbers)
+        diagnosis=_diagnosis(content.get("diagnosis")),
+        delivered=_delivered(content.get("delivered", "")), **numbers)
 
 
 def from_script(script: str, job: ClusterJob) -> Tuple[List[str], List[str]]:
@@ -534,6 +540,17 @@ def _diagnosis(value: Any) -> Optional[Dict[str, Any]]:
     return kept
 
 
+def _delivered(value: Any) -> str:
+    """!
+    @brief The directory in which the files of a job were put, from its file.
+    @param value What the file says.
+    @return The directory, empty if the file names none with its full path.
+    """
+    if not isinstance(value, str) or len(value) > 4096 or not os.path.isabs(value):
+        return ""
+    return value
+
+
 def _observables(value: Any) -> List[str]:
     """!
     @brief The properties of a comparison as the file of a job has them.
@@ -552,7 +569,8 @@ class ClusterQueue:
 
     def __init__(self, directory: Path, *, program: str = "ssh",
                  run: Optional[Callable[..., Any]] = None,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time,
+                 work_dir: Optional[Path] = None, deliver: Sequence[str] = ()):
         """!
         @brief Read the jobs that were sent before.
         @param directory The directory in which each job has a directory.
@@ -560,8 +578,13 @@ class ClusterQueue:
         @param program   The ssh program.
         @param run       The function that runs a command, subprocess.run() if None.
         @param clock     The function that tells the time.
+        @param work_dir  The working directory of the user, None for none.
+        @param deliver   The tasks of which the files that a job wrote are
+        put in the working directory when the job is done, see deliver().
         """
         self._dir = Path(directory)
+        self._work_dir = None if work_dir is None else Path(work_dir)
+        self._deliver_tasks = frozenset(deliver)
         self._program = program
         self._run = run
         self._clock = clock
@@ -855,7 +878,7 @@ class ClusterQueue:
                 job.ended = now
         problem = ""
         if state not in ACTIVE:
-            problem = self._fetch(job)
+            problem = self._fetch(job) or self._deliver(job, again=True)
         try:
             self._write(job)
         except ClusterError as exc:
@@ -929,11 +952,84 @@ class ClusterQueue:
         if job.state in ACTIVE or job.state == CANCELLED:
             raise ClusterError("The job %s has no results" % name)
         with self._busy:
-            problem = self._fetch(job)
+            problem = self._fetch(job) or self._deliver(job, again=True)
             self._write(job)
         if problem:
             raise ClusterError(problem)
         return job
+
+    def _free_directory(self, name: str) -> Path:
+        """!
+        @brief A directory in the working directory for the files of a job:
+        one that is not there yet, so that nothing of the user is replaced.
+        @param name The name of the job.
+        @return The directory with the name of the job, or with -2, -3 and
+        so on after it if there is something with that name. The directory
+        of the job itself if the working directory is where the jobs are kept.
+        @throws OSError if no name is free.
+        """
+        assert self._work_dir is not None
+        own = (self._dir / name).resolve()
+        for number in range(1, 1000):
+            target = self._work_dir / (name if number == 1 else "%s-%d" % (name, number))
+            if target.resolve() == own or not os.path.lexists(target):
+                return target
+        raise OSError("there are too many directories with the name %s" % name)
+
+    def _deliver(self, job: ClusterJob, again: bool) -> str:
+        """!
+        @brief Put the files that a job wrote in the working directory of
+        the user, in a directory of its own, if the job finished and its
+        task is one of which the files go there. The output of Slurm and
+        the script stay where the jobs are kept.
+        @param job   The job.
+        @param again Whether files that were put there before are put there
+        once more, as after fetching them again.
+        @return What went wrong, empty if nothing.
+        """
+        if (self._work_dir is None or job.task not in self._deliver_tasks
+                or job.state != FINISHED or not job.fetched or (job.delivered and not again)):
+            return ""
+        kept = (cluster.OUTPUT_FILE, cluster_jobs.SCRIPT_NAME)
+        files = {name: path for name, path in self._output_files(job).items()
+                 if name not in kept}
+        if not files:
+            return ""
+        try:
+            target = Path(job.delivered) if job.delivered else self._free_directory(job.name)
+            if target.resolve() != (self._dir / job.name).resolve():
+                target.mkdir(parents=True, exist_ok=True)
+                for name, path in files.items():
+                    shutil.copyfile(path, target / name)
+        except OSError as exc:
+            return ("The files of the job %s could not be put in the working directory %s: %s"
+                    % (job.name, self._work_dir, exc))
+        with self._lock:
+            job.delivered = str(target)
+        return ""
+
+    def deliver(self, name: str) -> str:
+        """!
+        @brief Put the files that a job wrote in the working directory of
+        the user if they were not put there before: for a job whose
+        results were fetched by an interface that did not do this.
+        @param name The name of the job.
+        @return The directory with the files, empty if the files of this
+        job are put nowhere.
+        @throws ClusterError if there is no such job or if the files could
+        not be put there.
+        """
+        job = self.get(name)
+        if job is None:
+            raise ClusterError("There is no job %s" % name)
+        if job.delivered:
+            return job.delivered
+        problem = self._deliver(job, again=False)
+        if problem:
+            raise ClusterError(problem)
+        if job.delivered:
+            self._write(job)
+        return job.delivered
 
     def results(self, name: str) -> Tuple[Any, Dict[str, Path], Dict[str, Path]]:
         """!

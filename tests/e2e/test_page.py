@@ -69,7 +69,8 @@ class PageTest(unittest.TestCase):
         cls.config = Path(cls._tmp.name) / "config" / "settings.json"
         cls.settings = Settings(data_dir=Path(cls._tmp.name), token="e2e-token",
                                 config_file=cls.config, default_forcefield=forcefield,
-                                ssh_program=str(cls.cluster.program))
+                                ssh_program=str(cls.cluster.program),
+                                work_dir=Path(cls._tmp.name) / "work")
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             cls.port = sock.getsockname()[1]
@@ -468,6 +469,19 @@ class PageTest(unittest.TestCase):
         saved = self.saved_file("#b2-xvg", "B2T.xvg", "")
         self.assertEqual(3, len([line for line in saved.splitlines()
                                  if line.strip() and line.lstrip()[0] not in "#@&"]))
+        # The Mayer functions: a line for each temperature, the lowest and the highest named
+        self.wait(lambda b: b.find_element(By.ID, "b2-mayer").is_displayed())
+        self.assertEqual(["300 K", "400 K"], [g.text for g in self.browser.find_elements(
+            By.CSS_SELECTOR, "#b2mayerplot g.legend")])
+        self.assertEqual(3, len(self.browser.find_elements(
+            By.CSS_SELECTOR, "#b2mayerplot svg > g[clip-path] > path")))
+        self.assertIn("at 3 temperatures", self.text("#b2-mayernote"))
+        # A calculation on this computer puts no files in the working directory
+        self.assertEqual("", self.text("#b2-files"))
+        self.browser.execute_script("document.getElementById('b2plot').scrollIntoView()")
+        self.shot("05e-mayer-functions")
+        saved = self.saved_file("#b2-mayer-xvg", "mayer.xvg", "")
+        self.assertIn('legend "T = 350 K"', saved)
 
     def test_3_wrong_smiles_gives_a_message(self):
         """!
@@ -2186,6 +2200,7 @@ class PageTest(unittest.TestCase):
         self.click('#b2-place button[data-v="cluster"]')
         self.assertEqual("Show the job…", self.text("#run-b2"))
         self.assertFalse(self.browser.find_element(By.ID, "b2-procfield").is_displayed())
+        self.assertIn("its files are put in %s," % self.settings.work_dir, self.text("#b2-comes"))
         for field, value in (("b2-jobname", "virial-1"), ("b2-tasks", "4"), ("b2-maxdimer", "16")):
             box = self.browser.find_element(By.ID, field)
             box.clear()
@@ -2237,6 +2252,28 @@ class PageTest(unittest.TestCase):
             time.sleep(1)
             return False
         self.wait(asked_until_done, 180)
+        # The second virial coefficient comes by itself: its plots are shown,
+        # and its files are in the working directory
+        self.wait(lambda b: b.find_element(By.ID, "b2-plotnote").get_attribute("textContent") != "")
+        if not self.browser.find_element(By.ID, "tab-b2").is_displayed():
+            # It was done before the other job was sent: then the page stays where the user is
+            self.click('#nav button[data-view="molecule"]')
+            self.click('#tasks button[data-tab="b2"]')
+        self.wait(lambda b: b.find_element(By.ID, "tab-b2").is_displayed())
+        self.wait(lambda b: b.find_element(By.ID, "b2-mayer").is_displayed())
+        self.assertIn("job virial-1 on the cluster", self.text("#b2-plotnote"))
+        self.assertEqual(["Total", "Classical"], [g.text for g in self.browser.find_elements(
+            By.CSS_SELECTOR, "#b2plot g.legend")])
+        self.assertEqual(["300 K", "400 K"], [g.text for g in self.browser.find_elements(
+            By.CSS_SELECTOR, "#b2mayerplot g.legend")])
+        delivered = self.settings.work_dir / "virial-1"
+        self.assertEqual("The files of the job are in %s." % delivered, self.text("#b2-files"))
+        self.assertLessEqual({"B2T.xvg", "mayer.xvg", "b2.json"},
+                             {p.name for p in delivered.iterdir()})
+        self.assertEqual("", self.errors())
+        self.browser.execute_script("document.getElementById('b2plot').scrollIntoView()")
+        self.shot("38-second-virial-from-the-cluster")
+        self.click('#nav button[data-view="cluster"]')
         self.click('#cj-table tr[data-job="md-1"] button[data-act="open"]')
         self.wait(lambda b: b.find_element(By.ID, "omm-result").is_displayed())
         self.assertTrue(self.browser.find_element(By.ID, "tab-openmm").is_displayed())

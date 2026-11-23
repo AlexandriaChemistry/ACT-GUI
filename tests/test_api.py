@@ -242,6 +242,8 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(["simulate", "dimer_scan", "train"],
                          [task["name"] for task in tasks if task["progress"]])
         self.assertEqual(self.settings.max_processes, session["max_processes"])
+        # No working directory unless the interface is given one
+        self.assertEqual("", session["work_dir"])
         self.assertEqual("MCMC", session["training"]["default_optimizer"])
         self.assertIn({"name": "inter", "label": "Interaction energy", "dimer": True,
                        "statistics": ["INTERACTION"], "plots": ["INTERACTION"]},
