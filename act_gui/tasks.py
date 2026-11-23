@@ -78,6 +78,9 @@ class Task:
     options: Tuple[str, ...] = ()
     ## Options that are always given
     fixed: Mapping[str, Any] = field(default_factory=dict)
+    ## Options that are given if the program has them: an older program
+    ## runs the task without them
+    optional: Mapping[str, Any] = field(default_factory=dict)
     ## Output files with a name of our choice, by option name. They are
     ## written in the directory of the job.
     outputs: Mapping[str, str] = field(default_factory=dict)
@@ -209,6 +212,8 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          options=("gen_bcc", "bfactor", "afactor", "factor"),
          # The histograms, with for each bin where some of its values come from
          fixed={"json": True, "samples": geometry.MAX_SAMPLES},
+         # Whether the bond lengths and angles of each type are normally distributed
+         optional={"analyse": True},
          outputs={"o": "forcefield.xml"},
          downloads=("o", "g"),
          needs=(FORCEFIELD, MOLPROP, CHOSEN), forcefield="o", workspace="forcefield",

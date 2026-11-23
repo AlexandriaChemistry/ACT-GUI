@@ -59,7 +59,7 @@ def fake_program_info():
     # What the interface gives with every run of a task, the program has
     for task in TASKS.values():
         options = known.setdefault(task.command, [])
-        for name in list(task.fixed) + list(task.outputs):
+        for name in list(task.fixed) + list(task.outputs) + list(task.optional):
             if all(name != o.name for o in options):
                 options.append(option(name, "file"))
     return SimpleNamespace(commands={name: command(*options)
@@ -658,6 +658,8 @@ class ApiTest(unittest.TestCase):
         self.assertEqual((False, 0.9, 0.95, 0.5, True, 50),
                          tuple(options[k] for k in ("gen_bcc", "bfactor", "afactor", "factor",
                                                     "json", "samples")))
+        # The distributions are analysed, since this program can
+        self.assertIs(True, options["analyse"])
         # Its force field can be used in turn
         answer = self.client.post("/api/jobs", headers=self.headers, json={
             "task": "ff_describe", "forcefield": {"job": job["id"]}})
@@ -714,6 +716,38 @@ class ApiTest(unittest.TestCase):
             self.assertEqual(400, answer.status_code, body)
         self.assertEqual(1, len(self.run.calls))
 
+    def test_geometry_with_an_older_program(self):
+        """!
+        @brief A program without geometry_ff -analyse extracts the
+        geometries all the same, without the analysis of the distributions.
+        """
+        def older():
+            info = fake_program_info()
+            options = {name: option for name, option
+                       in info.commands["geometry_ff"].options.items() if name != "analyse"}
+            info.commands["geometry_ff"] = SimpleNamespace(
+                options=options, has_option=lambda name: name in options)
+            return info
+        app = create_app(self.settings, run=self.run, program_info=older)
+        self.addCleanup(app.state.jobs.shutdown)
+        client = TestClient(app)
+        forcefield = client.post("/api/uploads", params={"kind": "forcefield", "name": "f.xml"},
+                                 content=FF, headers=self.headers).json()["id"]
+        molprop = client.post("/api/uploads", params={"kind": "molprop", "name": "m.xml"},
+                              content=MP, headers=self.headers).json()["id"]
+        answer = client.post("/api/jobs", headers=self.headers, json={
+            "task": "geometry_ff", "forcefield": {"file": forcefield}, "molprop": {"file": molprop}})
+        self.assertEqual(200, answer.status_code, answer.text)
+        for _ in range(500):
+            job = client.get("/api/jobs/" + answer.json()["id"], headers=self.headers).json()
+            if job["status"] not in ("queued", "running"):
+                break
+            time.sleep(0.01)
+        self.assertEqual("finished", job["status"], job["error"])
+        options = self.run.calls[-1]["options"]
+        self.assertNotIn("analyse", options)
+        self.assertEqual((True, 50), (options["json"], options["samples"]))
+
     def test_geometry_histograms(self):
         """!
         @brief The result of geometry_ff keeps which histograms there are;
@@ -749,6 +783,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(["c3_b~c3_b", "c3_b~h_b"],
                          [h["identifier"] for h in job["result"]["histograms"]["BONDS"]])
         self.assertNotIn("bins", job["result"]["histograms"]["BONDS"][0])
+        self.assertNotIn("analysis", job["result"])
 
         def get(**params):
             return client.get("/api/jobs/%s/histograms" % job["id"], params=params,
