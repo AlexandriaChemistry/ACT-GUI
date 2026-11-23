@@ -242,6 +242,18 @@ function showJobs(listing) {
 }
 
 /**
+ * Show the results of a job that finished, in the tab of its calculation.
+ * @param {string} name  The name of the job.
+ * @param {boolean} auto Whether the job was just seen to be done, and not the user who asks.
+ */
+async function showResults(name, auto) {
+  const opened = await (await call(`/cluster/jobs/${encodeURIComponent(name)}/open`, { method: "POST" })).json();
+  const job = await (await call("/jobs/" + opened.job)).json();
+  document.dispatchEvent(new CustomEvent("act-show-result", { detail: { job, name, auto, delivered: opened.delivered || "" } }));
+  if (opened.problem) alertBox(opened.problem);
+}
+
+/**
  * Ask the cluster how the jobs are doing. The server does not log in more
  * often than the settings say, whatever is asked here.
  * @param {boolean} manual Whether it is the user who asks.
@@ -260,7 +272,10 @@ async function ask(manual) {
     if (manual && !listing.asked && listing.wait > 0) toast(`The cluster was asked a moment ago. Try again in ${Math.ceil(listing.wait)} s.`);
     for (const job of listing.jobs) {
       const was = before.find(old => old.name === job.name);
-      if (was && was.state !== job.state && job.state !== "waiting" && job.state !== "running") toast(`Job ${job.name}: ${(STATES[job.state] || [job.state])[0].toLowerCase()}`);
+      if (!was || was.state === job.state || job.state === "waiting" || job.state === "running") continue;
+      toast(`Job ${job.name}: ${(STATES[job.state] || [job.state])[0].toLowerCase()}`);
+      // The results of some calculations are shown as soon as the job is done
+      if (job.state === "finished" && job.fetched && job.auto) showResults(job.name, true).catch(() => {});
     }
   } catch (e) {
     jobs.busy = false;
@@ -296,9 +311,7 @@ async function jobAction(button) {
       return;
     }
     if (act === "open") {
-      const opened = await (await call(`/cluster/jobs/${encodeURIComponent(name)}/open`, { method: "POST" })).json();
-      const job = await (await call("/jobs/" + opened.job)).json();
-      document.dispatchEvent(new CustomEvent("act-show-result", { detail: { job, name } }));
+      await showResults(name, false);
       button.disabled = false;
       return;
     }

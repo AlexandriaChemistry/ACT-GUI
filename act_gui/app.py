@@ -237,7 +237,8 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         @brief What the page needs to start: the token for requests that
         change something, and what the server offers.
         @return Token, version, mode, limits, the default force field, the
-        installed force fields and whether plots can be saved as PDF files.
+        installed force fields, whether plots can be saved as PDF files and
+        the working directory of the user, empty if there is none.
         """
         return {
             "token": settings.token,
@@ -255,6 +256,8 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             "training": training.describe(),
             "max_processes": settings.max_processes,
             "cluster": settings.mode == "desktop",
+            "work_dir": (str(settings.work_dir) if settings.mode == "desktop"
+                         and settings.work_dir is not None else ""),
             "preferences": app.state.preferences,
             "keeps_preferences": keeps_preferences,
         }
@@ -875,8 +878,10 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
     if settings.mode == "desktop":
         # Jobs on the cluster of the user. On a server for several users
         # nobody logs in elsewhere as somebody else.
-        app.state.cluster_queue = ClusterQueue(settings.cluster_jobs_dir,
-                                               program=settings.ssh_program)
+        app.state.cluster_queue = ClusterQueue(
+            settings.cluster_jobs_dir, program=settings.ssh_program,
+            work_dir=settings.work_dir,
+            deliver=[task.name for task in TASKS.values() if task.deliver])
         def written(command: str) -> Dict[str, str]:
             """!
             @brief The files that a command writes under their default

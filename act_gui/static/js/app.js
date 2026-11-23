@@ -640,8 +640,13 @@ $("#stop-scan").onclick = () => { if (state.scan.running) call("/jobs/" + state.
 let b2Cluster = null, ommCluster = null;
 b2Cluster = clusterChoice("b2", $("#b2-cluster"), {
   onChange: () => {
-    $("#b2-procfield").hidden = b2Cluster ? b2Cluster.onCluster() : false;
-    $("#run-b2").textContent = b2Cluster && b2Cluster.onCluster() ? "Show the job…" : "Compute";
+    const there = b2Cluster ? b2Cluster.onCluster() : false;
+    $("#b2-procfield").hidden = there;
+    $("#run-b2").textContent = there ? "Show the job…" : "Compute";
+    // What comes back by itself, and where
+    $("#b2-comes").hidden = !there;
+    $("#b2-comes").textContent = "When the job is done, its plots are shown here"
+      + (session.workDir ? `, and its files are put in ${session.workDir}, in a directory with the name of the job.` : ".");
   } });
 // The simulation with OpenMM here (a package) or on the cluster
 ommCluster = clusterChoice("omm", $("#omm-cluster"), {
@@ -654,20 +659,59 @@ function b2Form() {
   $("#run-b2").disabled = parts !== 2;
   $("#b2-note").textContent = !state.mol ? "" : parts === 2 ? "" : `The second virial coefficient is of a dimer of two compounds; this structure has ${parts}.`;
   $("#b2plot").textContent = ""; $("#b2-plotnote").textContent = ""; $("#b2-table").textContent = ""; $("#b2-xvg").hidden = true;
+  $("#b2-mayer").hidden = true; $("#b2mayerplot").textContent = ""; $("#b2-files").textContent = "";
   pill("b2-pill", "");
   $("#b2-procs").max = String(session.maxProcesses || 1);
   if (Number($("#b2-procs").value) > Number($("#b2-procs").max)) $("#b2-procs").value = $("#b2-procs").max;
 }
 
 /**
- * Show the second virial coefficient by temperature.
- * @param {object} job    The calculation.
- * @param {string} source Where it ran, if not here.
+ * Show the Mayer functions of a calculation of the second virial
+ * coefficient against the distance, one line for each temperature, if the
+ * calculation wrote them.
+ * @param {object} job The calculation.
  */
-function b2Result(job, source = "") {
+async function mayerPlot(job) {
+  $("#b2-mayer").hidden = true;
+  $("#b2mayerplot").textContent = "";
+  if (!(job.files || []).includes("eh")) return;
+  let rows;
+  try { rows = parseXvg(await (await call(`/jobs/${job.id}/files/eh`)).text()); } catch (e) { return; }
+  // Another calculation may be shown by now
+  if (state.jobs.b2 !== job.id || !rows.length || rows[0].length < 2) return;
+  const n = rows[0].length - 1, r = rows.map(row => row[0]);
+  const T = job.result && job.result.virial && job.result.virial.temperatures.length === n ? job.result.virial.temperatures : null;
+  const peak = Math.max(...rows.flatMap(row => row.slice(1).map(Math.abs)));
+  // Up to where the functions differ from zero, with room: far away they are flat
+  let last = 0;
+  rows.forEach((row, i) => { if (row.slice(1).some(v => Math.abs(v) >= 0.002 * peak)) last = i; });
+  const xmax = Math.min(r[r.length - 1], r[0] + 1.5 * (r[last] - r[0]) || r[r.length - 1]);
+  // The lowest and the highest temperature have a name and a colour, those between them are thin
+  const series = [];
+  for (let k = 1; k <= n; k++) {
+    const edge = k === 1 || k === n, name = T ? `${T[k - 1]} K` : `Temperature ${k}`;
+    series.push({ type: "line", x: r, y: rows.map(row => row[k]), ...(edge ? { name } : { width: 1 }),
+                  color: k === 1 ? "--accent" : k === n ? "--warn" : "--series2" });
+  }
+  $("#b2-mayer").hidden = false;
+  plot("b2mayerplot", { label: "Mayer functions", xlim: [r[0], xmax], ylim: limits(rows.flatMap(row => row.slice(1)), 0.08), height: 300, zoom: true,
+                        xlabel: "Distance (nm)", ylabel: "⟨exp(−U/kT) − 1⟩", series });
+  $("#b2-mayernote").textContent = `The Mayer function of the dimer, averaged over the orientations, against the distance between the compounds, at ${n} ${n === 1 ? "temperature" : "temperatures"}. `
+    + "It is −1 where the compounds overlap. The classical second virial coefficient is the integral of −2πr² times this function. Zoom with the wheel, a double click shows all.";
+}
+
+/**
+ * Show the second virial coefficient by temperature, and the Mayer functions.
+ * @param {object} job       The calculation.
+ * @param {string} source    Where it ran, if not here.
+ * @param {string} directory Where the files of the calculation were put, if anywhere.
+ */
+function b2Result(job, source = "", directory = "") {
   const table = job.result && job.result.virial;
   state.jobs.b2 = job.id;
   $("#b2-xvg").hidden = false;
+  $("#b2-files").textContent = directory ? `The files of the job are in ${directory}.` : "";
+  mayerPlot(job);
   if (!table || !table.temperatures.length) { $("#b2-plotnote").textContent = "The calculation gave no coefficients."; return; }
   const T = table.temperatures, parts = table.parts, unit = table.unit;
   // A line through the temperatures that have a value
@@ -715,6 +759,7 @@ async function runB2() {
 $("#run-b2").onclick = runB2;
 $("#stop-b2").onclick = () => { if (state.b2job) call("/jobs/" + state.b2job, { method: "DELETE" }).catch(() => {}); };
 $("#b2-xvg").onclick = e => { if (state.jobs.b2) saveFile(e.currentTarget, `/jobs/${state.jobs.b2}/files/b2`, {}, "Saving…", "B2T.xvg"); };
+$("#b2-mayer-xvg").onclick = e => { if (state.jobs.b2) saveFile(e.currentTarget, `/jobs/${state.jobs.b2}/files/eh`, {}, "Saving…", "mayer.xvg"); };
 
 /**
  * Show a simulation with OpenMM that ran on the cluster: its energies.
@@ -736,15 +781,18 @@ async function openmmResult(job, name) {
   }
 }
 
-// The results of a job on the cluster, from the tab Cluster
+// The results of a job on the cluster: from the tab Cluster, or by itself when the job is done
 document.addEventListener("act-show-result", e => {
-  const job = e.detail.job;
+  const { job, name, auto = false, delivered = "" } = e.detail;
   if (job.task !== "b2" && job.task !== "openmm_run") return;
-  $('#nav button[data-view="molecule"]').click();
   const tab = job.task === "b2" ? "b2" : "openmm";
-  $(`#tasks button[data-tab="${tab}"]`).click();
-  if (job.task === "b2") b2Result(job, ` · job ${e.detail.name} on the cluster`);
-  else openmmResult(job, e.detail.name);
+  const view = $('#nav button[data-view="molecule"]'), task = $(`#tasks button[data-tab="${tab}"]`);
+  const shown = button => button.getAttribute("aria-selected") === "true";
+  // A job that is done takes the user along from the tab Cluster and from its own tab, not from other work
+  if (!auto || shown($('#nav button[data-view="cluster"]')) || (shown(view) && shown(task))) { view.click(); task.click(); }
+  else toast(`Job ${name} is done: its plots are in the tab ${task.textContent} of Molecule`);
+  if (job.task === "b2") b2Result(job, ` · job ${name} on the cluster`, delivered);
+  else openmmResult(job, name);
 });
 $("#scan-xvg").onclick = e => { if (state.scan.job) saveFile(e.currentTarget, `/jobs/${state.scan.job}/files/xvg`, {}, "Saving…", "dimer-scan.xvg"); };
 for (const id of ["scan-atom1", "scan-atom2"]) $("#" + id).onchange = () => { if (state.ui.tab === "scan") scene(); };
@@ -886,6 +934,7 @@ async function start() {
     state.defaultForcefield = told.default_forcefield;
     session.pdf = !!told.pdf;
     session.maxProcesses = told.max_processes || 1;
+    session.workDir = told.work_dir || "";
     $('#ffsel option[value="default"]').textContent = told.default_forcefield;
     addLibrary($("#ffsel"), told.forcefields);
     withoutDefault($("#ffsel"), told);

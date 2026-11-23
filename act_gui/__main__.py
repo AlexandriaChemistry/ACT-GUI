@@ -63,6 +63,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--cluster-jobs", type=Path, default=None,
                         help="directory in which the jobs on the cluster are noted and "
                         "their results are kept; %s by default" % cluster.default_jobs_dir())
+    parser.add_argument("--workdir", type=Path, default=None,
+                        help="directory in which the files of a second virial coefficient "
+                        "that was computed on the cluster are put when the job is done, in a "
+                        "directory with the name of the job; the directory in which the "
+                        "interface is started by default")
     parser.add_argument("--no-browser", action="store_true",
                         help="do not open the browser, only print the address")
     parser.add_argument("--version", action="version", version="act-gui " + __version__)
@@ -75,7 +80,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         data_dir = Path(temporary.name)
     settings = Settings(data_dir=data_dir, mode="desktop",
                         config_file=args.config or cluster.default_config_file(),
-                        cluster_jobs_dir=args.cluster_jobs or cluster.default_jobs_dir())
+                        cluster_jobs_dir=args.cluster_jobs or cluster.default_jobs_dir(),
+                        work_dir=args.workdir or Path.cwd())
     if settings.default_forcefield is None:
         # The installed force fields and files of the user can still be chosen
         sys.stderr.write("The default force field %s is not installed: install the force "

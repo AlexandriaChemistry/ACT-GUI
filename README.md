@@ -43,8 +43,19 @@ the interaction energies of a dimer.
 
 The tab Second virial computes the second virial coefficient of a dimer
 with `alexandria b2`, here on several processes or as a job on the
-cluster, and shows B2(T) with its classical part and the corrections for
-the force and the torque.
+cluster, and shows two plots: B2(T) with its classical part, with the
+corrections for the force and the torque in the table below it, and the
+Mayer functions, averaged over the orientations, against the distance
+between the compounds, a line for each temperature. Both can be saved as
+xvg files. A job on the cluster brings its results by itself: when it is
+done, the files that `alexandria b2` wrote (`B2T.xvg`, `mayer.xvg`,
+`b2.json` and `b2.log`) are put in your working directory, in a directory
+with the name of the job, and the plots are shown in the tab. The working
+directory is the directory in which the interface was started, or the one
+that `--workdir DIR` names. A directory with that name that is there
+already is left alone: the files go to `name-2`, `name-3` and so on. If
+you are at other work in the interface when the job is done, the page
+stays where you are and says where the plots are.
 
 The tab OpenMM gives an archive with which the molecule is simulated with
 OpenMM and the same force field: the coordinates and the force field file
@@ -428,8 +439,10 @@ directory `act-gui/cluster-jobs` of your data directory (`~/.local/share`,
 or `XDG_DATA_HOME`), so that the jobs are there when the interface starts
 again; `--cluster-jobs DIR` names another directory. Stop cancels a job
 with `scancel`. Forget takes a job that is done from the list, with its
-results on your machine. Nothing is ever removed on the cluster: the
-directory of a job stays there until you remove it yourself.
+results on your machine; the files of a second virial coefficient that
+were put in your working directory stay there. Nothing is ever removed on
+the cluster: the directory of a job stays there until you remove it
+yourself.
 
 ## Tests
 

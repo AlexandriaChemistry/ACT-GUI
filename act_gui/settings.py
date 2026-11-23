@@ -87,6 +87,10 @@ class Settings:
     ## Where the jobs on the cluster are noted and their results are kept,
     ## between runs. None for a directory below the data directory.
     cluster_jobs_dir: Optional[Path] = None
+    ## The working directory of the user: where the files of a job on the
+    ## cluster are put when it is done, for the tasks that say so, each job
+    ## in a directory of its own. None to put them nowhere.
+    work_dir: Optional[Path] = None
     ## The number of progress reports of a job that are kept for plotting
     max_progress_points: int = 5000
     ## The largest number of processes of a calculation on this machine
@@ -122,6 +126,8 @@ class Settings:
         if self.cluster_jobs_dir is None:
             self.cluster_jobs_dir = self.data_dir / "cluster"
         self.cluster_jobs_dir = Path(self.cluster_jobs_dir).expanduser().resolve()
+        if self.work_dir is not None:
+            self.work_dir = Path(self.work_dir).expanduser().resolve()
         if self.mode not in ("desktop", "server"):
             raise ValueError("The mode must be desktop or server, not '%s'" % self.mode)
 

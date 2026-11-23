@@ -342,6 +342,17 @@ fi
 while [ $# -gt 0 ]; do
   case "$1" in
     -json)
+      if [ "$command" = "b2" ]; then
+        cat > "$2" <<END
+{"SecondVirialCoefficient": {"Second virial coefficients": {"Unit": "cm^3/mol",
+  "T = 300 K": {"B2(Classical)": -1250.3, "B2(Force)": 26.8, "B2(Torque1)": 348.3,
+                "B2(Torque2)": 346.6, "B2(Total)": -876.0},
+  "T = 400 K": {"B2(Classical)": -320.5, "B2(Force)": 5.1, "B2(Torque1)": 60.2,
+                "B2(Torque2)": 59.9, "B2(Total)": -255.2}}}}
+END
+        echo "The log of b2" > b2.log
+        shift; continue
+      fi
       cat > "$2" <<END
 {"$command": {"molecules": {"0": {"name": "water#water", "dataset": "Train",
                                   "atoms": {"0": {"fx": 1}},
@@ -352,6 +363,8 @@ while [ $# -gt 0 ]; do
               "outliers": {}}}
 END
       printf '@ s0 legend "Train"\n-20 -19\n-5 -6\n&\n' > INTERACTION.xvg;;
+    -b2) printf '@ s0 legend "Total"\n300 -876.0 -1250.3 26.8 348.3 346.6\n400 -255.2 -320.5 5.1 60.2 59.9\n' > "$2";;
+    -eh) printf '@ s0 legend "T = 300 K"\n@ s1 legend "T = 400 K"\n0.1 -1 -1\n0.25 8.1 1.1\n0.28 904.9 76.3\n0.4 4.2 1.8\n0.7 0.06 0.04\n1.0 0.007 0.004\n4.0 0 0\n' > "$2";;
     -epotcorr) printf '@ s0 legend "Train"\n1 2\n3 4\n&\n' > "$2";;
     -o) echo "<alexandria_chemistry/>" > "$2";;
     -progress)

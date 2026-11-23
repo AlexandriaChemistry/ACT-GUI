@@ -153,13 +153,21 @@
             <div class="field" id="b2-procfield"><label for="b2-procs">Processes</label><input type="number" id="b2-procs" value="1" min="1" step="1"></div>
           </div>
           <div id="b2-cluster"></div>
+          <p class="muted fine" id="b2-comes" hidden></p>
           <div class="row"><button class="btn primary" id="run-b2" type="button" disabled>Compute</button>
             <button class="btn" id="stop-b2" type="button" hidden>Stop</button>
             <span class="pill" id="b2-pill" hidden></span><span class="spacer"></span>
             <button class="btn small" id="b2-xvg" type="button" hidden>Save as xvg</button></div>
           <div class="plot mt8" id="b2plot"></div>
           <p class="muted fine" id="b2-plotnote"></p>
+          <div id="b2-mayer" hidden>
+            <div class="row mt8"><h3>Mayer functions</h3><span class="spacer"></span>
+              <button class="btn small" id="b2-mayer-xvg" type="button">Save as xvg</button></div>
+            <div class="plot mt8" id="b2mayerplot"></div>
+            <p class="muted fine" id="b2-mayernote"></p>
+          </div>
           <div class="xscroll"><table class="data" id="b2-table"></table></div>
+          <p class="muted fine" id="b2-files"></p>
         </div>
         <div class="body panel" id="tab-scan" hidden>
           <p>The interaction energy of a dimer as a function of the distance between its compounds, as the script <code>dimer_scan</code> computes it. For each distance the second compound is moved along the line between the two atoms, and the dimer is minimized with these two atoms frozen. A click on a point shows that structure.</p>
