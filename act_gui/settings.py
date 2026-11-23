@@ -16,7 +16,9 @@ import os
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+
+from . import library
 
 ## The directory with the files that come with the package
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -54,6 +56,9 @@ class Settings:
     default_forcefield: Path = field(default_factory=_default_forcefield)
     ## What the interface calls the default force field
     default_forcefield_label: str = "ACS-pg1 (test force field, polarizable)"
+    ## The directories with the force fields that can be chosen, see
+    ## library.default_dirs. None for those.
+    forcefield_dirs: Optional[List[Path]] = None
     ## The largest file that can be uploaded, in bytes
     max_upload_bytes: int = 5 * 1024 * 1024
     ## The largest molprop file that can be uploaded, in bytes
@@ -98,6 +103,9 @@ class Settings:
         """
         self.data_dir = Path(self.data_dir).expanduser().resolve()
         self.default_forcefield = Path(self.default_forcefield).expanduser()
+        if self.forcefield_dirs is None:
+            self.forcefield_dirs = library.default_dirs()
+        self.forcefield_dirs = [Path(d).expanduser() for d in self.forcefield_dirs]
         if self.config_file is not None:
             self.config_file = Path(self.config_file).expanduser()
         if self.cluster_jobs_dir is None:
