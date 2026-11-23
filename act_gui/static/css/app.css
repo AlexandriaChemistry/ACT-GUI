@@ -139,7 +139,9 @@ button.chip[aria-pressed="true"] b { color: var(--accent); }
 .stat .v { font: 500 26px/1.15 var(--mono); font-variant-numeric: tabular-nums; }
 .stat .v small { font-size: 14px; color: var(--muted); font-weight: 400; }
 .stats { display: flex; flex-wrap: wrap; gap: 14px 36px; }
-.plot { background: var(--stage); border-radius: 8px; min-width: 0; }
+.plot { background: var(--stage); border-radius: 8px; min-width: 0; position: relative; }
+/* The way back after zooming, at the top right, away from the legend */
+.plot .plot-reset { position: absolute; top: 8px; right: 8px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18); }
 .plot svg { display: block; width: 100%; height: auto; }
 .scroll { overflow: auto; max-height: 300px; border: 1px solid var(--line); border-radius: 8px; }
 .xscroll { overflow-x: auto; }
