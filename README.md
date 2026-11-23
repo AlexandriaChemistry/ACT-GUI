@@ -440,9 +440,17 @@ made from `docs/act_logo.png` of ACT.
 
 ## The default force field
 
-`act_gui/data/forcefields/ACS-pg1.xml` is a test force field of ACT. It is
-used until the new default force field of ACT exists. The environment
-variable `ACT_GUI_FORCEFIELD` selects another file.
+`act_gui/data/forcefields/ACS-pg1.xml` is a test force field of ACT, a copy
+of `src/act/testdata/forcefields/ACS-pg1.xml`. It is used until the new
+default force field of ACT exists. The environment variable
+`ACT_GUI_FORCEFIELD` selects another file.
+
+Its missing bonds, angles, linear angles and dihedrals were filled in with
+`admin/fill_forcefield.py` of ACT, so that it describes many more small
+organic molecules with H, C, N, O, F, P, S, Cl, Br and I. The geometry of the added
+parameters comes from other force fields of ACT, but the torsions are not
+trained: low frequencies of normal modes are poor, and some molecules have
+imaginary ones.
 
 ## License
 
