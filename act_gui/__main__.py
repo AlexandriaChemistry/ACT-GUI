@@ -29,7 +29,7 @@ import uvicorn
 
 from . import __version__, cluster
 from .app import create_app
-from .settings import Settings
+from .settings import DEFAULT_LIBRARY_ID, Settings
 
 
 def free_port() -> int:
@@ -76,7 +76,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     settings = Settings(data_dir=data_dir, mode="desktop",
                         config_file=args.config or cluster.default_config_file(),
                         cluster_jobs_dir=args.cluster_jobs or cluster.default_jobs_dir())
-    if not settings.default_forcefield.is_file():
+    if settings.default_forcefield is None:
+        # The installed force fields and files of the user can still be chosen
+        sys.stderr.write("The default force field %s is not installed: install the force "
+                         "fields of ACT (the conda package forcefields) or set "
+                         "ACT_GUI_FORCEFIELD\n" % DEFAULT_LIBRARY_ID)
+    elif not settings.default_forcefield.is_file():
         sys.stderr.write("The default force field %s does not exist\n"
                          % settings.default_forcefield)
         return 1

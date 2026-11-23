@@ -801,6 +801,7 @@ export async function startForceFields(told) {
     } catch (err) { alertBox("The file was not accepted. " + err.message); }
   };
   $("#ff-default").onclick = e => openForceField({ default: true }, told.default_forcefield, e.currentTarget);
+  $("#ff-default").disabled = told.has_default_forcefield === false;
   // An installed force field, chosen in the list and opened with the button
   addLibrary($("#ff-lib"), told.forcefields);
   $("#ff-lib").hidden = $("#ff-libopen").hidden = !(told.forcefields || []).length;

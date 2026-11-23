@@ -25,7 +25,7 @@ import zipfile
 from pathlib import Path
 
 from act_gui import openmm_package as package
-from act_gui.settings import Settings
+from tests.test_alexandria import require_forcefield
 
 ## The alexandria program, if the tests with it are to run
 ALEXANDRIA = os.environ.get("ACT_ALEXANDRIA", "")
@@ -185,7 +185,7 @@ class OpenMMRunTest(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 work = Path(tmp) / "job"
-                forcefield = Settings(data_dir=Path(tmp) / "data").default_forcefield
+                forcefield = require_forcefield()
                 options = dict(task.fixed, ff=forcefield, smiles="CC(=O)C")
                 options.update({name: work / filename for name, filename in task.outputs.items()})
                 result = act.run(task.command, workdir=work, **options)

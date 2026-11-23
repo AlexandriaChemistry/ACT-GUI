@@ -14,7 +14,7 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, $$, addLibrary, alertBox, call, el, fmt, libraryChoice, moveInk, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
+import { $, $$, addLibrary, alertBox, withoutDefault, call, el, fmt, libraryChoice, moveInk, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
 import { css, esc, limits, markPoint, plot, redrawPlots } from "./plot.js";
 import { startForceFields } from "./forcefield.js";
 import { startMolprops } from "./molprop.js";
@@ -888,6 +888,7 @@ async function start() {
     session.maxProcesses = told.max_processes || 1;
     $('#ffsel option[value="default"]').textContent = told.default_forcefield;
     addLibrary($("#ffsel"), told.forcefields);
+    withoutDefault($("#ffsel"), told);
     $("#smiles").maxLength = told.max_smiles_length;
     $("#status-text").textContent = (told.mode === "desktop" ? "Desktop mode" : "Server") + " · version " + told.version;
     startSettings(told);

@@ -367,6 +367,25 @@ export function addLibrary(select, forcefields) {
 }
 
 /**
+ * Make a list of force fields work without a default force field: its first
+ * option, the default, cannot be chosen, and the first installed force field
+ * is chosen instead, if there is one.
+ * @param {HTMLSelectElement} select The list.
+ * @param {object} told              What the server said: whether there is a default force field.
+ */
+export function withoutDefault(select, told) {
+  if (told.has_default_forcefield !== false) return;
+  const fallback = select.options[0];
+  fallback.textContent = "Default (not installed)";
+  fallback.disabled = true;
+  const first = [...select.options].find(o => o.value.startsWith(LIBRARY));
+  if (first) {
+    select.value = first.value;
+    select.dispatchEvent(new Event("change"));
+  }
+}
+
+/**
  * How the server finds an installed force field that is chosen in a list.
  * @param {string} value The value of the option.
  * @returns {object|null} { ref: { library }, label }, or null if the option is not an installed force field.

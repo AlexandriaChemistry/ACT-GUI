@@ -14,7 +14,7 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, $$, addLibrary, alertBox, call, el, libraryChoice, num, pill, runTask, saveFile, saveMade, seg, session, toast, upload } from "./common.js";
+import { $, $$, addLibrary, alertBox, withoutDefault, call, el, libraryChoice, num, pill, runTask, saveFile, saveMade, seg, session, toast, upload } from "./common.js";
 import { css, limits, markPoint, plot, resetZoom, zoomPlot } from "./plot.js";
 
 /** What the workspace knows. */
@@ -1339,6 +1339,7 @@ export function startMolprops(told) {
   $('#ev-ff option[value="default"]').textContent = told.default_forcefield;
   addLibrary($("#ev-ff"), told.forcefields);
   $("#ev-ff").onchange = () => { offerKinds(); continueNote(); };
+  withoutDefault($("#ev-ff"), told);
   // A selection file of the user instead of the table
   $("#ev-sel").onchange = selectionNote;
   $("#ev-selopen").onclick = () => $("#ev-selfile").click();
