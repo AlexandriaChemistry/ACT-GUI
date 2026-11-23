@@ -14,7 +14,7 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, $$, alertBox, call, el, num, pill, runTask, saveFile, saveMade, seg, session, toast, upload } from "./common.js";
+import { $, $$, addLibrary, alertBox, call, el, libraryChoice, num, pill, runTask, saveFile, saveMade, seg, session, toast, upload } from "./common.js";
 import { css, limits, markPoint, plot, resetZoom, zoomPlot } from "./plot.js";
 
 /** What the workspace knows. */
@@ -821,6 +821,8 @@ async function chosenForcefield() {
   const choice = $("#ev-ff").value;
   if (choice === "workspace" && session.forcefield) return session.forcefield.ref;
   if (choice === "trained" && state.cont) return { job: state.cont.job };
+  const installed = libraryChoice(choice);
+  if (installed) return installed.ref;
   if (choice !== "upload") return { default: true };
   if (!state.pendingFF) return null;
   if (!state.pendingFF.id) {
@@ -1335,6 +1337,7 @@ function show(label, data) {
 export function startMolprops(told) {
   state.observables = told.observables || [];
   $('#ev-ff option[value="default"]').textContent = told.default_forcefield;
+  addLibrary($("#ev-ff"), told.forcefields);
   $("#ev-ff").onchange = () => { offerKinds(); continueNote(); };
   // A selection file of the user instead of the table
   $("#ev-sel").onchange = selectionNote;

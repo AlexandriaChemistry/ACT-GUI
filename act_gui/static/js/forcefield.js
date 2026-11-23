@@ -19,7 +19,7 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, $$, alertBox, call, el, num, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
+import { $, $$, addLibrary, alertBox, call, el, libraryChoice, num, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
 import { compareWith, startDiff } from "./ffdiff.js";
 import { chosenSites, redrawVsites, startVsites } from "./vsites.js";
 import { markPoint, plot, resetZoom, zoomPlot } from "./plot.js";
@@ -135,7 +135,7 @@ function saveName() {
 
 /**
  * Make a force field the one of the workspace, and show it.
- * @param {object} ref     How the server finds it: { job }, { file } or { default: true }.
+ * @param {object} ref     How the server finds it: { job }, { file }, { library } or { default: true }.
  * @param {string} base    Its name.
  * @param {object} data    The result of the calculation that described it.
  * @param {number} changes The number of changes since it was made or opened.
@@ -801,6 +801,15 @@ export async function startForceFields(told) {
     } catch (err) { alertBox("The file was not accepted. " + err.message); }
   };
   $("#ff-default").onclick = e => openForceField({ default: true }, told.default_forcefield, e.currentTarget);
+  // An installed force field, chosen in the list and opened with the button
+  addLibrary($("#ff-lib"), told.forcefields);
+  $("#ff-lib").hidden = $("#ff-libopen").hidden = !(told.forcefields || []).length;
+  $("#ff-lib").onchange = () => { $("#ff-libopen").disabled = !libraryChoice($("#ff-lib").value); };
+  $("#ff-libopen").onclick = e => {
+    const installed = libraryChoice($("#ff-lib").value);
+    // Its name as that of a file, from which the name to save it under is made
+    if (installed) openForceField(installed.ref, installed.label.split("/").pop() + ".xml", e.currentTarget);
+  };
   // A force field that another workspace made, such as a trained one
   // With "other" it is compared with that one, such as the force field that was trained
   document.addEventListener("act-open-forcefield", async e => {

@@ -14,7 +14,7 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, $$, alertBox, call, el, fmt, moveInk, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
+import { $, $$, addLibrary, alertBox, call, el, fmt, libraryChoice, moveInk, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
 import { css, esc, limits, markPoint, plot, redrawPlots } from "./plot.js";
 import { startForceFields } from "./forcefield.js";
 import { startMolprops } from "./molprop.js";
@@ -811,9 +811,11 @@ $("#ffsel").onchange = e => {
     return;
   }
   state.pendingForcefield = null;
-  // The default, or the one that was made or opened in the force field workspace
-  state.forcefield = e.target.value === "workspace" && session.forcefield
-    ? { ref: session.forcefield.ref, label: session.forcefield.label } : {};
+  // An installed one, the default, or the one that was made or opened in the force field workspace
+  const installed = libraryChoice(e.target.value);
+  state.forcefield = installed ? installed
+    : e.target.value === "workspace" && session.forcefield
+      ? { ref: session.forcefield.ref, label: session.forcefield.label } : {};
 };
 // The force field of the force field workspace can be used for molecules
 document.addEventListener("act-forcefield", () => {
@@ -885,6 +887,7 @@ async function start() {
     session.pdf = !!told.pdf;
     session.maxProcesses = told.max_processes || 1;
     $('#ffsel option[value="default"]').textContent = told.default_forcefield;
+    addLibrary($("#ffsel"), told.forcefields);
     $("#smiles").maxLength = told.max_smiles_length;
     $("#status-text").textContent = (told.mode === "desktop" ? "Desktop mode" : "Server") + " · version " + told.version;
     startSettings(told);

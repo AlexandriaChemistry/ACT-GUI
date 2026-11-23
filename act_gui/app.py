@@ -37,7 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__, cluster, cluster_api, evaluation, ffgen, openmm_package, plots, preferences
-from . import dimerscan, geometry, training
+from . import dimerscan, geometry, library, training
 from .cluster_queue import ClusterQueue
 from .jobs import FINISHED, JobError, JobManager
 from .settings import PACKAGE_DIR, Settings
@@ -236,14 +236,15 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         """!
         @brief What the page needs to start: the token for requests that
         change something, and what the server offers.
-        @return Token, version, mode, limits, the default force field and
-        whether plots can be saved as PDF files.
+        @return Token, version, mode, limits, the default force field, the
+        installed force fields and whether plots can be saved as PDF files.
         """
         return {
             "token": settings.token,
             "version": __version__,
             "mode": settings.mode,
             "default_forcefield": settings.default_forcefield_label,
+            "forcefields": [ff.describe() for ff in library.scan(settings.forcefield_dirs)],
             "max_upload_bytes": settings.max_upload_bytes,
             "max_smiles_length": settings.max_smiles_length,
             "max_molprop_bytes": settings.max_molprop_bytes,

@@ -15,7 +15,7 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, alertBox, el, num, pill, runTask, upload } from "./common.js";
+import { $, addLibrary, alertBox, el, libraryChoice, num, pill, runTask, upload } from "./common.js";
 
 /** What the comparison knows. */
 const state = {
@@ -114,6 +114,8 @@ async function other() {
   const choice = $("#fd-other").value;
   if (choice === "given" && state.given) return state.given;
   if (choice === "default") return { ref: { default: true }, label: state.told.default_forcefield };
+  const installed = libraryChoice(choice);
+  if (installed) return installed;
   if (!state.pending) return null;
   if (!state.pending.id) state.pending.id = (await upload(state.pending.file, "forcefield")).id;
   return { ref: { file: state.pending.id }, label: state.pending.file.name };
@@ -166,6 +168,7 @@ export function startDiff(current, told) {
   state.current = current;
   state.told = told;
   $('#fd-other option[value="default"]').textContent = told.default_forcefield;
+  addLibrary($("#fd-other"), told.forcefields);
   // A file of the user, chosen with a button: a choice in the list cannot
   // open the file chooser in every browser
   $("#fd-open").onclick = () => $("#fd-file").click();

@@ -252,8 +252,8 @@ The page uses [3Dmol.js](https://3dmol.org) (BSD-3-Clause, in
 
 The conda package `act-gui` on the channel `alexandriachemistry` brings
 everything along: the Python package `act` of ACT and the program
-`alexandria` (through the package `alexandria-python`), FastAPI, uvicorn
-and plotXVG.
+`alexandria` (through the package `alexandria-python`), FastAPI, uvicorn,
+plotXVG and the force fields of the package `forcefields`.
 
     conda install -c alexandriachemistry -c conda-forge act-gui
     act-gui
@@ -279,7 +279,28 @@ Without conda:
   variable `ACT_ALEXANDRIA`;
 - Python 3.9 or newer with `fastapi` and `uvicorn`;
 - optionally `plotxvg`, to save plots as PDF files. Without it the page
-  does not show the buttons for that.
+  does not show the buttons for that;
+- optionally the force fields of the repository
+  [ForceFields](https://github.com/AlexandriaChemistry/ForceFields),
+  installed in the prefix of ACT, see below.
+
+## Installed force fields
+
+Wherever a force field is chosen, the page also offers the force fields
+that are installed, grouped by the directory they are in (Water, HF,
+Inorganic, ...), with their reference as a tooltip. The force field tab
+opens them with *Installed force fields* and *Open*. The server looks for
+`.xml` files of ACT, also in subdirectories, in these directories, of which
+the first one that has a force field counts:
+
+- the directories in the environment variable `ACT_FORCEFIELDS`, separated
+  as in `PATH`, for force fields of your own;
+- `forcefields` in the directory of the environment variable `ACTDATA`;
+- `share/act/forcefields` of the installation of ACT, where the package
+  `forcefields` puts them.
+
+A force field is known by its path below such a directory without `.xml`,
+such as `Water/TIP4P-2005`; the page never sees where the file is.
 
 ## Running on the desktop
 

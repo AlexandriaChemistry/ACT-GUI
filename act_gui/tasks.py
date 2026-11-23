@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import dimerscan, evaluation, ffgen, geometry, training, virial
+from . import dimerscan, evaluation, ffgen, geometry, library, training, virial
 from .jobs import InputFile
 from .settings import Settings
 from .uploads import UploadStore
@@ -326,9 +326,10 @@ def _forcefield(reference: Any, settings: Settings, uploads: UploadStore,
     @brief Find the force field that a request names.
     @param reference The object "forcefield" of the request: "file" with
     the identifier of an upload, "job" with the identifier of a job that
-    wrote a force field, "default" that is true for the default force
+    wrote a force field, "library" with the identifier of an installed
+    force field (see library), "default" that is true for the default force
     field, or none of these where the default may be used without asking.
-    @param settings  The settings, for the default force field.
+    @param settings  The settings, for the default force field and the library.
     @param uploads   The uploaded files.
     @param written   The function that gives the force field a job wrote.
     @param default   Whether the default force field may be used.
@@ -340,8 +341,14 @@ def _forcefield(reference: Any, settings: Settings, uploads: UploadStore,
         raise RequestError("The force field must be an object")
     file_id = reference.get("file")
     job_id = reference.get("job")
-    if file_id is not None and job_id is not None:
+    library_id = reference.get("library")
+    if sum(x is not None for x in (file_id, job_id, library_id)) > 1:
         raise RequestError("Give one force field, not two")
+    if library_id is not None:
+        found = library.find(settings.forcefield_dirs, library_id) if isinstance(library_id, str) else None
+        if found is None:
+            raise RequestError("The force field '%s' is not installed" % library_id)
+        return found.path
     if file_id is not None:
         upload = uploads.get(file_id)
         if upload is None or upload.kind != "forcefield":

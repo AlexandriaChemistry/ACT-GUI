@@ -343,3 +343,36 @@ export function pill(id, text, kind = "") {
   p.textContent = text;
   p.className = "pill" + (kind ? " " + kind : "");
 }
+
+/** The prefix of the values of the installed force fields in a list. */
+const LIBRARY = "lib:";
+
+/**
+ * Add the installed force fields to a list of force fields, grouped by the
+ * directory they are in, after its first option, the default.
+ * @param {HTMLSelectElement} select The list.
+ * @param {object[]} forcefields     What the server said: id, name, category and reference of each.
+ */
+export function addLibrary(select, forcefields) {
+  const groups = new Map();
+  for (const ff of forcefields || []) {
+    const label = ff.category || "Other";
+    if (!groups.has(label)) groups.set(label, el("optgroup", { label }));
+    const option = el("option", { value: LIBRARY + ff.id }, ff.name);
+    if (ff.reference) option.title = ff.reference;
+    groups.get(label).append(option);
+  }
+  const after = select.options[0];
+  [...groups.values()].reverse().forEach(group => after.after(group));
+}
+
+/**
+ * How the server finds an installed force field that is chosen in a list.
+ * @param {string} value The value of the option.
+ * @returns {object|null} { ref: { library }, label }, or null if the option is not an installed force field.
+ */
+export function libraryChoice(value) {
+  if (!value || !value.startsWith(LIBRARY)) return null;
+  const id = value.slice(LIBRARY.length);
+  return { ref: { library: id }, label: id };
+}

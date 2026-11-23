@@ -47,6 +47,8 @@ requirements:
     - alexandria-python >=1.95b
     # To save plots as PDF files
     - plotxvg >=1.3
+    # The force fields that can be chosen, in share/act/forcefields
+    - forcefields
 
 tests:
   - python:
