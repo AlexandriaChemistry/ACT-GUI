@@ -1551,6 +1551,46 @@ class ApiTest(unittest.TestCase):
             self.assertEqual(400, post(request).status_code, request)
         self.assertEqual(ncalls, len(self.run.calls))
 
+        # More settings: annealing within the iterations and over the
+        # generations, Boltzmann weighting of the energies, crossover and mutation
+        chosen = {"anneal_begin": 0.5, "anneal_end": 0.9, "anneal_global_begin": 0.2,
+                  "anneal_global_end": 0.8, "ener_boltz_temp": 300, "n_crossovers": 2,
+                  "pr_cross": 0.6, "pr_mut": 0.05}
+        tuned = done(post(dict(more, options=dict(more["options"], **chosen))))
+        self.assertEqual("finished", tuned["status"], tuned["error"])
+        options = self.run.calls[-1]["options"]
+        self.assertEqual(chosen, {key: options[key] for key in chosen})
+        # Without them train_ff decides
+        self.assertFalse(set(chosen) & set(self.run.calls[-2]["options"]))
+        ncalls = len(self.run.calls)
+        for wrong, said in (({"anneal_begin": 1.5}, "between 0 and 1"),
+                            ({"anneal_begin": -0.1}, "between 0 and 1"),
+                            ({"anneal_begin": "half"}, "must be a number"),
+                            ({"anneal_begin": 0.8, "anneal_end": 0.2}, "before its start"),
+                            ({"anneal_end": 0.5}, "Give where the annealing starts"),
+                            ({"anneal_global_begin": 0.9, "anneal_global_end": 0.1},
+                             "before its start"),
+                            ({"pr_cross": 1.2}, "between 0 and 1"),
+                            ({"pr_mut": -1}, "between 0 and 1"),
+                            ({"n_crossovers": 0}, "between 1 and 1000"),
+                            ({"n_crossovers": 1.5}, "whole number"),
+                            ({"ener_boltz_temp": -5}, "between 0 and"),
+                            ({"optimizer": "MCMC", "max_generations": None, "pr_cross": 0.5},
+                             "Monte Carlo alone has no crossover"),
+                            ({"optimizer": "MCMC", "max_generations": None,
+                              "anneal_global_begin": 0.5}, "for the optimizer HYBRID"),
+                            ({"optimizer": "GA", "anneal_begin": 0.5}, "no Monte Carlo steps"),
+                            ({"anneal": 0.5}, "has no option 'anneal'")):
+            answer = post(dict(more, options=dict(more["options"], **wrong)))
+            self.assertEqual(400, answer.status_code, wrong)
+            self.assertIn(said, answer.json()["detail"], wrong)
+        self.assertEqual(ncalls, len(self.run.calls))
+        # Monte Carlo alone anneals as well
+        alone = done(post(dict(body, options={"anneal_begin": 0.25, "ener_boltz_temp": 298.15})))
+        self.assertEqual("finished", alone["status"], alone["error"])
+        self.assertEqual((0.25, 298.15), tuple(self.run.calls[-1]["options"][key]
+                                               for key in ("anneal_begin", "ener_boltz_temp")))
+
     def test_molprop_files_may_be_larger(self):
         """!
         @brief Molprop files have their own largest size.

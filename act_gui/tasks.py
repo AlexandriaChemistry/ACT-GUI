@@ -264,7 +264,8 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          cluster=True),
     Task(name="train", command="train_ff",
          title="Train a force field on the data of a molprop file",
-         options=("optimizer", "max_iter", "max_generations", "seed", "random_init", "temp"),
+         options=("optimizer", "max_iter", "max_generations", "seed", "random_init",
+                  "temp") + training.SETTINGS,
          fixed={"json": True},
          outputs={"o": "trained.xml"},
          progress=True,
@@ -544,6 +545,7 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
             individuals = training.population(
                 request.get("training") if TRAINING in task.needs else None,
                 chosen["optimizer"], number)
+            training.settings(chosen, chosen["optimizer"])
         except training.TrainingError as exc:
             raise RequestError(str(exc)) from exc
         chosen["pop_size"] = individuals

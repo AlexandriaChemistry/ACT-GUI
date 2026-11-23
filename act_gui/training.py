@@ -14,7 +14,11 @@ browser.
 
 The user chooses the kinds of parameters to train, such as sigma and
 epsilon, and the properties to train on, which are those of an evaluation
-(module evaluation). train_ff trains a population of individuals, sets of
+(module evaluation). More settings of train_ff can be given: the annealing
+of the Monte Carlo temperature, within the iterations and over the
+generations, the temperature for a Boltzmann weighting of the reference
+energies, and the crossover and mutation of the genetic algorithm.
+train_ff trains a population of individuals, sets of
 parameters, as many as it has processes unless the user gives another
 number: with fewer individuals each gets helper processes, with more (only
 for the genetic algorithm) each process computes several in turn.
@@ -56,6 +60,21 @@ OPTIMIZERS: Dict[str, bool] = {"MCMC": False, "HYBRID": True, "GA": True}
 
 ## The optimizer when none is chosen: the one that runs on one process
 DEFAULT_OPTIMIZER = "MCMC"
+
+## The annealing of the Monte Carlo temperature within the iterations: where
+## it starts and where the temperature is zero, as fractions of the iterations
+ANNEALING = ("anneal_begin", "anneal_end")
+## The same over the generations, for the genetic algorithm with Monte Carlo
+GLOBAL_ANNEALING = ("anneal_global_begin", "anneal_global_end")
+## The settings of the genetic algorithm: the number of crossover points and
+## the probabilities of a crossover and of a mutation
+GENETIC = ("n_crossovers", "pr_cross", "pr_mut")
+## More settings of train_ff that the user can give, by option name. The
+## first is the temperature of the Boltzmann weighting of reference energies.
+SETTINGS = ("ener_boltz_temp",) + ANNEALING + GLOBAL_ANNEALING + GENETIC
+## What the annealing is called in messages
+_ANNEALING_NAMES = {ANNEALING: "the annealing", GLOBAL_ANNEALING: "the annealing over the "
+                    "generations"}
 
 
 def options(spec: Any) -> Dict[str, Any]:
@@ -150,6 +169,47 @@ def population(spec: Any, optimizer: Any, number: int) -> int:
         raise TrainingError("With %d individuals the number of processes is a multiple of %d, "
                             "such that each individual gets as many, not %d" % (size, size, number))
     return size
+
+
+def settings(chosen: Mapping[str, Any], optimizer: Any) -> None:
+    """!
+    @brief Check the settings of a training that depend on each other and
+    on the optimizer. That each is a number within its limits is checked
+    with the other options.
+    @param chosen    The options of train_ff that were given, by name.
+    @param optimizer The optimizer, checked by processes.
+    @throws TrainingError if the annealing ends before it starts, if only
+    its end is given, since without a start there is no annealing, if the
+    number of crossover points is not a whole number, or for a setting that
+    the optimizer does not use: annealing for the genetic algorithm alone,
+    annealing over the generations for another optimizer than HYBRID, and
+    crossover and mutation for Monte Carlo alone.
+    """
+    name = DEFAULT_OPTIMIZER if optimizer is None else optimizer
+    genetic = OPTIMIZERS.get(name, False)
+    for pair, what in _ANNEALING_NAMES.items():
+        begin, end = (chosen.get(key) for key in pair)
+        if begin is None and end is None:
+            continue
+        if name == "GA":
+            raise TrainingError("The optimizer GA has no Monte Carlo steps, so no annealing")
+        if pair == GLOBAL_ANNEALING and name != "HYBRID":
+            raise TrainingError("Annealing over the generations is for the optimizer HYBRID, "
+                                "not for %s" % name)
+        if begin is None:
+            # train_ff does not anneal without a start
+            raise TrainingError("Give where %s starts as well as where it ends" % what)
+        if end is not None and end < begin:
+            raise TrainingError("The end of %s (%g) is before its start (%g)"
+                                % (what, end, begin))
+    given = [key for key in GENETIC if chosen.get(key) is not None]
+    if given and not genetic:
+        raise TrainingError("Monte Carlo alone has no crossover or mutation (option %s)"
+                            % ", ".join(given))
+    crossovers = chosen.get("n_crossovers")
+    if crossovers is not None and (isinstance(crossovers, bool)
+                                   or not isinstance(crossovers, int)):
+        raise TrainingError("The number of crossover points is a whole number")
 
 
 def continued(spec: Any) -> Optional[str]:
@@ -274,9 +334,11 @@ def describe() -> Dict[str, Any]:
     """!
     @brief What the browser needs to know to build the form for a training.
     @return The optimizers with whether they need more than one process,
-    the optimizer that is used when none is chosen and the largest part of
-    the compounds for testing.
+    the optimizer that is used when none is chosen, the largest part of
+    the compounds for testing and the names of the settings that can be
+    given, see SETTINGS.
     """
     return {"optimizers": [{"name": name, "parallel": parallel}
                            for name, parallel in OPTIMIZERS.items()],
-            "default_optimizer": DEFAULT_OPTIMIZER, "max_test": MAX_TEST}
+            "default_optimizer": DEFAULT_OPTIMIZER, "max_test": MAX_TEST,
+            "settings": list(SETTINGS)}

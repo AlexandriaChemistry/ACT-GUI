@@ -943,6 +943,66 @@ function population(chosen, processes) {
 }
 
 /**
+ * More settings of a training, each an option of train_ff: its field, its
+ * limits when the server gives none, whether it is a whole number, what
+ * the page calls it in a message and the optimizers that use it.
+ */
+const MORE_SETTINGS = [
+  { id: "#tr-temp", name: "temp", low: 1e-6, high: 1e6, label: "The temperature", uses: ["MCMC", "HYBRID"] },
+  { id: "#tr-abegin", name: "anneal_begin", low: 0, high: 1, label: "The start of the annealing", uses: ["MCMC", "HYBRID"] },
+  { id: "#tr-aend", name: "anneal_end", low: 0, high: 1, label: "The end of the annealing", uses: ["MCMC", "HYBRID"] },
+  { id: "#tr-gbegin", name: "anneal_global_begin", low: 0, high: 1, label: "The start of the annealing over the generations", uses: ["HYBRID"] },
+  { id: "#tr-gend", name: "anneal_global_end", low: 0, high: 1, label: "The end of the annealing over the generations", uses: ["HYBRID"] },
+  { id: "#tr-ncross", name: "n_crossovers", low: 1, high: 1000, whole: true, label: "The number of crossover points", uses: ["GA", "HYBRID"] },
+  { id: "#tr-prcross", name: "pr_cross", low: 0, high: 1, label: "The probability of a crossover", uses: ["GA", "HYBRID"] },
+  { id: "#tr-prmut", name: "pr_mut", low: 0, high: 1, label: "The probability of a mutation", uses: ["GA", "HYBRID"] },
+  { id: "#tr-boltz", name: "ener_boltz_temp", low: 0, high: 1e6, label: "The temperature for Boltzmann weighting", uses: ["MCMC", "GA", "HYBRID"] },
+];
+
+/**
+ * The settings of MORE_SETTINGS that the optimizer uses and that have a value.
+ * @param {object} chosen The optimizer.
+ * @returns {object[]} The settings.
+ */
+const settingsGiven = chosen => MORE_SETTINGS.filter(s => s.uses.includes(chosen.name) && $(s.id).value.trim() !== "");
+
+/**
+ * The options of train_ff for the settings that were given, checked as the server does.
+ * @param {object} chosen The optimizer.
+ * @returns {{options: object}|{error: string}} The options by name, or what is wrong.
+ */
+function moreSettings(chosen) {
+  const limit = (state.limits || {}).train || {}, options = {};
+  for (const s of settingsGiven(chosen)) {
+    const [low, high] = limit[s.name] || [s.low, s.high], value = Number($(s.id).value);
+    if (!Number.isFinite(value) || value < low || value > high || (s.whole && !Number.isInteger(value))) {
+      return { error: `${s.label} is a ${s.whole ? "whole " : ""}number between ${low} and ${high}.` };
+    }
+    options[s.name] = value;
+  }
+  // Annealing has a start; its end, the end of the iterations if none is given, is not before it
+  for (const [begin, end, what] of [["anneal_begin", "anneal_end", "the annealing"], ["anneal_global_begin", "anneal_global_end", "the annealing over the generations"]]) {
+    if (options[end] !== undefined && options[begin] === undefined) return { error: `Give where ${what} starts as well as where it ends.` };
+    if (options[end] !== undefined && options[end] < options[begin]) return { error: `The end of ${what} is before its start.` };
+  }
+  return { options };
+}
+
+/** Show the settings that the optimizer uses, and tell how many are set. */
+function moreSettingsShown() {
+  const chosen = optimizer();
+  for (const s of MORE_SETTINGS) $(s.id).closest(".field").hidden = !s.uses.includes(chosen.name);
+  $("#tr-mcgroup").hidden = chosen.name === "GA";
+  $("#tr-gagroup").hidden = !chosen.parallel;
+  $("#tr-annealnote").textContent = "Annealing lowers the temperature in a straight line to zero. Its start and end are fractions of the Monte Carlo iterations, "
+    + "between 0 and 1: from 0.5 to 1 the temperature goes down during the second half. Without a start there is no annealing."
+    + (chosen.name === "HYBRID" ? " Over the generations the temperature at which the iterations of a generation start is lowered in the same way, between two fractions of the number of generations." : "");
+  $("#tr-mutnote").textContent = chosen.name === "HYBRID" ? " with the Monte Carlo iterations" : "";
+  const set = settingsGiven(chosen).length;
+  $("#tr-moreset").textContent = set ? ` · ${set} set` : "";
+}
+
+/**
  * What the training adds to the request for a comparison.
  * @param {object} body The request for the comparison.
  * @returns {object|null} The request, null if something has to be given first.
@@ -962,6 +1022,9 @@ function trainingRequest(body) {
     options.seed = whole("#tr-seed", 1, 2147483647);
     if (options.seed === null) { toast("The random seed is a whole number above zero."); return null; }
   }
+  const more = moreSettings(chosen);
+  if (more.error) { $("#tr-more").open = true; toast(more.error); return null; }
+  Object.assign(options, more.options);
   // On the cluster the job has the processes, which are asked for with the job
   const cluster = onCluster(), most = cluster ? Number($("#ev-tasks").max) : state.maxProcesses;
   const processes = whole(cluster ? "#ev-tasks" : "#tr-procs", chosen.parallel ? 2 : 1, most);
@@ -1155,6 +1218,7 @@ function what() {
   $("#tr-note").textContent = chosen.parallel
     ? `${chosen.name} trains a population of sets of parameters, individuals, an even number of them, by default one for each process. With more individuals than processes each process computes several in turn. Each generation every individual does the Monte Carlo iterations${chosen.name === "GA" ? " (not used by GA)" : ""}.`
     : "Each individual has its own Monte Carlo chain, and the best of them is kept. There is one individual for each process unless fewer are given; then each gets as many processes.";
+  moreSettingsShown();
   places();
   offerKinds();
   continueNote();
@@ -1394,7 +1458,19 @@ export function startMolprops(told) {
   $("#tr-test").max = String(100 * state.training.max_test);
   seg($("#ev-what"), what);
   $("#tr-optimizer").onchange = what;
+  $("#tr-more").oninput = moreSettingsShown;
   what();
+  // The values that train_ff uses by itself, and what it says about each setting
+  call("/tasks").then(answer => answer.json()).then(listed => {
+    const train = (listed.tasks || []).find(task => task.name === "train");
+    for (const s of MORE_SETTINGS) {
+      const option = train && (train.options || []).find(o => o.name === s.name);
+      if (!option || !option.description) continue;
+      $(s.id).title = `${option.description} (train_ff -${s.name})`;
+      // No annealing and no weighting are said in words
+      if (typeof option.default === "number" && !["anneal_begin", "anneal_global_begin", "ener_boltz_temp"].includes(s.name)) $(s.id).placeholder = String(option.default);
+    }
+  }).catch(() => { /* the fields keep what the page says */ });
   $("#tr-stop").onclick = () => { if (state.tr.running) call("/jobs/" + state.tr.running, { method: "DELETE" }).catch(() => {}); };
   $("#tr-save").onclick = e => {
     // Named after the molprop file it was trained on
