@@ -48,8 +48,8 @@ requirements:
     # To save plots as PDF files
     - plotxvg >=1.3
     # The force fields that can be chosen, in share/act/forcefields, with
-    # the default force field Alexandria/ACS-pg1, which came after 0.9
-    - forcefields >=2026.11.23
+    # the default force field Alexandria/ACS-pg1 since 0.95
+    - forcefields >=0.95
 
 tests:
   - python:
