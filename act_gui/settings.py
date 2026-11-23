@@ -104,7 +104,11 @@ class Settings:
         "nma": {"maxiter": (1, 100000), "linewidth": (0.1, 500)},
         "geometry_ff": {"bfactor": (0.01, 1), "afactor": (0.01, 1), "factor": (0.01, 1)},
         "train": {"max_iter": (1, 100000), "max_generations": (1, 10000),
-                  "temp": (1e-6, 1e6), "seed": (0, 2147483647)},
+                  "temp": (1e-6, 1e6), "seed": (0, 2147483647),
+                  "anneal_begin": (0, 1), "anneal_end": (0, 1),
+                  "anneal_global_begin": (0, 1), "anneal_global_end": (0, 1),
+                  "ener_boltz_temp": (0, 1e6), "n_crossovers": (1, 1000),
+                  "pr_cross": (0, 1), "pr_mut": (0, 1)},
         "b2": {"T1": (1, 10000), "T2": (1, 10000), "dT": (0, 10000), "maxdimer": (1, 10000000)},
     })
 

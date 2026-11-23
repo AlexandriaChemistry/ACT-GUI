@@ -1437,9 +1437,64 @@ class PageTest(unittest.TestCase):
             element.clear()
             element.send_keys(value)
         self.shot("23-train-form")
+        # More settings: each optimizer has those that it uses
+        self.click("#tr-more > summary")
+        shown = "return [...document.querySelectorAll('#tr-more input')].filter(i => i.offsetParent !== null).map(i => i.id)"
+        self.assertEqual(["tr-temp", "tr-abegin", "tr-aend", "tr-boltz"], self.browser.execute_script(shown))
+        optimizer.select_by_value("HYBRID")
+        self.assertEqual(["tr-temp", "tr-abegin", "tr-aend", "tr-gbegin", "tr-gend", "tr-ncross",
+                          "tr-prcross", "tr-prmut", "tr-boltz"], self.browser.execute_script(shown))
+        self.assertIn("Over the generations", self.text("#tr-annealnote"))
+        optimizer.select_by_value("GA")
+        self.assertEqual(["tr-ncross", "tr-prcross", "tr-prmut", "tr-boltz"],
+                         self.browser.execute_script(shown))
+        # What train_ff uses by itself is shown in grey, with what it says about the setting
+        self.wait(lambda b: "crossover" in (b.find_element(By.ID, "tr-prcross").get_attribute("title") or "").lower())
+        self.assertEqual("0.35", self.browser.find_element(By.ID, "tr-prcross").get_attribute("placeholder"))
+        self.assertIn("train_ff -n_crossovers", self.browser.find_element(By.ID, "tr-ncross").get_attribute("title"))
+        # A setting of another optimizer is not sent: the crossovers stay behind with Monte Carlo
+        self.browser.find_element(By.ID, "tr-prcross").send_keys("0.5")
+        self.assertEqual("· 1 set", self.text("#tr-moreset").strip())
+        optimizer.select_by_value("MCMC")
+        self.assertEqual("", self.text("#tr-moreset").strip())
+        # One process again, as before the other optimizers were looked at
+        procs.clear()
+        procs.send_keys("1")
+        self.assertEqual("no annealing", self.browser.find_element(By.ID, "tr-abegin").get_attribute("placeholder"))
+        # Annealing that ends before it starts, or that has no start, is not sent
+        for field, value in (("tr-abegin", "0.8"), ("tr-aend", "0.4")):
+            self.browser.find_element(By.ID, field).send_keys(value)
+        self.click("#run-ev")
+        self.wait(lambda b: "The end of the annealing is before its start" in b.find_element(By.ID, "toast").text)
+        self.browser.find_element(By.ID, "tr-abegin").clear()
+        self.click("#run-ev")
+        self.wait(lambda b: "Give where the annealing starts" in b.find_element(By.ID, "toast").text)
+        self.browser.find_element(By.ID, "tr-abegin").send_keys("1.5")
+        self.click("#run-ev")
+        self.wait(lambda b: "The start of the annealing is a number between 0 and 1" in b.find_element(By.ID, "toast").text)
+        self.assertFalse(self.browser.find_element(By.ID, "tr-run").is_displayed())
+        # Annealing over the second half, a temperature and Boltzmann weighting of the energies
+        for field, value in (("tr-abegin", "0.5"), ("tr-aend", "1"), ("tr-temp", "2"), ("tr-boltz", "300")):
+            element = self.browser.find_element(By.ID, field)
+            element.clear()
+            element.send_keys(value)
+        self.assertEqual("· 4 set", self.text("#tr-moreset").strip())
+        self.browser.execute_script("document.getElementById('tr-more').scrollIntoView({ block: 'center' })")
+        self.shot("23b-train-more-settings")
+        self.browser.execute_script(
+            "window.asked = []; const send = window.fetch;"
+            " window.fetch = (url, init) => { if (init && init.method === 'POST' && init.body)"
+            " window.asked.push(init.body); return send(url, init); };")
         self.click("#run-ev")
         self.wait(lambda b: b.find_element(By.ID, "ev-pill").text == "Done")
         self.assertEqual("", self.errors())
+        # The settings went to train_ff, without the crossover of another optimizer
+        asked = [body for body in map(json.loads, self.browser.execute_script("return window.asked"))
+                 if body.get("task") == "train"]
+        self.assertEqual(1, len(asked))
+        self.assertEqual({"optimizer": "MCMC", "max_iter": 5, "random_init": True, "seed": 1993,
+                          "temp": 2, "anneal_begin": 0.5, "anneal_end": 1, "ener_boltz_temp": 300},
+                         asked[0]["options"])
         # How it went
         self.assertTrue(self.browser.find_element(By.ID, "tr-run").is_displayed())
         status = self.text("#tr-status")

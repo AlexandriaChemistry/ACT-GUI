@@ -217,7 +217,19 @@ algorithm needs an even number of them, and may have more individuals than
 processes, which then compute several in turn; Monte Carlo alone has at
 most one for each process. With fewer individuals than processes the number
 of processes is a multiple of the number of individuals, such that each gets
-as many. More than one process needs `mpirun`, `mpiexec` or `srun` in
+as many. *More settings* has what is needed less often, each an option of
+`train_ff` that is left to the program when its field is empty: the
+temperature of Monte Carlo and its annealing, which lowers the temperature
+to zero between two fractions of the iterations (`-anneal_begin`,
+`-anneal_end`) and, for the genetic algorithm with Monte Carlo, also
+between two fractions of the generations (`-anneal_global_begin`,
+`-anneal_global_end`); for the genetic algorithm the number of crossover
+points and the probabilities of a crossover and of a mutation
+(`-n_crossovers`, `-pr_cross`, `-pr_mut`); and a temperature for
+Boltzmann weighting of the reference energies (`-ener_boltz_temp`), with
+which structures of high energy count less. The form shows the settings
+that the optimizer uses, and the fields say what `train_ff` uses by
+itself. More than one process needs `mpirun`, `mpiexec` or `srun` in
 the `PATH`, or the program in the environment variable `ACT_MPIEXEC`. The
 page follows the training with a plot of χ², from what
 `train_ff -progress` writes, lists the trained parameters and compares the

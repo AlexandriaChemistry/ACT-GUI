@@ -514,6 +514,39 @@
               <label class="check"><input type="checkbox" id="tr-random" checked> From random values</label></div>
           </div>
           <p class="muted fine" id="tr-note"></p>
+          <details class="more" id="tr-more"><summary>More settings<span id="tr-moreset"></span></summary>
+            <div class="group mt8" id="tr-mcgroup"><h3>Monte Carlo</h3>
+              <div class="row top">
+                <div class="field"><label for="tr-temp">Temperature</label>
+                  <input type="number" id="tr-temp" min="0.000001" step="any" placeholder="5"></div>
+                <div class="field"><label for="tr-abegin">Annealing starts at</label>
+                  <input type="number" id="tr-abegin" min="0" max="1" step="0.05" placeholder="no annealing"></div>
+                <div class="field"><label for="tr-aend">Annealing ends at</label>
+                  <input type="number" id="tr-aend" min="0" max="1" step="0.05" placeholder="1"></div>
+                <div class="field"><label for="tr-gbegin">Over the generations: starts at</label>
+                  <input type="number" id="tr-gbegin" min="0" max="1" step="0.05" placeholder="no annealing"></div>
+                <div class="field"><label for="tr-gend">Over the generations: ends at</label>
+                  <input type="number" id="tr-gend" min="0" max="1" step="0.05" placeholder="1"></div>
+              </div>
+              <p class="muted fine" id="tr-annealnote"></p></div>
+            <div class="group mt8" id="tr-gagroup"><h3>Genetic algorithm</h3>
+              <div class="row top">
+                <div class="field"><label for="tr-ncross">Crossover points</label>
+                  <input type="number" id="tr-ncross" min="1" max="1000" step="1" placeholder="1"></div>
+                <div class="field"><label for="tr-prcross">Probability of a crossover</label>
+                  <input type="number" id="tr-prcross" min="0" max="1" step="0.05" placeholder="0.35"></div>
+                <div class="field"><label for="tr-prmut">Probability of a mutation</label>
+                  <input type="number" id="tr-prmut" min="0" max="1" step="0.01" placeholder="0.01"></div>
+              </div>
+              <p class="muted fine">A crossover makes two new individuals of two others, which swap their parameters between the crossover points; there should be fewer points than parameters. A mutation changes the parameters of an individual<span id="tr-mutnote"></span>.</p></div>
+            <div class="group mt8"><h3>Reference energies</h3>
+              <div class="row top">
+                <div class="field"><label for="tr-boltz">Temperature for Boltzmann weighting (K)</label>
+                  <input type="number" id="tr-boltz" min="0" step="any" placeholder="no weighting"></div>
+              </div>
+              <p class="muted fine">With a temperature T, a structure counts less the further its reference energy E is above the lowest one of its compound or dimer: its weight is exp(−(E − E<sub>min</sub>)/k<sub>B</sub>T). This is for training on the potential energy and on interaction energies.</p></div>
+            <p class="muted fine">A field that is left empty has the value that <code>train_ff</code> uses by itself, which the field shows in grey.</p>
+          </details>
         </div>
         <div class="row top" id="ev-where" hidden>
           <div class="field"><span class="lab">Run</span>

@@ -222,6 +222,49 @@ class TrainingTest(unittest.TestCase):
                                     training.digest({})["sensitivity"]))
         self.assertEqual("text", training.digest("text"))
 
+    def test_settings_that_depend_on_each_other(self):
+        """!
+        @brief Annealing has a start and does not end before it; annealing
+        over the generations is for HYBRID, annealing is not for the
+        genetic algorithm alone, and crossover and mutation are not for
+        Monte Carlo alone.
+        """
+        accepted = [({}, "MCMC"), ({}, None), ({"temp": 2.5, "max_iter": 100}, "GA"),
+                    ({"anneal_begin": 0.5}, "MCMC"), ({"anneal_begin": 0.5, "anneal_end": 1}, None),
+                    ({"anneal_begin": 0.4, "anneal_end": 0.4}, "HYBRID"),
+                    ({"anneal_begin": 0, "anneal_end": 0.8, "anneal_global_begin": 0.25,
+                      "anneal_global_end": 0.75, "n_crossovers": 2, "pr_cross": 0.5,
+                      "pr_mut": 0.1, "ener_boltz_temp": 300}, "HYBRID"),
+                    ({"anneal_global_begin": 0.5}, "HYBRID"),
+                    ({"n_crossovers": 3, "pr_cross": 1, "pr_mut": 0}, "GA"),
+                    ({"ener_boltz_temp": 298.15}, "MCMC"), ({"ener_boltz_temp": 0}, "GA")]
+        for chosen, optimizer in accepted:
+            with self.subTest(chosen=chosen, optimizer=optimizer):
+                self.assertIsNone(training.settings(chosen, optimizer))
+        refused = [({"anneal_begin": 0.8, "anneal_end": 0.5}, "MCMC", "before its start"),
+                   ({"anneal_end": 0.5}, "MCMC", "Give where the annealing starts"),
+                   ({"anneal_begin": 0.5}, "GA", "no Monte Carlo steps"),
+                   ({"anneal_global_begin": 0.5}, "GA", "no Monte Carlo steps"),
+                   ({"anneal_global_begin": 0.5}, "MCMC", "for the optimizer HYBRID, not for MCMC"),
+                   ({"anneal_global_end": 0.5}, None, "for the optimizer HYBRID, not for MCMC"),
+                   ({"anneal_global_end": 0.5}, "HYBRID",
+                    "Give where the annealing over the generations starts"),
+                   ({"anneal_global_begin": 0.6, "anneal_global_end": 0.5}, "HYBRID",
+                    "The end of the annealing over the generations (0.5) is before its start (0.6)"),
+                   ({"n_crossovers": 2}, "MCMC", "Monte Carlo alone has no crossover"),
+                   ({"pr_cross": 0.5, "pr_mut": 0.1}, None, "option pr_cross, pr_mut"),
+                   ({"n_crossovers": 2.5}, "GA", "whole number"),
+                   ({"n_crossovers": True}, "HYBRID", "whole number")]
+        for chosen, optimizer, said in refused:
+            with self.subTest(chosen=chosen, optimizer=optimizer):
+                with self.assertRaises(training.TrainingError) as caught:
+                    training.settings(chosen, optimizer)
+                self.assertIn(said, str(caught.exception))
+        # The four of the annealing, the weighting and those of the genetic algorithm
+        self.assertEqual(("ener_boltz_temp", "anneal_begin", "anneal_end", "anneal_global_begin",
+                          "anneal_global_end", "n_crossovers", "pr_cross", "pr_mut"),
+                         training.SETTINGS)
+
     def test_described_for_the_page(self):
         """!
         @brief The page learns the optimizers and which need two processes.
@@ -231,6 +274,7 @@ class TrainingTest(unittest.TestCase):
         self.assertEqual([False, True, True], [o["parallel"] for o in described["optimizers"]])
         self.assertEqual("MCMC", described["default_optimizer"])
         self.assertEqual(0.5, described["max_test"])
+        self.assertEqual(list(training.SETTINGS), described["settings"])
 
 
 if __name__ == "__main__":
