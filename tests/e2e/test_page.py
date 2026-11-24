@@ -14,6 +14,10 @@ Firefox is driven without a window through selenium. The tests run when
 selenium is installed and ACT_ALEXANDRIA points to the alexandria program;
 they are skipped otherwise. With ACT_GUI_SHOTS set to a directory, pictures
 of the page are saved there at the main steps.
+
+Selenium Manager, which selenium starts to find the driver of the browser,
+sends statistics of its use to plausible.io unless SE_AVOID_STATS is set:
+the tests set it, so that running them sends nothing.
 """
 import json
 import os
@@ -23,6 +27,9 @@ import threading
 import time
 import unittest
 from pathlib import Path
+
+# Before selenium starts Selenium Manager, which reads it: no statistics
+os.environ["SE_AVOID_STATS"] = "true"
 
 try:
     from selenium import webdriver
@@ -40,6 +47,19 @@ ALEXANDRIA = os.environ.get("ACT_ALEXANDRIA", "")
 SHOTS = os.environ.get("ACT_GUI_SHOTS", "")
 ## The directory src/act/testdata of the source of ACT, if it is given
 TESTDATA = os.environ.get("ACT_TESTDATA", "")
+
+
+class NoStatisticsTest(unittest.TestCase):
+    """!
+    @brief Running the tests in the browser sends no statistics of selenium.
+    """
+
+    def test_statistics_are_off(self):
+        """!
+        @brief The switch of Selenium Manager is set, also when the
+        environment had it otherwise.
+        """
+        self.assertEqual("true", os.environ.get("SE_AVOID_STATS"))
 
 
 @unittest.skipUnless(HAVE_SELENIUM and ALEXANDRIA, "selenium or ACT_ALEXANDRIA is missing")

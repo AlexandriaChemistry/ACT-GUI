@@ -490,7 +490,9 @@ program, and `tests/test_openmm_package.py` runs ten steps of the archive
 for OpenMM when OpenMM and ACT-utilities are installed. The tests in
 `tests/e2e` drive the page in Firefox without a window, through selenium,
 with the real program; with `ACT_GUI_SHOTS` set to a directory they save
-pictures of the page there. With `ACT_TESTDATA` set to the directory
+pictures of the page there. They set `SE_AVOID_STATS=true`, so that
+Selenium Manager, which selenium starts to find the driver of the browser,
+does not send statistics of its use to plausible.io. With `ACT_TESTDATA` set to the directory
 `src/act/testdata` of the source of ACT, the tests that need a molprop file
 run as well. The tests with the real program use the default force field,
 see below, or else `forcefields/ACS-pg1.xml` of `ACT_TESTDATA`, and are
