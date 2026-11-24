@@ -143,8 +143,14 @@ properties that were chosen are shown, in the order in which they were
 ticked, the first one first, also of a job on the cluster. The legend of a
 plot tells the compounds for training from those for testing. A plot is
 zoomed with the wheel of the mouse or the buttons + and −, moved by
-dragging, and shown whole again with *All* or a double click. The plot can be
-saved as a PDF file and the data as an xvg file.
+dragging, and shown whole again with *Reset* or a double click. As
+long as a plot is zoomed or moved it has a button *Reset zoom* of its own
+at its top right, so that the data are easy to get back after they were
+zoomed or moved out of sight; this holds for all plots that can be zoomed,
+such as the histograms of the geometries in the tab *Force field*. A plot
+cannot be zoomed in further than a millionth of its whole or out further
+than a thousand times its whole. The plot can be saved as a PDF file and
+the data as an xvg file.
 
 In a plot of a term of the interaction energy, such as the dispersion of
 SAPT against that of the force field, a click on a point shows the

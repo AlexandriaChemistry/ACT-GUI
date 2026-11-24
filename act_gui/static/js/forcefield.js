@@ -663,7 +663,7 @@ function histogramPlot() {
                     onPoint: (series, index) => { state.hist.marked = { series, id: index }; markPoint("geoplot", state.hist.marked); binSamples(index); } });
   const listed = (state.hist.summary[$("#geo-htype").value] || []).find(h => h.identifier === data.identifier);
   const found = verdict(listed && listed.analysis, state.hist.analysis);
-  $("#geo-histnote").textContent = `${data.count} values in bins of ${num(w, 4)} ${unit}. ${found ? found + " " : ""}Zoom with the wheel or with + and −, drag to move, double-click or All to see all of it.`;
+  $("#geo-histnote").textContent = `${data.count} values in bins of ${num(w, 4)} ${unit}. ${found ? found + " " : ""}Zoom with the wheel or with + and −, drag to move; Reset or a double click shows all of it again.`;
 }
 
 /**

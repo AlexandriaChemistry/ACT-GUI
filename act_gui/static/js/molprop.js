@@ -560,7 +560,7 @@ async function comparisonPlot() {
                    onPoint: term ? (i, id) => showCalculation(option, i, id) : null });
   const counts = data.sets.map((set, i) => `${set.x.length} ${data.legends[i] || "points"}`).join(", ");
   $("#ev-plotnote").textContent = `${counts}. The dashed line is where the force field equals the reference. ` +
-    "Zoom with the wheel or with + and −, drag to move, double-click or All to see all points." +
+    "Zoom with the wheel or with + and −, drag to move; Reset or a double click shows all points again." +
     (term ? " Click a point to see its structure and its energies." : "") +
     (thinned ? ` Of each set at most ${MAX_POINTS} points are drawn; the PDF file and the data have all.` : "");
 }

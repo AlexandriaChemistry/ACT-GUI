@@ -27,11 +27,13 @@ export const css = name => getComputedStyle(document.documentElement).getPropert
  * @returns {number[]} The positions of the ticks.
  */
 function ticks(lo, hi, n = 5) {
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return [];
   const span = hi - lo || 1, step0 = Math.pow(10, Math.floor(Math.log10(span / n)));
   const err = span / n / step0;
   const step = step0 * (err >= 7.5 ? 10 : err >= 3.5 ? 5 : err >= 1.5 ? 2 : 1);
   const t = [];
-  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-6; v += step) t.push(+v.toFixed(10));
+  // A step that is too small to change the value would never end
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-6 && t.length <= 4 * n; v += step) t.push(+v.toFixed(10));
   return t;
 }
 
@@ -39,6 +41,47 @@ function ticks(lo, hi, n = 5) {
 const plots = new Map();
 /** The part of a plot that is shown after zooming, by the id of its element: { xlim, ylim }. */
 const views = new Map();
+/**
+ * How far a plot can be zoomed in and out: the smallest and the largest
+ * part shown, and how far the middle can move from that of the whole plot,
+ * in widths of the whole plot. Beyond these the numbers of the axes are
+ * the same or infinite, and nothing can be seen.
+ */
+const ZOOM_IN = 1e-6, ZOOM_OUT = 1e3;
+
+/**
+ * Keep the part of a plot that is shown within what can be drawn.
+ * @param {object} view The part that is asked for: { xlim, ylim }.
+ * @param {object} cfg  The plot, with the whole of it: xlim and ylim.
+ * @returns {object} The part, no smaller than ZOOM_IN and no larger than
+ *                   ZOOM_OUT times the whole, with its middle not more than
+ *                   ZOOM_OUT widths of the whole from the middle of the whole.
+ */
+function bounded(view, cfg) {
+  const fit = (lim, whole) => {
+    const full = Math.abs(whole[1] - whole[0]) || 1, middle = (whole[0] + whole[1]) / 2;
+    // An axis that runs from right to left keeps doing so
+    const sign = Math.sign(lim[1] - lim[0]) || Math.sign(whole[1] - whole[0]) || 1;
+    const size = Number.isFinite(lim[1] - lim[0]) ? Math.abs(lim[1] - lim[0]) : Infinity;
+    const half = Math.min(Math.max(size, ZOOM_IN * full), ZOOM_OUT * full) / 2;
+    let at = (lim[0] + lim[1]) / 2;
+    if (!Number.isFinite(at)) at = middle;
+    at = Math.min(Math.max(at, middle - ZOOM_OUT * full), middle + ZOOM_OUT * full);
+    return [at - sign * half, at + sign * half];
+  };
+  return { xlim: fit(view.xlim, cfg.xlim), ylim: fit(view.ylim, cfg.ylim) };
+}
+
+/**
+ * Show a part of a plot that is on the page.
+ * @param {string} target The id of the element of the plot.
+ * @param {object} cfg    The plot.
+ * @param {object} view   The part to show: { xlim, ylim }.
+ */
+function showPart(target, cfg, view) {
+  views.set(target, bounded(view, cfg));
+  drawPlot(target, cfg);
+}
 
 /**
  * Draw a plot and remember it, such that it can be drawn again when the
@@ -49,8 +92,10 @@ const views = new Map();
  *                        onPoint and marked. With xlim from a large to a
  *                        small value the x-axis runs from right to left.
  *                        A series with a name is in the legend. With zoom
- *                        the wheel zooms, dragging moves the plot and a
- *                        double click shows all of it again. onPoint(i, id)
+ *                        the wheel zooms, dragging moves the plot, and a
+ *                        double click or the button Reset zoom, which the
+ *                        plot has as long as it is zoomed or moved, shows
+ *                        all of it again. onPoint(i, id)
  *                        is called with the series and the point that is
  *                        clicked, of series of points that are pickable:
  *                        the id of the point where the series has ids,
@@ -81,8 +126,7 @@ export function zoomPlot(target, factor) {
   if (!cfg) return;
   const view = views.get(target) || { xlim: cfg.xlim, ylim: cfg.ylim };
   const middle = lim => (lim[0] + lim[1]) / 2;
-  views.set(target, scaled(view, factor, middle(view.xlim), middle(view.ylim)));
-  drawPlot(target, cfg);
+  showPart(target, cfg, scaled(view, factor, middle(view.xlim), middle(view.ylim)));
 }
 
 /**
@@ -203,6 +247,16 @@ function drawPlot(target, cfg) {
     s += `<text x="${m.l + 30}" y="${y + 1}" fill="${ink}">${esc(p.name)}</text></g>`;
   });
   host.innerHTML = s + "</svg>";
+  if (cfg.zoom && views.has(target)) {
+    // The way back when the data are out of sight
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "btn small plot-reset";
+    reset.textContent = "Reset zoom";
+    reset.title = "Show all of the plot again (or double-click the plot)";
+    reset.onclick = () => resetZoom(target);
+    host.append(reset);
+  }
   host.onclick = cfg.onPick ? e => {
     const i = e.target.getAttribute && e.target.getAttribute("data-i");
     if (i !== null) cfg.onPick(+i);
@@ -233,12 +287,17 @@ function drawPlot(target, cfg) {
   host.onwheel = cfg.zoom ? e => {
     e.preventDefault();
     const spot = value(at(e));
-    views.set(target, scaled({ xlim: [x0, x1], ylim: [y0, y1] }, e.deltaY > 0 ? 1.25 : 0.8, spot.x, spot.y));
-    drawPlot(target, cfg);
+    // As far as the wheel turns: a notch of a mouse is about a quarter, a
+    // touchpad, which sends many small turns, zooms gradually
+    const pixels = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 300 : 1);
+    const factor = Math.exp(Math.max(-100, Math.min(100, pixels)) * 0.0025);
+    if (factor === 1) return;
+    showPart(target, cfg, scaled({ xlim: [x0, x1], ylim: [y0, y1] }, factor, spot.x, spot.y));
   } : null;
   host.ondblclick = cfg.zoom ? () => resetZoom(target) : null;
   host.onpointerdown = cfg.zoom || cfg.onPoint ? e => {
-    if (e.button !== 0) return;
+    // The button is no part of the plot to drag or to click a point of
+    if (e.button !== 0 || e.target.closest(".plot-reset")) return;
     const start = at(e), from = { xlim: [x0, x1], ylim: [y0, y1] };
     let moved = false;
     const move = ev => {
@@ -247,8 +306,7 @@ function drawPlot(target, cfg) {
       moved = true;
       // The plot follows the pointer
       const sx = (x1 - x0) / (W - m.l - m.r) * dx, sy = (y1 - y0) / (H - m.t - m.b) * dy;
-      views.set(target, { xlim: [from.xlim[0] - sx, from.xlim[1] - sx], ylim: [from.ylim[0] + sy, from.ylim[1] + sy] });
-      drawPlot(target, cfg);
+      showPart(target, cfg, { xlim: [from.xlim[0] - sx, from.xlim[1] - sx], ylim: [from.ylim[0] + sy, from.ylim[1] + sy] });
     };
     const up = ev => {
       window.removeEventListener("pointermove", move);

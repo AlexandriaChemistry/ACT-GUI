@@ -548,6 +548,59 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: b.find_element(By.ID, "save-dialog").get_attribute("open") is None)
         self.assertEqual(before, sorted(p.name for p in self.downloads.iterdir()))
 
+    def zoomed_out_of_sight(self, target, ticks):
+        """!
+        @brief Zoom a plot far in and far out with the wheel, and drag the
+        data out of sight: the plot keeps numbers on its axes, and its
+        button Reset zoom shows all of it again.
+        @param target The id of the element of the plot.
+        @param ticks  The function that gives the numbers on the axes.
+        """
+        whole = ticks()
+
+        def wheel(delta, times):
+            self.browser.execute_script("""
+                const host = document.getElementById(arguments[0]);
+                for (let k = 0; k < arguments[2]; k++) {
+                  const box = host.firstChild.getBoundingClientRect();
+                  host.dispatchEvent(new WheelEvent("wheel", { deltaY: arguments[1], deltaMode: 0, bubbles: true,
+                    cancelable: true, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 }));
+                }""", target, delta, times)
+
+        def numbers():
+            return [float(t.replace("−", "-")) for t in ticks().split()
+                    if t.replace("−", "-").replace(".", "", 1).lstrip("-").replace("e-", "", 1).isdigit()]
+        reset = "#%s .plot-reset" % target
+        for delta in (-100, 100):
+            wheel(delta, 400)
+            # Still numbers on the axes, which are finite and not all the same
+            shown = numbers()
+            self.assertGreaterEqual(len(shown), 4, ticks())
+            self.assertNotIn("NaN", ticks())
+            self.assertNotIn("Infinity", ticks())
+            self.assertTrue(self.browser.find_element(By.CSS_SELECTOR, reset).is_displayed())
+            self.click(reset)
+            self.assertEqual(whole, ticks())
+            self.assertEqual([], self.browser.find_elements(By.CSS_SELECTOR, reset))
+        # A touchpad sends many small turns: these zoom a little
+        wheel(-2, 1)
+        self.assertTrue(self.browser.find_element(By.CSS_SELECTOR, reset).is_displayed())
+        self.click(reset)
+        # Dragged far away, the data are out of sight; the button is there, and
+        # a click on it is no drag and no click on a point
+        host = self.browser.find_element(By.ID, target)
+        self.browser.execute_script("arguments[0].scrollIntoView({ block: 'center' })", host)
+        for _ in range(3):
+            ActionChains(self.browser).move_to_element(host).click_and_hold().move_by_offset(
+                -300, 120).release().perform()
+        self.assertNotEqual(whole, ticks())
+        self.assertTrue(self.browser.find_element(By.CSS_SELECTOR, reset).is_displayed())
+        self.shot("plot-reset-%s" % target)
+        self.click(reset)
+        self.assertEqual(whole, ticks())
+        self.assertEqual([], self.browser.find_elements(By.CSS_SELECTOR, reset))
+        self.assertEqual("", self.errors())
+
     def saved_file(self, selector, name, start, rename=None):
         """!
         @brief Press a button that saves a file, take or change the name
@@ -1774,16 +1827,19 @@ class PageTest(unittest.TestCase):
         self.assertEqual(["Train", "Test"], [g.text for g in self.browser.find_elements(
             By.CSS_SELECTOR, "#evplot g.legend")])
 
-        # Zooming in shows other numbers on the axes, All shows all again
+        # Zooming in shows other numbers on the axes, Reset zoom shows all again
         def ticks():
             return script("return [...document.querySelectorAll('#evplot svg > text')]"
                           ".map(t => t.textContent).join(' ')")
         whole = ticks()
+        self.assertEqual([], self.browser.find_elements(By.CSS_SELECTOR, "#evplot .plot-reset"))
         self.click("#ev-zoomin")
         self.click("#ev-zoomin")
         self.assertNotEqual(whole, ticks())
         self.click("#ev-zoomall")
         self.assertEqual(whole, ticks())
+        self.assertEqual([], self.browser.find_elements(By.CSS_SELECTOR, "#evplot .plot-reset"))
+        self.zoomed_out_of_sight("evplot", ticks)
         self.shot("28c-comparison-chosen")
 
         # A click on a point of the training: its structure and its energies
@@ -2156,6 +2212,9 @@ class PageTest(unittest.TestCase):
             self.assertRegex(atoms, r"^[A-Z][a-z]?\d+-[A-Z][a-z]?\d+$")
             self.assertTrue(value.endswith("pm"))
         self.shot("29c-geometry-histogram")
+        # Zoomed and moved out of sight, and back with Reset zoom
+        self.zoomed_out_of_sight("geoplot", lambda: self.browser.execute_script(
+            "return [...document.querySelectorAll('#geoplot svg > text')].map(t => t.textContent).join(' ')"))
         # Another kind of geometry
         kinds.select_by_value("ANGLES")
         self.wait(lambda b: "values in bins of 0.5 degrees" in b.find_element(By.ID, "geo-histnote").text)
