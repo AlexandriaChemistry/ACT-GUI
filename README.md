@@ -324,9 +324,9 @@ Without conda:
 - ACT with the Python package `act` (ACT 1.95b or newer) and
   the `alexandria` program in the `PATH`, or its path in the environment
   variable `ACT_ALEXANDRIA`;
-- Python 3.9 or newer with `fastapi` and `uvicorn`;
-- optionally `plotxvg`, to save plots as PDF files. Without it the page
-  does not show the buttons for that;
+- Python 3.10 or newer with `fastapi`, `uvicorn` and `plotxvg`, which
+  `pip install .` installs as well. Without plotXVG the page does not
+  show the buttons that save plots as PDF files;
 - optionally the force fields of the repository
   [ForceFields](https://github.com/AlexandriaChemistry/ForceFields),
   installed in the prefix of ACT, see below.
