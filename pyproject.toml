@@ -7,13 +7,12 @@ name = "act-gui"
 description = "Graphical user interface of the Alexandria Chemistry Toolkit"
 readme = "README.md"
 license = { text = "GPL-2.0-or-later" }
-requires-python = ">=3.9"
-dependencies = ["fastapi", "uvicorn"]
+requires-python = ">=3.10"
+# plotXVG saves the plots as PDF files
+dependencies = ["fastapi", "uvicorn", "plotxvg>=1.2"]
 dynamic = ["version"]
 
 [project.optional-dependencies]
-# To save plots as PDF files
-plots = ["plotxvg"]
 # To run the tests; selenium only for those that drive a browser
 test = ["httpx"]
 browser = ["selenium"]
