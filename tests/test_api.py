@@ -748,6 +748,44 @@ class ApiTest(unittest.TestCase):
         self.assertNotIn("analyse", options)
         self.assertEqual((True, 50), (options["json"], options["samples"]))
 
+    def test_structure_from_a_molprop_file(self):
+        """!
+        @brief The structure of one calculation of a compound in an uploaded
+        molprop file, found by the name or the IUPAC name, with its atoms in
+        the order of the file; a compound, calculation or file that is not
+        there is told.
+        """
+        from tests.test_evaluation import MOLPROP  # pylint: disable=import-outside-toplevel
+        molprop = self.client.post("/api/uploads", params={"kind": "molprop", "name": "m.xml"},
+                                   content=MOLPROP.encode(), headers=self.headers).json()["id"]
+
+        def get(upload, **params):
+            return self.client.get("/api/molprops/%s/structure" % upload, params=params,
+                                   headers=self.headers)
+        for name in ("w2", "water#water"):
+            answer = get(molprop, molecule=name, calculation="0007")
+            self.assertEqual(200, answer.status_code, answer.text)
+            told = answer.json()
+            self.assertEqual((name, "0007"), (told["molecule"], told["calculation"]))
+            self.assertEqual(["O", "H", "H", "O", "H", "Cl"], [a["element"] for a in told["atoms"]])
+            # In Angstrom, whatever the unit of the file
+            self.assertAlmostEqual(3.0, told["atoms"][3]["x"])
+            self.assertAlmostEqual(3.96, told["atoms"][4]["x"])
+        for params in ({"molecule": "w2", "calculation": "0099"},
+                       {"molecule": "nobody", "calculation": "0007"}):
+            answer = get(molprop, **params)
+            self.assertEqual(404, answer.status_code, params)
+            self.assertIn("has no calculation", answer.json()["detail"])
+        self.assertEqual(404, get("nosuchfile", molecule="w2", calculation="0007").status_code)
+        self.assertEqual(422, get(molprop, molecule="w2").status_code)
+        # Not another kind of upload
+        forcefield = self.client.post("/api/uploads", params={"kind": "forcefield", "name": "f.xml"},
+                                      content=FF, headers=self.headers).json()["id"]
+        self.assertEqual(404, get(forcefield, molecule="w2", calculation="0007").status_code)
+        # Only with the token
+        self.assertEqual(401, self.client.get("/api/molprops/%s/structure" % molprop,
+                                              params={"molecule": "w2", "calculation": "0007"}).status_code)
+
     def test_geometry_histograms(self):
         """!
         @brief The result of geometry_ff keeps which histograms there are;

@@ -22,7 +22,7 @@
 import { $, $$, addLibrary, alertBox, call, el, libraryChoice, num, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
 import { compareWith, startDiff } from "./ffdiff.js";
 import { chosenSites, redrawVsites, startVsites } from "./vsites.js";
-import { markPoint, plot, resetZoom, zoomPlot } from "./plot.js";
+import { css, markPoint, plot, resetZoom, zoomPlot } from "./plot.js";
 
 /** What the workspace knows. */
 const state = {
@@ -37,7 +37,7 @@ const state = {
   filter: "",          // the interaction of which the parameters are listed
   query: "",           // the text that identifiers must contain
   picked: null,        // the parameter that is being changed: { interaction, identifier, param }
-  hist: null,          // the histograms of geometry_ff: { job, summary, analysis, data, marked }
+  hist: null,          // the histograms of geometry_ff: { job, molprop, summary, analysis, data, marked }
   fixed: [],           // the files with fixed parameters: { name, entries }
 };
 
@@ -569,10 +569,12 @@ async function geometry() {
   alertBox("");
   try {
     const options = { gen_bcc: sqe, bfactor: numberOf("geo-bfactor"), afactor: numberOf("geo-afactor"), factor: numberOf("geo-factor") };
-    let job = await runTask({ task: "geometry_ff", forcefield: state.current.ref, molprop: geometrySource(), options });
+    const source = geometrySource();
+    let job = await runTask({ task: "geometry_ff", forcefield: state.current.ref, molprop: source, options });
     state.geoJob = job.id;
     extracted(job);
-    histogramsCard(job);
+    // The structures of the values come from the molprop file that was read
+    histogramsCard(job, source.file);
     if (!job.result.compounds) {
       pill("geo-pill", "No compound could be used", "warn");
       alertBox("None of the compounds in the file could be used with this force field, so it was not changed. " +
@@ -601,12 +603,14 @@ const GEOMETRY_KINDS = { BONDS: "Bond lengths", ANGLES: "Angles", LINEAR_ANGLES:
 
 /**
  * Offer the histograms of the geometries that were extracted.
- * @param {object} job The calculation of geometry_ff; its result lists the histograms.
+ * @param {object} job     The calculation of geometry_ff; its result lists the histograms.
+ * @param {string} molprop The upload of the molprop file that it read.
  */
-function histogramsCard(job) {
+function histogramsCard(job, molprop) {
   const histograms = job.result && job.result.histograms;
   const kinds = histograms ? Object.keys(histograms).filter(kind => histograms[kind].length) : [];
-  state.hist = { job: job.id, summary: histograms || {}, analysis: (job.result && job.result.analysis) || null, data: null, marked: null };
+  state.hist = { job: job.id, molprop, summary: histograms || {}, analysis: (job.result && job.result.analysis) || null, data: null, marked: null };
+  closeMolecule();
   $("#geo-hist").hidden = !kinds.length;
   if (!kinds.length) return;
   const select = $("#geo-htype");
@@ -686,15 +690,212 @@ function binSamples(index) {
   }
   table.append(el("thead", {}, el("tr", {}, el("th", {}, "Compound"), el("th", {}, "Calculation"), el("th", {}, "Atoms"), el("th", { class: "n" }, "Value"))));
   const body = el("tbody");
-  for (const s of bin.samples) {
+  bin.samples.forEach((s, k) => {
     // The data file of the calculation without its directory, which can be long
-    body.append(el("tr", {}, el("td", {}, s.molecule), el("td", { class: "mono", title: s.calculation }, s.calculation.split("/").pop()),
+    body.append(el("tr", { class: "pick", title: "Show the structure with these atoms", data: { k: String(k) } },
+      el("td", {}, s.molecule), el("td", { class: "mono", title: s.calculation }, s.calculation.split("/").pop()),
       el("td", { class: "mono" }, s.names),
       el("td", { class: "n" }, num(s.value, 4) + unit)));
-  }
+  });
   table.append(body);
+  table.onclick = e => {
+    const row = e.target.closest("tr[data-k]");
+    if (!row) return;
+    for (const other of table.querySelectorAll("tr.sel")) other.classList.remove("sel");
+    row.classList.add("sel");
+    showMolecule(data, bin.samples[Number(row.dataset.k)]);
+  };
   $("#geo-binnote").textContent = (bin.more ? `And ${bin.more} more values in this bin. ` : "") +
-    "The atoms are numbered from one, in the order of the molprop file, with their names.";
+    "The atoms are numbered from one, in the order of the molprop file, with their names. Click a row to see the structure with these atoms.";
+}
+
+/* ---------- the structure of a value ---------- */
+
+/** The viewer of the structures of the values: null until it is needed, false without WebGL. */
+let molViewer = null;
+/** The structure that is shown: { sample, atoms, unit }, null for none. */
+let molShown = null;
+/** What the page calls the geometry of two, three and four atoms. */
+const GEOMETRY_OF = { 2: "Bond", 3: "Angle", 4: "Dihedral" };
+
+/** Close the structure of a value. */
+function closeMolecule() {
+  molShown = null;
+  $("#geo-mol").hidden = true;
+  for (const row of document.querySelectorAll("#geo-samples tr.sel")) row.classList.remove("sel");
+}
+
+/**
+ * The element in the name of an atom with its number, such as Cl for Cl12.
+ * @param {string} name The name.
+ * @returns {string} The letters at the start, the first a capital.
+ */
+const elementOf = name => { const found = /^[A-Za-z][a-z]?/.exec(name || ""); return found ? found[0][0].toUpperCase() + found[0].slice(1).toLowerCase() : ""; };
+
+/**
+ * Show the structure that a value comes from, with its atoms marked.
+ * @param {object} data   The histogram: its identifier and unit.
+ * @param {object} sample The value: molecule, calculation, atoms (numbered from one) and names.
+ */
+async function showMolecule(data, sample) {
+  const hist = state.hist;
+  if (!hist || !hist.molprop) return;
+  $("#geo-mol").hidden = false;
+  $("#geo-molname").textContent = sample.molecule;
+  $("#geo-molwhat").textContent = `calculation ${sample.calculation.split("/").pop()}`;
+  $("#geo-molnote").textContent = "Reading the structure…";
+  let told;
+  try {
+    told = await (await call(`/molprops/${encodeURIComponent(hist.molprop)}/structure`,
+      { params: { molecule: sample.molecule, calculation: sample.calculation } })).json();
+  } catch (e) {
+    if (state.hist !== hist) return;
+    molShown = null;
+    $("#geo-molstage").hidden = true;
+    $("#geo-molnote").textContent = "The structure could not be read. " + e.message;
+    return;
+  }
+  if (state.hist !== hist) return;
+  const unit = data.unit === "degree" ? "°" : ` ${data.unit}`;
+  molShown = { sample, atoms: told.atoms, unit, identifier: data.identifier };
+  $("#geo-molstage").hidden = false;
+  drawMolecule();
+  // The atoms by their number, and whether they are the atoms that the names say
+  const names = sample.names.split("-");
+  const wrong = sample.atoms.some((n, k) => !told.atoms[n - 1] || (elementOf(names[k]) && told.atoms[n - 1].element !== elementOf(names[k])));
+  const what = GEOMETRY_OF[sample.atoms.length] || "Geometry";
+  $("#geo-molnote").textContent = `${what} ${data.identifier} between ${names.join(", ")}: ${num(sample.value, 4)}${unit}. `
+    + `The atoms are marked in colour, ${told.atoms.length} atoms in all.`
+    + (wrong ? " These atoms do not match the structure: an alexandria older than this interface numbers them with the virtual sites of the force field, which the molprop file does not have." : "");
+  $("#geo-mol").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+/** Draw the structure that is shown, with the atoms of its value marked. */
+function drawMolecule() {
+  if (!molShown) return;
+  if (molViewer === null) {
+    try {
+      if (typeof $3Dmol === "undefined") throw new Error("no viewer");
+      molViewer = $3Dmol.createViewer($("#gl4"), { backgroundColor: css("--stage"), antialias: true });
+    } catch (e) {
+      molViewer = false;
+      $("#geo-molstage").append(el("div", { class: "nogl" }, "The 3D view needs WebGL, which this browser does not offer here."));
+    }
+  }
+  const v = molViewer;
+  if (!v) return;
+  const { sample, atoms } = molShown;
+  v.resize();
+  v.removeAllModels();
+  v.removeAllShapes();
+  v.removeAllLabels();
+  v.setBackgroundColor(css("--stage"));
+  // As coordinates, from which the viewer finds the bonds
+  const xyz = `${atoms.length}\n${sample.molecule}\n` + atoms.map(a => `${a.element} ${a.x} ${a.y} ${a.z}`).join("\n") + "\n";
+  const model = v.addModel(xyz, "xyz");
+  // The atoms of the value in a halo of the colour of the page, joined by
+  // a line along the bond, angle or dihedral
+  model.setStyle({}, { stick: { radius: 0.12 }, sphere: { scale: 0.24 } });
+  const marked = sample.atoms.map(n => n - 1).filter(i => i >= 0 && i < atoms.length);
+  const accent = css("--accent"), at = i => ({ x: atoms[i].x, y: atoms[i].y, z: atoms[i].z });
+  for (const i of marked) v.addSphere({ center: at(i), radius: 0.55, color: accent, opacity: 0.6 });
+  for (let k = 1; k < marked.length; k++) {
+    v.addCylinder({ start: at(marked[k - 1]), end: at(marked[k]), radius: 0.17, color: accent, opacity: 0.85, fromCap: 1, toCap: 1 });
+  }
+  const names = sample.names.split("-");
+  marked.forEach((i, k) => v.addLabel(names[k] || String(i + 1), {
+    position: at(i), fontSize: 13, fontColor: css("--ink"), backgroundColor: css("--surface"), backgroundOpacity: 0.85,
+    borderThickness: 0, inFront: true, alignment: "bottomCenter" }));
+  v.zoomTo();
+  const all = atoms.map((a, i) => at(i));
+  faceMarked(v, marked.map(at), all);
+  fillView(v, all);
+  v.render();
+}
+
+/**
+ * The orientation of the view in which the atoms of a value are seen
+ * well, as a quaternion [x, y, z, w] of 3Dmol: a bond along the screen,
+ * the plane of an angle or a dihedral facing the viewer, and the rest of
+ * the compound behind them.
+ * @param {object[]} points The atoms of the value: { x, y, z }.
+ * @param {object[]} all    All atoms of the compound.
+ * @returns {number[]|null} The quaternion, null if there is nothing to turn.
+ */
+function viewOf(points, all) {
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const scale = (a, f) => a.map(c => c * f), norm = a => Math.hypot(...a);
+  const unit = a => scale(a, 1 / norm(a));
+  const flat = p => [p.x, p.y, p.z], P = points.map(flat), A = all.map(flat);
+  if (P.length < 2) return null;
+  const middle = scale(P.reduce((s, p) => [s[0] + p[0], s[1] + p[1], s[2] + p[2]], [0, 0, 0]), 1 / P.length);
+  const centre = scale(A.reduce((s, p) => [s[0] + p[0], s[1] + p[1], s[2] + p[2]], [0, 0, 0]), 1 / A.length);
+  // Any direction at right angles to a unit vector
+  const across = u => unit(cross(u, Math.abs(u[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+  let e1, e3;
+  if (P.length === 2) {
+    e1 = unit(sub(P[1], P[0]));
+    // The rest of the compound away from the viewer
+    const rest = sub(centre, middle), off = sub(rest, scale(e1, dot(rest, e1)));
+    e3 = norm(off) > 1e-3 ? scale(unit(off), -1) : across(e1);
+  } else {
+    let n = cross(sub(P[0], P[1]), sub(P[2], P[1]));
+    if (norm(n) < 1e-6) return null;
+    n = unit(n);
+    if (dot(sub(centre, middle), n) > 0) n = scale(n, -1);
+    e3 = n;
+    const span = sub(P[2], P[0]), inplane = sub(span, scale(e3, dot(span, e3)));
+    e1 = norm(inplane) > 1e-6 ? unit(inplane) : across(e3);
+  }
+  const e2 = cross(e3, e1);
+  // The rotation with rows e1, e2, e3 as a quaternion
+  const m = [e1, e2, e3], trace = m[0][0] + m[1][1] + m[2][2];
+  let q;
+  if (trace > 0) {
+    const s = 0.5 / Math.sqrt(trace + 1);
+    q = [(m[2][1] - m[1][2]) * s, (m[0][2] - m[2][0]) * s, (m[1][0] - m[0][1]) * s, 0.25 / s];
+  } else if (m[0][0] > m[1][1] && m[0][0] > m[2][2]) {
+    const s = 2 * Math.sqrt(1 + m[0][0] - m[1][1] - m[2][2]);
+    q = [0.25 * s, (m[0][1] + m[1][0]) / s, (m[0][2] + m[2][0]) / s, (m[2][1] - m[1][2]) / s];
+  } else if (m[1][1] > m[2][2]) {
+    const s = 2 * Math.sqrt(1 + m[1][1] - m[0][0] - m[2][2]);
+    q = [(m[0][1] + m[1][0]) / s, 0.25 * s, (m[1][2] + m[2][1]) / s, (m[0][2] - m[2][0]) / s];
+  } else {
+    const s = 2 * Math.sqrt(1 + m[2][2] - m[0][0] - m[1][1]);
+    q = [(m[0][2] + m[2][0]) / s, (m[1][2] + m[2][1]) / s, 0.25 * s, (m[1][0] - m[0][1]) / s];
+  }
+  return q;
+}
+
+/**
+ * Turn the view such that the atoms of a value are seen well, see
+ * viewOf(), and tilt it a little, such that the atoms behind them show.
+ * @param {object} v        The viewer, zoomed to the compound.
+ * @param {object[]} points The atoms of the value: { x, y, z }.
+ * @param {object[]} all    All atoms of the compound.
+ */
+function faceMarked(v, points, all) {
+  const q = viewOf(points, all);
+  if (!q) return;
+  const view = v.getView();
+  [view[4], view[5], view[6], view[7]] = q;
+  v.setView(view);
+  v.rotate(20, { x: 1, y: 0, z: 0 });
+}
+
+/**
+ * Zoom in on a compound that the viewer shows with room to spare, such
+ * that it fills about four fifths of the view, and at most three times.
+ * @param {object} v      The viewer.
+ * @param {object[]} points The positions of the atoms: { x, y, z }.
+ */
+function fillView(v, points) {
+  const host = $("#gl4"), seen = points.map(p => v.modelToScreen(p));
+  const span = key => Math.max(1, Math.max(...seen.map(s => s[key])) - Math.min(...seen.map(s => s[key])));
+  const factor = Math.min(3, 0.8 * Math.min(host.clientWidth / span("x"), host.clientHeight / span("y")));
+  if (Number.isFinite(factor) && factor > 1) v.zoom(factor);
 }
 
 /* ---------- parameters ---------- */
@@ -973,6 +1174,11 @@ export async function startForceFields(told) {
   // The histograms of the geometries
   $("#geo-htype").onchange = histogramKind;
   $("#geo-hid").onchange = histogramShown;
+  $("#geo-molclose").onclick = closeMolecule;
+  $("#geo-molreset").onclick = drawMolecule;
+  // The structure takes the colours of the screen mode, and the size of the page
+  document.addEventListener("act-theme", drawMolecule);
+  window.addEventListener("resize", () => { if (molViewer && molShown) { molViewer.resize(); molViewer.render(); } });
   $("#geo-warnings").onclick = e => { const row = e.target.closest("tr[data-kind]"); if (row) showHistogram(row.dataset.kind, row.dataset.id); };
   $("#geo-zoomin").onclick = () => zoomPlot("geoplot", 0.8);
   $("#geo-zoomout").onclick = () => zoomPlot("geoplot", 1.25);
