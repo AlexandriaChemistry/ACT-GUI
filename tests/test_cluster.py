@@ -309,6 +309,37 @@ class FileTest(unittest.TestCase):
         cluster.save(self.file, self.chosen)
         self.assertEqual(self.chosen, cluster.load(self.file))
 
+    def test_list_of_clusters_that_cannot_be_used(self):
+        """!
+        @brief A list of clusters in the file that is not possible is
+        reported and not used: names that are taken or no names, a default
+        that is not in the list, too many clusters, or no list.
+        """
+        good = {"server": "csb", "user": "u", "workdir": "w"}
+        self.file.parent.mkdir(parents=True)
+        for content, said in (
+                ({"default": "a", "list": [dict(good, name="a"), dict(good, name="a")]}, "already"),
+                ({"default": "a", "list": [dict(good, name="a b")]}, "name of a cluster"),
+                ({"default": "b", "list": [dict(good, name="a")]}, "not in the list"),
+                ({"default": "a", "list": [dict(good)]}, "name of a cluster"),
+                ({"default": "a", "list": [dict(good, name="a", server="x;y")]}, "name of a server"),
+                ({"default": "", "list": [dict(good, name="c%d" % i) for i in range(21)]},
+                 "20 clusters"),
+                ({"default": "a"}, "with a list"), (["a"], "with a list")):
+            self.file.write_text(json.dumps({"clusters": content}))
+            with self.assertRaises(cluster.ClusterError) as caught:
+                cluster.load_all(self.file)
+            self.assertIn(said, str(caught.exception))
+            self.assertIn(str(self.file), str(caught.exception))
+        # Without a default the first one is the default
+        self.file.write_text(json.dumps({"clusters": {"list": [dict(good, name="b"),
+                                                               dict(good, name="a")]}}))
+        loaded = cluster.load_all(self.file)
+        self.assertEqual((["b", "a"], "b"), (list(loaded.entries), loaded.default))
+        self.assertEqual("csb", loaded.get("a").server)
+        self.assertIsNone(loaded.get("nosuch"))
+        self.assertEqual({}, cluster.load_all(None).entries)
+
     def test_default_file(self):
         """!
         @brief The file is in the configuration directory of the user.
@@ -597,7 +628,11 @@ class ClusterApiTest(unittest.TestCase):
         self.assertEqual(200, answer.status_code, answer.text)
         kept = dict(first["proposed"], server="good", user="spoel", workdir="act/jobs")
         self.assertEqual(kept, answer.json()["cluster"])
-        self.assertEqual({"cluster": kept}, json.loads(self.file.read_text()))
+        # The list of clusters, and the default one for an older version of the interface
+        self.assertEqual({"clusters": {"default": "good", "list": [dict({"name": "good"}, **kept)]},
+                          "cluster": kept}, json.loads(self.file.read_text()))
+        self.assertEqual([{"name": "good", "default": True, "settings": kept}],
+                         answer.json()["clusters"])
         # The interface starts again
         again = self.client()
         state = again.get("/api/cluster", headers=self.headers).json()
@@ -607,6 +642,101 @@ class ClusterApiTest(unittest.TestCase):
         self.assertFalse(gone["configured"])
         self.assertEqual({}, json.loads(self.file.read_text()))
         self.assertFalse(self.client().get("/api/cluster", headers=self.headers).json()["configured"])
+
+    def test_several_clusters(self):
+        """!
+        @brief Clusters are added under a name of the user and changed by
+        it, also their name; one is the default. A login is tested on the
+        cluster that is named. Forgetting the default makes the next one
+        the default. All of it is in the file when the interface starts again.
+        """
+        client = self.client()
+
+        def put(**body):
+            return client.put("/api/cluster", headers=self.headers, json=body)
+        csb = {"server": "good", "user": "spoel", "workdir": "act/jobs"}
+        dardel = {"server": "good", "user": "spoel", "workdir": "act/other", "launcher": "srun",
+                  "partition": "main", "account": "naiss2026-1-1"}
+        (self.server.dir / "home" / "act" / "other").mkdir()
+        self.assertEqual(200, put(name="csb", previous="", **csb).status_code)
+        answer = put(name="dardel", previous="", **dardel)
+        self.assertEqual(200, answer.status_code, answer.text)
+        state = answer.json()
+        self.assertEqual(["csb", "dardel"], [c["name"] for c in state["clusters"]])
+        self.assertEqual(("csb", "act/jobs"), (state["default"], state["cluster"]["workdir"]))
+        self.assertEqual([True, False], [c["default"] for c in state["clusters"]])
+        self.assertEqual("naiss2026-1-1", state["clusters"][1]["settings"]["account"])
+        # A new cluster with a name that is taken, a name that is no name,
+        # and the change of a cluster that is not there
+        for wrong, said in (({"name": "csb", "previous": ""}, "There is a cluster csb already"),
+                            ({"name": "a b", "previous": ""}, "cannot be the name of a cluster"),
+                            ({"name": "x", "previous": "nosuch"}, "There is no cluster nosuch"),
+                            ({"name": "x", "default": "yes"}, "true or false")):
+            answer = put(**dict(csb, **wrong))
+            self.assertEqual(400, answer.status_code, wrong)
+            self.assertIn(said, answer.json()["detail"])
+        # Changed, renamed and made the default; it keeps its place
+        answer = put(name="kth", previous="dardel", default=True, **dict(dardel, partition="shared"))
+        state = answer.json()
+        self.assertEqual(["csb", "kth"], [c["name"] for c in state["clusters"]])
+        self.assertEqual(("kth", "shared"), (state["default"], state["cluster"]["partition"]))
+        # A name that is there without a previous name changes that cluster
+        put(name="csb", **dict(csb, program="alexandria_d"))
+        state = client.get("/api/cluster", headers=self.headers).json()
+        self.assertEqual("alexandria_d", state["clusters"][0]["settings"]["program"])
+        self.assertEqual(2, len(state["clusters"]))
+        # The login of the cluster that is named
+        self.server.calls()
+        checked = client.post("/api/cluster/check", params={"name": "csb"}, headers=self.headers)
+        self.assertTrue(checked.json()["ok"], checked.text)
+        self.assertIn("act/jobs", checked.json()["directory"])
+        checked = client.post("/api/cluster/check", headers=self.headers).json()
+        self.assertIn("act/other", checked["directory"])
+        self.assertEqual(404, client.post("/api/cluster/check", params={"name": "nosuch"},
+                                          headers=self.headers).status_code)
+        # In the file, and there when the interface starts again
+        written = json.loads(self.file.read_text())
+        self.assertEqual("kth", written["clusters"]["default"])
+        self.assertEqual(["csb", "kth"], [c["name"] for c in written["clusters"]["list"]])
+        self.assertEqual("act/other", written["cluster"]["workdir"])
+        again = self.client().get("/api/cluster", headers=self.headers).json()
+        self.assertEqual((["csb", "kth"], "kth"), ([c["name"] for c in again["clusters"]],
+                                                    again["default"]))
+        # Forgetting the default makes the other one the default
+        self.assertEqual(404, client.delete("/api/cluster", params={"name": "nosuch"},
+                                            headers=self.headers).status_code)
+        state = client.delete("/api/cluster", params={"name": "kth"}, headers=self.headers).json()
+        self.assertEqual((["csb"], "csb"), ([c["name"] for c in state["clusters"]],
+                                            state["default"]))
+        self.assertEqual("act/jobs", json.loads(self.file.read_text())["cluster"]["workdir"])
+        state = client.delete("/api/cluster", headers=self.headers).json()
+        self.assertEqual((False, [], ""), (state["configured"], state["clusters"],
+                                           state["default"]))
+        self.assertEqual({}, json.loads(self.file.read_text()))
+
+    def test_file_of_an_older_version(self):
+        """!
+        @brief A file with one cluster, as an older version of the interface
+        wrote it, gives that cluster, named after its server; saving adds
+        the list and keeps the cluster for the older version.
+        """
+        self.file.parent.mkdir(parents=True)
+        self.file.write_text(json.dumps({"cluster": {"server": "csb.bmc.uu.se", "user": "spoel",
+                                                     "workdir": "act-jobs"},
+                                         "appearance": {"theme": "dark"}}))
+        client = self.client()
+        state = client.get("/api/cluster", headers=self.headers).json()
+        self.assertEqual(([("csb.bmc.uu.se", True)], "csb.bmc.uu.se"),
+                         ([(c["name"], c["default"]) for c in state["clusters"]], state["default"]))
+        self.assertEqual("", state["problem"])
+        client.put("/api/cluster", headers=self.headers,
+                   json={"name": "dardel", "previous": "", "server": "dardel.pdc.kth.se",
+                         "user": "spoel", "workdir": "act"})
+        written = json.loads(self.file.read_text())
+        self.assertEqual({"theme": "dark"}, written["appearance"])
+        self.assertEqual("csb.bmc.uu.se", written["cluster"]["server"])
+        self.assertEqual(["csb.bmc.uu.se", "dardel"],
+                         [c["name"] for c in written["clusters"]["list"]])
 
     def test_settings_that_are_refused(self):
         """!

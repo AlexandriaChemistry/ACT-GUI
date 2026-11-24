@@ -14,7 +14,7 @@
  * All text that comes from the server or from files is put on the page as
  * text, never as markup.
  */
-import { $, $$, addLibrary, alertBox, withoutDefault, call, el, libraryChoice, num, pill, runTask, saveFile, saveMade, seg, session, toast, upload } from "./common.js";
+import { $, $$, addLibrary, alertBox, withoutDefault, call, clusterOptions, el, libraryChoice, num, pill, runTask, saveFile, saveMade, seg, session, toast, upload } from "./common.js";
 import { css, limits, markPoint, plot, resetZoom, zoomPlot } from "./plot.js";
 
 /** What the workspace knows. */
@@ -1245,11 +1245,12 @@ async function showJob(body) {
   const name = $("#ev-jobname").value.trim();
   const cluster = { tasks: Number($("#ev-tasks").value), minutes: Math.round(Number($("#ev-hours").value) * 60), gpu: $("#ev-gpu").checked };
   if (name) cluster.name = name;
+  if (session.clusters.length > 1 && $("#ev-on").value) cluster.on = $("#ev-on").value;
   pill("ev-pill", "");
   const shown = await (await call("/cluster/jobs", { method: "POST", json: { ...body, cluster, send: false } })).json();
   // The name that was shown is the name that is sent
   state.job = { ...body, cluster: { ...cluster, name: shown.name }, send: true };
-  $("#ev-jobwhere").textContent = `${shown.name} · ${shown.server}:${shown.directory}`;
+  $("#ev-jobwhere").textContent = `${shown.name} · ${shown.cluster && session.clusters.length > 1 ? `${shown.cluster} · ` : ""}${shown.server}:${shown.directory}`;
   const table = $("#ev-jobfiles");
   table.textContent = "";
   table.append(el("thead", {}, el("tr", {}, el("th", {}, "Name on the cluster"), el("th", { class: "n" }, "Size"))));
@@ -1290,6 +1291,8 @@ async function sendJob() {
 /** Show whether the comparison can go to the cluster, and what is asked for then. */
 function places() {
   $("#ev-where").hidden = !session.clusterReady;
+  clusterOptions($("#ev-on"));
+  $("#ev-onfield").hidden = session.clusters.length < 2;
   const cluster = onCluster();
   $("#ev-clusteropts").hidden = !cluster;
   // The processes of a training on the cluster are those of the job
@@ -1488,6 +1491,8 @@ export function startMolprops(told) {
   };
   // On the cluster, if the user has one
   seg($("#ev-place"), places);
+  // What is shown is what is sent: another cluster has to be shown again
+  $("#ev-on").onchange = () => { $("#ev-job").hidden = true; state.job = null; };
   document.addEventListener("act-cluster", places);
   $("#ev-send").onclick = sendJob;
   $("#ev-nosend").onclick = () => { $("#ev-job").hidden = true; state.job = null; };

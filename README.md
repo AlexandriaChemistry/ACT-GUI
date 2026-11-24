@@ -370,35 +370,54 @@ for instance:
 
 A link to the script in a directory of your `PATH` works too.
 
-## The cluster for long jobs
+## The clusters for long jobs
 
-Long jobs go to a Slurm cluster on which you have an account. In the
-tab Settings you give the name of the server (a host name or a name from
-your ssh configuration), your user name there and a working directory,
-with its full path or as a path in your home directory. They are kept in
-the file `settings.json` in the directory `act-gui` of your configuration
-directory (`~/.config`, or `XDG_CONFIG_HOME`), which is read when the
-interface starts; `--config FILE` names another file. The file looks like
+Long jobs go to a Slurm cluster on which you have an account. Several
+clusters can be kept, each under a name of your own, such as `csb` or
+`dardel`; one of them is the default. In the tab Settings you choose a
+cluster in the list, or *New cluster*, and give its name (without one it
+is named after its server), the name of the server (a host name or a name
+from your ssh configuration), your user name there and a working
+directory, with its full path or as a path in your home directory.
+*The default cluster for new jobs* makes it the default, and *Forget this
+cluster* takes it out; then the first of the others is the default. When
+you send a job, the field *Cluster* offers the clusters, the default first;
+it is only there with more than one. A job that is sent again goes to the
+cluster that has its files. The clusters are kept in the file
+`settings.json` in the directory `act-gui` of your configuration directory
+(`~/.config`, or `XDG_CONFIG_HOME`), which is read when the interface
+starts; `--config FILE` names another file. The file looks like
 
     {
-      "cluster": {
-        "server": "csb",
-        "user": "yourname",
-        "workdir": "act-jobs",
-        "load": "module",
-        "load_name": "ACT",
-        "partition": "CLUSTER,CLUSTER-AMD",
-        "gpu_partition": "GPU,CLUSTER-AMD",
-        "gpu_gres": "gpu:1",
-        "account": "",
-        "launcher": "srun",
-        "program": "alexandria",
-        "poll_seconds": 120
-      }
+      "clusters": {
+        "default": "csb",
+        "list": [
+          {
+            "name": "csb",
+            "server": "csb",
+            "user": "yourname",
+            "workdir": "act-jobs",
+            "load": "module",
+            "load_name": "ACT",
+            "partition": "CLUSTER,CLUSTER-AMD",
+            "gpu_partition": "GPU,CLUSTER-AMD",
+            "gpu_gres": "gpu:1",
+            "account": "",
+            "launcher": "srun",
+            "program": "alexandria",
+            "poll_seconds": 120
+          }
+        ]
+      },
+      "cluster": { "server": "csb", ... }
     }
 
-Only the first three have to be given; the others are filled in with these
-values, which are those for the cluster csb, and can be changed in the tab.
+`cluster` is the default cluster again, for an older version of the
+interface, which knows only one; a file of an older version, with only
+`cluster`, gives that cluster, named after its server. Of the settings of
+a cluster only the server, the user and the working directory have to be
+given; the others are filled in with these values, which are those for
+the cluster csb, and can be changed in the tab.
 `load` says how ACT is made available in a job: `module` (`module load`
 with the name in `load_name`), `source` (the shell reads the file in
 `load_name`, such as the `ACTRC` of an installation), `conda` (the
@@ -439,7 +458,8 @@ whose name is a setting, has to know them as well.
 Sending a job is one login: the files and the script go to the directory
 `workdir/name-of-the-job`, where `sbatch` is started. The tab Cluster
 lists the jobs with their state. The interface asks the cluster for the
-state of all jobs in one login, not more often than `poll_seconds` says
+state of all jobs in one login for each cluster, not more often than the
+largest `poll_seconds` of the clusters says
 (the button Ask the cluster now asks sooner, but not within half a
 minute), and only while the page is open. When a job has ended its
 results are fetched in one more login, and Show results shows them as

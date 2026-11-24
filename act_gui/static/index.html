@@ -560,6 +560,8 @@
           <div class="field"><span class="lab">Run</span>
             <div class="seg" id="ev-place" role="group" aria-label="Where the comparison runs"><button type="button" aria-pressed="true" data-v="here">On this computer</button><button type="button" aria-pressed="false" data-v="cluster">On the cluster</button></div></div>
           <div class="row" id="ev-clusteropts" hidden>
+            <div class="field" id="ev-onfield"><label for="ev-on">Cluster</label>
+              <select id="ev-on"></select></div>
             <div class="field"><label for="ev-jobname">Name of the job</label>
               <input class="mono" type="text" id="ev-jobname" placeholder="made from the date" maxlength="64" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
             <div class="field"><label for="ev-tasks">Processes</label>
@@ -646,7 +648,7 @@
   <section class="view" id="view-cluster" hidden>
     <div class="card">
       <div class="bar">
-        <div class="field grow"><span class="lab">Cluster for long jobs</span>
+        <div class="field grow"><span class="lab">Clusters for long jobs</span>
           <div class="chips" id="cl-chips"></div></div>
         <span class="pill" id="cl-pill" hidden></span>
         <button class="btn" id="cl-tosettings" type="button">Change the settings…</button>
@@ -705,7 +707,15 @@
         <p class="muted fine" id="set-themenote"></p>
       </div></div>
     <div class="cols form-left" id="set-cluster">
-      <div class="card"><div class="head"><h2>Cluster for long jobs</h2></div><div class="body">
+      <div class="card"><div class="head"><h2>Clusters for long jobs</h2></div><div class="body">
+        <div class="grid2">
+          <div class="field"><label for="cl-which">Cluster</label>
+            <select id="cl-which"></select></div>
+          <div class="field"><label for="cl-name">Name</label>
+            <input class="mono wide" type="text" id="cl-name" maxlength="40" placeholder="the server" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
+        </div>
+        <label class="check"><input type="checkbox" id="cl-default"> The default cluster for new jobs</label>
+        <p class="muted fine" id="cl-whichnote">Several clusters can be kept, each under a name of your own, such as csb or dardel. A job goes to the default cluster unless you choose another when you send it.</p>
         <div class="field"><label for="cl-server">Server</label>
           <input class="mono wide" type="text" id="cl-server" placeholder="csb.example.org" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
         <div class="field"><label for="cl-user">Your user name on the server</label>
@@ -742,7 +752,7 @@
           <button class="btn" id="cl-check" type="button" disabled>Test the login</button>
           <span class="pill" id="cl-checkpill" hidden></span>
           <span class="spacer"></span>
-          <button class="btn" id="cl-forget" type="button" hidden>Forget</button></div>
+          <button class="btn" id="cl-forget" type="button" hidden>Forget this cluster</button></div>
         <p class="outcome" id="cl-result" role="status" hidden></p>
         <p class="muted fine" id="cl-file"></p>
       </div></div>

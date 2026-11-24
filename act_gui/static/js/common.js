@@ -60,9 +60,25 @@ export const session = {
   forcefield: null,     // the force field of the force field workspace: { ref, label }
   molprop: null,        // the molprop file of the molprop workspace: { file, described, label, sets: { test, ignore }, used, total }
   clusterReady: false,  // whether the user has a cluster that jobs can be sent to
+  clusters: [],         // the names of the clusters, the default first
+  defaultCluster: "",   // the name of the default cluster
   maxProcesses: 1,      // the most processes of a calculation on this computer
   workDir: "",          // where the files of some jobs on the cluster are put when they are done, if anywhere
 };
+
+/**
+ * Offer the clusters in a list, the default first, and keep the one that
+ * was chosen if it is still there.
+ * @param {Element} select The list.
+ */
+export function clusterOptions(select) {
+  const before = select.value;
+  select.textContent = "";
+  for (const name of session.clusters) {
+    select.append(el("option", { value: name }, name === session.defaultCluster ? `${name} (default)` : name));
+  }
+  select.value = session.clusters.includes(before) ? before : session.defaultCluster;
+}
 
 /* ---------- messages ---------- */
 

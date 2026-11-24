@@ -8,9 +8,11 @@
 #
 """!
 @file
-@brief The cluster on which the user of the desktop interface runs long
-jobs: the name of the server, the user name there and the working
-directory, kept in a file that is read when the interface starts.
+@brief The clusters on which the user of the desktop interface runs long
+jobs: for each a name of the user's choice, the name of the server, the
+user name there and the working directory, kept in a file that is read
+when the interface starts. One of them is the default for new jobs; a job
+can be sent to any of them.
 
 The interface logs in with the ssh program of the user's machine, which
 uses the user's own configuration, keys and agent. It never asks for, sees
@@ -29,12 +31,19 @@ import os
 import re
 import shlex
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-## The key of the settings of the cluster in the file
+## The key of the settings of the cluster in the file: that of the default
+## cluster, which an older version of the interface reads
 KEY = "cluster"
+## The key of all clusters in the file: the default and the list
+KEY_ALL = "clusters"
+## The name that the user gives a cluster, such as csb or dardel
+_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
+## The largest number of clusters
+MAX_CLUSTERS = 20
 ## The name of a host, or of an entry in the configuration of ssh. It
 ## starts with a letter or a digit, so it is never an option of ssh.
 _SERVER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$")
@@ -220,6 +229,185 @@ def parse(given: Any) -> ClusterSettings:
     return ClusterSettings(poll_seconds=poll, **text)
 
 
+def check_cluster_name(name: Any) -> str:
+    """!
+    @brief Check the name that the user gives a cluster.
+    @param name The name.
+    @return The name without spaces around it.
+    @throws ClusterError if it is no such name.
+    """
+    if not isinstance(name, str) or not _NAME.fullmatch(name.strip()):
+        raise ClusterError("'%s' cannot be the name of a cluster: use at most 40 letters, digits "
+                           "and . _ -, starting with a letter or a digit, as in csb" % (name,))
+    return name.strip()
+
+
+def name_for(settings: ClusterSettings) -> str:
+    """!
+    @brief The name that a cluster gets when the user gave none: its
+    server, as long as that is a name of a cluster.
+    @param settings The settings of the cluster.
+    @return The name.
+    """
+    return settings.server[:40].rstrip("._-") or "cluster"
+
+
+@dataclass
+class Clusters:
+    """!
+    @brief The clusters of the user, by name in the order in which they
+    were added, and the one that new jobs go to when none is chosen.
+    """
+    ## The settings of each cluster, by its name
+    entries: Dict[str, ClusterSettings] = field(default_factory=dict)
+    ## The name of the default cluster, empty if there is none
+    default: str = ""
+
+    def get(self, name: Optional[str] = None) -> Optional[ClusterSettings]:
+        """!
+        @brief The settings of a cluster.
+        @param name The name, None or empty for the default cluster.
+        @return The settings, None if there is no such cluster.
+        """
+        return self.entries.get(name or self.default)
+
+    def put(self, name: str, settings: ClusterSettings, previous: str = "",
+            make_default: bool = False) -> None:
+        """!
+        @brief Add a cluster or change one, also its name.
+        @param name         Its name.
+        @param settings     Its settings.
+        @param previous     The name it had, empty for a new cluster.
+        @param make_default Whether it becomes the default.
+        @throws ClusterError if the name is taken by another cluster, if the
+        cluster to change is not there, or if there are too many clusters.
+        """
+        name = check_cluster_name(name)
+        if previous and previous not in self.entries:
+            raise ClusterError("There is no cluster %s" % previous)
+        if name in self.entries and name != previous:
+            raise ClusterError("There is a cluster %s already: give this one another name" % name)
+        if not previous and len(self.entries) >= MAX_CLUSTERS:
+            raise ClusterError("There are %d clusters already" % MAX_CLUSTERS)
+        # The cluster keeps its place in the list
+        entries: Dict[str, ClusterSettings] = {}
+        for key, value in self.entries.items():
+            entries[name if key == previous else key] = settings if key == previous else value
+        if not previous:
+            entries[name] = settings
+        self.entries = entries
+        if previous and self.default == previous:
+            self.default = name
+        if make_default or not self.default:
+            self.default = name
+
+    def remove(self, name: str) -> None:
+        """!
+        @brief Forget a cluster. If it was the default, the first of the
+        others becomes the default.
+        @param name The name.
+        @throws ClusterError if there is no such cluster.
+        """
+        if name not in self.entries:
+            raise ClusterError("There is no cluster %s" % name)
+        del self.entries[name]
+        if self.default == name:
+            self.default = next(iter(self.entries), "")
+
+    def find(self, settings: ClusterSettings) -> str:
+        """!
+        @brief The cluster on which a job ran: the one with the same
+        server, user and working directory.
+        @param settings The settings with which the job was sent.
+        @return The name of the cluster, the default first if it is one of
+        them; empty if there is none.
+        """
+        place = (settings.server, settings.user, settings.workdir)
+        names = ([self.default] if self.default else []) + list(self.entries)
+        for name in names:
+            other = self.entries.get(name)
+            if other is not None and (other.server, other.user, other.workdir) == place:
+                return name
+        return ""
+
+    def describe(self) -> List[Dict[str, Any]]:
+        """!
+        @brief The clusters for the browser.
+        @return For each its name, whether it is the default and its settings.
+        """
+        return [{"name": name, "default": name == self.default, "settings": asdict(value)}
+                for name, value in self.entries.items()]
+
+
+def parse_all(given: Any) -> Clusters:
+    """!
+    @brief Check the clusters of the file.
+    @param given An object with "default", a name, and "list", for each
+    cluster an object with its "name" and its settings, see parse().
+    @return The clusters.
+    @throws ClusterError if they are not possible.
+    """
+    if not isinstance(given, dict) or not isinstance(given.get("list"), list):
+        raise ClusterError("The clusters must be an object with a list")
+    clusters = Clusters()
+    for item in given["list"]:
+        if not isinstance(item, dict):
+            raise ClusterError("A cluster must be an object")
+        settings = dict(item)
+        name = settings.pop("name", None)
+        clusters.put(check_cluster_name(name), parse(settings))
+    default = given.get("default", "")
+    if default:
+        if default not in clusters.entries:
+            raise ClusterError("The default cluster %s is not in the list" % (default,))
+        clusters.default = default
+    return clusters
+
+
+def load_all(path: Optional[Path]) -> Clusters:
+    """!
+    @brief Read the clusters when the interface starts. A file of an older
+    version, with only one cluster, gives that cluster, named after its server.
+    @param path The file, None for no file.
+    @return The clusters, none if there are none.
+    @throws ClusterError if the file cannot be read or has settings that
+    are not possible.
+    """
+    if path is None:
+        return Clusters()
+    content = read_settings(Path(path))
+    try:
+        if content.get(KEY_ALL) is not None:
+            return parse_all(content[KEY_ALL])
+        clusters = Clusters()
+        if content.get(KEY) is not None:
+            single = parse(content[KEY])
+            clusters.put(name_for(single), single)
+        return clusters
+    except ClusterError as exc:
+        raise ClusterError("The settings of the clusters in %s are not used. %s"
+                           % (path, exc)) from exc
+
+
+def save_all(path: Path, clusters: Clusters) -> None:
+    """!
+    @brief Write the clusters. The default one is also written as the only
+    cluster of an older version of the interface. Other settings in the
+    file are kept. The file is for the user only.
+    @param path     The file. Its directory is made if needed.
+    @param clusters The clusters; without any, they are taken out of the file.
+    @throws ClusterError if the file cannot be written.
+    """
+    path = Path(path)
+    default = clusters.get()
+    if not clusters.entries:
+        update_settings_many(path, {KEY_ALL: None, KEY: None})
+        return
+    listed = [dict({"name": name}, **asdict(value)) for name, value in clusters.entries.items()]
+    update_settings_many(path, {KEY_ALL: {"default": clusters.default, "list": listed},
+                                KEY: None if default is None else asdict(default)})
+
+
 def load_lines(settings: ClusterSettings) -> List[str]:
     """!
     @brief The lines of a batch script that make ACT available.
@@ -381,16 +569,28 @@ def update_settings(path: Path, key: str, value: Optional[Dict[str, Any]]) -> No
     @param value Its content, None to take it out.
     @throws ClusterError if the file cannot be written.
     """
+    update_settings_many(path, {key: value})
+
+
+def update_settings_many(path: Path, parts: Dict[str, Optional[Dict[str, Any]]]) -> None:
+    """!
+    @brief Write some parts of the file with the settings of the user, or
+    take them out, in one go. The other parts are kept.
+    @param path  The file. Its directory is made if needed.
+    @param parts The content of each part by its key, None to take it out.
+    @throws ClusterError if the file cannot be written.
+    """
     try:
         try:
             content = read_settings(path)
         except ClusterError:
             # A file that cannot be read is replaced
             content = {}
-        if value is None:
-            content.pop(key, None)
-        else:
-            content[key] = value
+        for key, value in parts.items():
+            if value is None:
+                content.pop(key, None)
+            else:
+                content[key] = value
         path.parent.mkdir(parents=True, exist_ok=True)
         partial = path.with_name(path.name + ".part")
         handle = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
