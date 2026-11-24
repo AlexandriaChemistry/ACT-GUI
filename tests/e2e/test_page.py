@@ -1070,6 +1070,45 @@ class PageTest(unittest.TestCase):
         self.assertEqual("", self.errors())
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_7c_structure_of_a_value_with_virtual_sites(self):
+        """!
+        @brief With a force field that puts a virtual site on bromine, the
+        structure of the bond length of hydrogen bromide marks bromine and
+        hydrogen, the atoms of the molprop file.
+        """
+        data = Path(TESTDATA)
+        self.open_force_fields()
+        self.click('#fftabs button[data-tab="geom"]')
+        self.browser.find_element(By.ID, "ff-openfile").send_keys(
+            str(data / "forcefields" / "ACS-pg-vs2.xml"))
+        self.wait(lambda b: "ACS-pg-vs2.xml" in b.find_element(By.ID, "ffchips").text)
+        self.browser.find_element(By.ID, "mp-file").send_keys(str(data / "molprop" / "hbr-vsite.xml"))
+        self.wait(lambda b: b.find_element(By.ID, "mp-name").text == "hbr-vsite.xml")
+        self.click("#run-geo")
+        self.wait(lambda b: b.find_element(By.ID, "geo-pill").text == "Done")
+        self.assertEqual("1", self.text("#geo-ncomp"))
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, "#geoplot svg"))
+        self.assertEqual("br_b~h_b", self.browser.find_element(By.ID, "geo-hid").get_attribute("value"))
+        # The one bar, by its point
+        self.browser.execute_script("document.getElementById('geoplot').scrollIntoView({ block: 'center' })")
+        place = self.browser.execute_script("""
+            const svg = document.querySelector('#geoplot svg'), box = svg.getBoundingClientRect();
+            const scale = box.width / svg.viewBox.baseVal.width;
+            const path = [...svg.querySelectorAll('g path')].filter(p => p.getAttribute('stroke-linecap') === 'round')[0];
+            const [x, y] = path.getAttribute('d').slice(1).split('h')[0].split(' ').map(Number);
+            return [x * scale - box.width / 2, y * scale - box.height / 2];""")
+        ActionChains(self.browser).move_to_element_with_offset(
+            self.browser.find_element(By.CSS_SELECTOR, "#geoplot svg"),
+            int(round(place[0])), int(round(place[1]))).click().perform()
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, "#geo-samples tbody tr"))
+        self.assertIn(self.text("#geo-samples tbody tr td:nth-child(3)"), ("H2-Br1", "Br1-H2"))
+        self.click("#geo-samples tbody tr td")
+        self.wait(lambda b: b.find_element(By.ID, "geo-molnote").text.startswith("Bond br_b~h_b between "))
+        self.assertNotIn("do not match", self.text("#geo-molnote"))
+        self.assertIn("2 atoms in all", self.text("#geo-molnote"))
+        self.assertEqual("hydrogen-bromide", self.text("#geo-molname"))
+        self.assertEqual("", self.errors())
+
     def test_7_geometry_from_a_molprop_file(self):
         """!
         @brief A force field file is opened and gets its bonds from the
@@ -2212,6 +2251,26 @@ class PageTest(unittest.TestCase):
             self.assertRegex(atoms, r"^[A-Z][a-z]?\d+-[A-Z][a-z]?\d+$")
             self.assertTrue(value.endswith("pm"))
         self.shot("29c-geometry-histogram")
+        # A click on a value shows its structure, with the atoms of the bond marked
+        self.assertFalse(self.browser.find_element(By.ID, "geo-mol").is_displayed())
+        self.click("#geo-samples tbody tr td")
+        self.wait(lambda b: b.find_element(By.ID, "geo-molnote").text.startswith("Bond "))
+        compound, calculation, atoms, value = rows[0]
+        note = self.text("#geo-molnote")
+        self.assertIn("between %s: %s." % (atoms.replace("-", ", "), value.replace(" pm", " pm")), note)
+        self.assertNotIn("do not match", note)
+        self.assertEqual(compound, self.text("#geo-molname"))
+        self.assertIn(calculation, self.text("#geo-molwhat"))
+        self.assertIn("sel", self.browser.find_element(By.CSS_SELECTOR, "#geo-samples tbody tr").get_attribute("class"))
+        self.assertTrue(self.browser.find_elements(By.CSS_SELECTOR, "#gl4 canvas"))
+        self.assertEqual("", self.errors())
+        self.browser.execute_script("document.getElementById('geo-mol').scrollIntoView({ block: 'center' })")
+        time.sleep(0.5)
+        self.shot("29d-geometry-structure")
+        self.click("#geo-molreset")
+        self.click("#geo-molclose")
+        self.assertFalse(self.browser.find_element(By.ID, "geo-mol").is_displayed())
+        self.assertEqual([], self.browser.find_elements(By.CSS_SELECTOR, "#geo-samples tbody tr.sel"))
         # Zoomed and moved out of sight, and back with Reset zoom
         self.zoomed_out_of_sight("geoplot", lambda: self.browser.execute_script(
             "return [...document.querySelectorAll('#geoplot svg > text')].map(t => t.textContent).join(' ')"))

@@ -754,6 +754,29 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         except geometry.GeometryError as exc:
             raise fail(404, str(exc)) from exc
 
+    @app.get("/api/molprops/{upload_id}/structure")
+    def molprop_structure(upload_id: str, molecule: str, calculation: str) -> Dict[str, Any]:
+        """!
+        @brief The structure of one calculation of a compound in an
+        uploaded molprop file, such as the one that geometry_ff read, to
+        show where a bond length or an angle comes from. Not an async
+        function, so that reading a large molprop file does not hold up
+        other requests.
+        @param upload_id   The upload of the molprop file.
+        @param molecule    The name or the IUPAC name of the compound.
+        @param calculation The data file of the calculation.
+        @return "molecule", "calculation" and "atoms", see
+        evaluation.structure(), in the order of the file.
+        """
+        upload = uploads.get(upload_id)
+        if upload is None or upload.kind != "molprop":
+            raise fail(404, "The molprop file is not known, open it again")
+        try:
+            atoms = evaluation.structure([uploads.path(upload)], molecule, calculation)
+        except evaluation.EvaluationError as exc:
+            raise fail(404, str(exc)) from exc
+        return {"molecule": molecule, "calculation": calculation, "atoms": atoms}
+
     @app.get("/api/jobs/{job_id}/points/{term}")
     def job_points(job_id: str, term: str) -> Dict[str, Any]:
         """!

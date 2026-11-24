@@ -94,7 +94,15 @@ there or opened from a file:
   of the bond lengths, angles and dihedrals are shown, one type at a
   time; a click on a bar lists from which compounds, calculations and
   atoms its values come (`geometry_ff -samples`), to understand odd
-  values. The bond lengths and angles of each type are also tested for a
+  values. A click on one of these shows the structure of that calculation,
+  read from the molprop file, with the atoms of the bond, angle or
+  dihedral marked in colour and joined by a line. The view is turned such
+  that a bond lies across the screen and the plane of an angle faces you,
+  with the rest of the compound behind; *Reset view* turns it back after
+  you rotated it. The atoms are numbered as in the molprop file; with a
+  force field that has virtual sites an `alexandria` older than this
+  interface numbered them otherwise, and the page then says that the atoms
+  do not match the structure. The bond lengths and angles of each type are also tested for a
   normal distribution (`geometry_ff -analyse`, the Anderson-Darling test
   at a significance level of 0.01): the card *What was extracted* tells
   how many types of each kind were tested, how many are not normal and
