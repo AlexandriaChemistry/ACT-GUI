@@ -80,13 +80,6 @@ there or opened from a file:
   `actgui` read them. It does what the program `actgui` of
   ACT-utilities, which it replaces, did. The table of atom types and the virtual sites that
   `gen_ff` got can be saved as well.
-- *Virtual sites* defines sites by point and click: two, three or four
-  atoms of a molecule are picked in the viewer or in a table, the kind of
-  site and the bounds of its parameters are chosen, and the site is shown
-  where it would be. The definitions are on the types of the atoms, in the
-  form of `alexandria gen_ff -vs`; they are used when a force field is
-  generated and can be saved as a file. *Open file* adds the sites of such
-  a file, one that was saved here or one that was written for `gen_ff -vs`.
 - *Geometry* takes the bond lengths, angles and dihedral angles from the
   compounds of a molprop file with `alexandria geometry_ff`. The file is
   one of its own, or the file that is open in the tab *Molprop data*, and
@@ -113,6 +106,15 @@ there or opened from a file:
   cover different kinds of bonds or angles, or have structures that are
   off. An `alexandria` without `-analyse` extracts the geometries without
   this, and the page says so.
+- *Virtual sites* defines sites by point and click: two, three or four
+  atoms of a molecule are picked in the viewer or in a table, the kind of
+  site and the bounds of its parameters are chosen, and the site is shown
+  where it would be. The definitions are on the types of the atoms, in the
+  form of `alexandria gen_ff -vs`; they are used when a force field is
+  generated and can be saved as a file. *Open file* adds the sites of such
+  a file, one that was saved here or one that was written for `gen_ff -vs`.
+  This tab comes after *Geometry*, since `geometry_ff` has to be run
+  before virtual sites can be added.
 - *Edit and validate* lists the parameters with their value, bounds and
   mutability, changes them with `alexandria edit_ff`, and shows the
   problems that `edit_ff -validate` finds, with a button to write the force
