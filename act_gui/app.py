@@ -128,13 +128,13 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
     app.state.settings = settings
     app.state.jobs = manager
     app.state.uploads = uploads
-    # The cluster for long jobs, from the file with the settings of the
+    # The clusters for long jobs, from the file with the settings of the
     # user. A file that cannot be used does not stop the interface.
     try:
-        app.state.cluster = cluster.load(settings.config_file)
+        app.state.clusters = cluster.load_all(settings.config_file)
         app.state.cluster_error = ""
     except cluster.ClusterError as exc:
-        app.state.cluster = None
+        app.state.clusters = cluster.Clusters()
         app.state.cluster_error = str(exc)
     # The preferences of the user for the page, such as the screen mode. A
     # server for several users keeps none: the page keeps them in the browser.
@@ -294,12 +294,16 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
 
     def cluster_state() -> Dict[str, Any]:
         """!
-        @brief The settings of the cluster, for the browser.
-        @return Whether there are settings, the settings, where they are
-        kept and what was wrong with the file, if anything.
+        @brief The settings of the clusters, for the browser.
+        @return Whether there is a cluster, the clusters with their name,
+        whether each is the default and its settings, the name of the
+        default and its settings ("cluster"), where they are kept and what
+        was wrong with the file, if anything.
         """
-        current = app.state.cluster
+        clusters = app.state.clusters
+        current = clusters.get()
         return {"configured": current is not None,
+                "clusters": clusters.describe(), "default": clusters.default,
                 "cluster": None if current is None else dataclasses.asdict(current),
                 # What is proposed for the settings that the user need not give
                 "proposed": {key: value for key, value in dataclasses.asdict(
@@ -317,10 +321,39 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         if settings.mode != "desktop":
             raise fail(404, "This server sends no jobs to a cluster for its users")
 
+    def keep_clusters(changed: cluster.Clusters) -> None:
+        """!
+        @brief Keep the clusters in the file with the settings of the user,
+        and use them from now on.
+        @param changed The clusters as they are to be.
+        @throws HTTPException if the file cannot be written.
+        """
+        try:
+            if settings.config_file is not None:
+                cluster.save_all(settings.config_file, changed)
+        except cluster.ClusterError as exc:
+            raise fail(500, str(exc)) from exc
+        app.state.clusters = changed
+        app.state.cluster_error = ""
+
+    def named(name: Optional[str]) -> str:
+        """!
+        @brief The name of a cluster that a request gives, or that of the default.
+        @param name The name in the request, None or empty for the default.
+        @return The name.
+        @throws HTTPException if there is no such cluster.
+        """
+        clusters = app.state.clusters
+        chosen = name or clusters.default
+        if not chosen or chosen not in clusters.entries:
+            raise fail(404 if name else 400, "There is no cluster %s" % name if name else
+                       "Give the server, your user name and a working directory first")
+        return chosen
+
     @app.get("/api/cluster")
     async def get_cluster() -> Dict[str, Any]:
         """!
-        @brief The cluster on which long jobs run.
+        @brief The clusters on which long jobs run.
         @return See cluster_state().
         """
         desktop_only()
@@ -329,52 +362,76 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
     @app.put("/api/cluster")
     async def put_cluster(request: Request) -> Dict[str, Any]:
         """!
-        @brief Set the cluster on which long jobs run, and keep it in the
-        file with the settings of the user.
-        @param request The request, with a JSON object: server, user and workdir.
+        @brief Add a cluster on which long jobs run, or change one, and keep
+        the clusters in the file with the settings of the user.
+        @param request The request, with a JSON object: the settings (server,
+        user, workdir and the others of cluster.parse()), and optionally
+        "name", the name of the cluster; "previous", the name it had, empty
+        for a new cluster, and without it the cluster with the name is
+        changed if there is one; and "default", true to make it the
+        default. Without a name the default cluster is changed, or, if
+        there is none, a cluster named after its server is added.
         @return See cluster_state().
         """
         desktop_only()
         try:
-            chosen = cluster.parse(await request.json())
-            if settings.config_file is not None:
-                cluster.save(settings.config_file, chosen)
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise cluster.ClusterError("The settings of the cluster must be an object")
+            body = dict(body)
+            name, previous = body.pop("name", None), body.pop("previous", None)
+            make_default = body.pop("default", False)
+            if not isinstance(make_default, bool):
+                raise cluster.ClusterError("Whether the cluster is the default is true or false")
+            if previous is not None and not isinstance(previous, str):
+                raise cluster.ClusterError("The name the cluster had is text")
+            chosen = cluster.parse(body)
+            current = app.state.clusters
+            if name is None:
+                previous = current.default if previous is None else previous
+                name = previous or cluster.name_for(chosen)
+            elif previous is None:
+                checked = cluster.check_cluster_name(name)
+                previous = checked if checked in current.entries else ""
+            changed = cluster.Clusters(dict(current.entries), current.default)
+            changed.put(name, chosen, previous=previous, make_default=make_default)
         except ValueError as exc:
             # Also what is no JSON
             raise fail(400, str(exc)) from exc
-        app.state.cluster = chosen
-        app.state.cluster_error = ""
+        keep_clusters(changed)
         return cluster_state()
 
     @app.delete("/api/cluster")
-    async def delete_cluster() -> Dict[str, Any]:
+    async def delete_cluster(name: Optional[str] = None) -> Dict[str, Any]:
         """!
-        @brief Forget the cluster, also in the file.
+        @brief Forget a cluster, also in the file.
+        @param name The name of the cluster, the default if None.
         @return See cluster_state().
         """
         desktop_only()
-        try:
-            if settings.config_file is not None:
-                cluster.save(settings.config_file, None)
-        except cluster.ClusterError as exc:
-            raise fail(500, str(exc)) from exc
-        app.state.cluster = None
-        app.state.cluster_error = ""
+        current = app.state.clusters
+        if name is None and not current.entries:
+            # Nothing to forget, as before there were several clusters
+            keep_clusters(cluster.Clusters())
+            return cluster_state()
+        chosen = named(name)
+        changed = cluster.Clusters(dict(current.entries), current.default)
+        changed.remove(chosen)
+        keep_clusters(changed)
         return cluster_state()
 
     @app.post("/api/cluster/check")
-    def check_cluster() -> Dict[str, Any]:
+    def check_cluster(name: Optional[str] = None) -> Dict[str, Any]:
         """!
-        @brief Log in on the cluster once, with the ssh program of this
+        @brief Log in on a cluster once, with the ssh program of this
         machine, and see whether jobs can be sent. Not an async function,
         so that the server does other things while ssh waits.
+        @param name The name of the cluster, the default if None.
         @return Whether it worked and a message for the user, see
         cluster.check().
         """
         desktop_only()
-        current = app.state.cluster
-        if current is None:
-            raise fail(400, "Give the server, your user name and a working directory first")
+        current = app.state.clusters.get(named(name))
         return cluster.check(current, program=settings.ssh_program)
 
     @app.get("/api/generator")

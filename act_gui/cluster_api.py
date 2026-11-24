@@ -40,8 +40,9 @@ from .cluster_queue import (ACTIVE, PROGRESS, ClusterJob, ClusterQueue, Plan, ma
 from .jobs import JobManager
 from .tasks import OPENMM_RESULTS, TASKS, Prepared, Task
 
-## What a request can say about the job itself
-CHOICES = ("name", "tasks", "minutes", "gpu")
+## What a request can say about the job itself: its name, processes, time,
+## GPU and the cluster it goes to ("on", the default cluster without it)
+CHOICES = ("name", "tasks", "minutes", "gpu", "on")
 ## The largest number of jobs that wait or run on the cluster
 MAX_ACTIVE = 50
 ## The largest number of reports of its progress that are read of a job
@@ -108,44 +109,85 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
 
     def poll_seconds() -> int:
         """!
-        @brief The time between two questions to the cluster.
-        @return The seconds of the settings, those that are proposed if
-        there are no settings.
+        @brief The time between two questions to the clusters.
+        @return The longest of the seconds of the clusters, such that none
+        is asked more often than its settings say; those that are proposed
+        if there are no clusters.
         """
-        current = app.state.cluster
-        return (current or ClusterSettings("", "", "")).poll_seconds
+        entries = app.state.clusters.entries.values()
+        return max([value.poll_seconds for value in entries]
+                   or [ClusterSettings("", "", "").poll_seconds])
+
+    def target(chosen: Mapping[str, Any]) -> Tuple[str, ClusterSettings]:
+        """!
+        @brief The cluster that a new job goes to.
+        @param chosen What the request says about the job: "on", the name of
+        the cluster, the default one without it.
+        @return The name of the cluster and its settings.
+        @throws HTTPException if there is no such cluster.
+        """
+        clusters = app.state.clusters
+        wanted = chosen.get("on")
+        if wanted is not None and (not isinstance(wanted, str) or wanted not in clusters.entries):
+            raise fail(400, "There is no cluster %s in the settings" % (wanted,))
+        name = wanted or clusters.default
+        settings = clusters.get(name)
+        if settings is None:
+            raise fail(400, "Give the server, your user name and a working directory in the "
+                       "tab Settings first")
+        return name, settings
+
+    def home_of(job: ClusterJob) -> Tuple[str, ClusterSettings]:
+        """!
+        @brief The cluster that has the files of a job: the one with its
+        server, user and working directory, with its settings as they are now.
+        @param job The job.
+        @return The name of the cluster and its settings.
+        @throws HTTPException if no cluster of the settings is that one.
+        """
+        name = app.state.clusters.find(job.cluster)
+        if not name:
+            raise fail(409, "The files of %s are on %s@%s in %s, and no cluster in the settings "
+                       "is that one now. Send the calculation as a new job from its tab."
+                       % (job.name, job.cluster.user, job.cluster.server, job.cluster.workdir))
+        return name, app.state.clusters.get(name)
 
     def listing(**more: Any) -> Dict[str, Any]:
         """!
         @brief The jobs for the browser.
         @param more What else to tell.
-        @return The jobs with the title of their task and "auto", whether
-        their results are shown as soon as they are done, the time between
+        @return The jobs with the title of their task, "auto", whether
+        their results are shown as soon as they are done, and "cluster", the
+        name of the cluster of the settings they are on; the time between
         two questions, the seconds until the cluster can be asked, why it
         is not asked by itself if so, and the directories that are no job.
         """
         jobs: List[Dict[str, Any]] = []
         for summary in queue.summaries():
             task = TASKS.get(summary["task"])
+            job = queue.get(summary["name"])
             jobs.append(dict(summary, title=task.title if task else summary["task"],
-                             auto=bool(task and task.deliver)))
+                             auto=bool(task and task.deliver),
+                             # The cluster of the settings that the job is on, empty if none is
+                             cluster=app.state.clusters.find(job.cluster) if job else ""))
         answer = {"jobs": jobs, "poll_seconds": poll_seconds(),
                   "wait": queue.wait(poll_seconds()), "paused": queue.paused,
                   "unread": list(queue.unread), "directory": str(queue.root)}
         answer.update(more)
         return answer
 
-    def plan_for(body: Any, staging: Path, name: str) -> Plan:
+    def plan_for(body: Any, staging: Path, name: str, where: ClusterSettings) -> Plan:
         """!
         @brief Make the job for a request.
         @param body    The request.
         @param staging The directory that stands for that of the job.
         @param name    The name of the job.
+        @param where   The settings of the cluster it goes to.
         @return The plan.
         """
         chosen = body.get("cluster") or {}
         if isinstance(body, Mapping) and body.get("task") == "openmm_run":
-            return openmm_plan(body, staging, name, chosen)
+            return openmm_plan(body, staging, name, chosen, where)
         tasks = chosen.get("tasks", 1)
         if isinstance(tasks, bool) or not isinstance(tasks, int) or not 1 <= tasks <= MAX_TASKS:
             raise fail(400, "The number of processes is between 1 and %d" % MAX_TASKS)
@@ -171,7 +213,7 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
                 collect[key] = filename
         try:
             return make_plan(name, task.name, task.command, options, staging,
-                             arguments, app.state.cluster, outputs=dict(task.outputs),
+                             arguments, where, outputs=dict(task.outputs),
                              inputs=prepared.inputs, collect=collect,
                              tasks=tasks, minutes=minutes,
                              gpu=chosen.get("gpu", False), observables=prepared.observables)
@@ -180,7 +222,7 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
             raise fail(400, str(exc)) from exc
 
     def openmm_plan(body: Mapping[str, Any], staging: Path, name: str,
-                    chosen: Mapping[str, Any]) -> Plan:
+                    chosen: Mapping[str, Any], where: ClusterSettings) -> Plan:
         """!
         @brief A simulation with OpenMM of the files that were made for it
         here, run on the cluster with the script of the package.
@@ -189,6 +231,7 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         @param staging The directory that stands for that of the job.
         @param name    The name of the job.
         @param chosen  What the request says about the job: minutes, gpu.
+        @param where   The settings of the cluster it goes to.
         @return The plan.
         """
         source = body.get("job")
@@ -214,7 +257,7 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
                     settings, "CUDA" if gpu else "CPU").encode("utf-8"),
                 openmm_package.RUN_NAME: openmm_package.run_script().encode("utf-8")}
             return make_script_plan(name, "openmm_run", ["python3", openmm_package.RUN_NAME],
-                                    contents, OPENMM_RESULTS, staging, app.state.cluster,
+                                    contents, OPENMM_RESULTS, staging, where,
                                     minutes=minutes, gpu=gpu)
         except (openmm_package.PackageError, ClusterError, OSError) as exc:
             raise fail(400, str(exc)) from exc
@@ -227,13 +270,11 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         """
         if not isinstance(body, dict):
             raise fail(400, "The request must be an object")
-        if app.state.cluster is None:
-            raise fail(400, "Give the server, your user name and a working directory in the "
-                       "tab Cluster first")
         chosen = body.get("cluster") or {}
         if not isinstance(chosen, dict) or any(key not in CHOICES for key in chosen):
             raise fail(400, "A job has a name, a number of processes (tasks), a time in "
-                       "minutes and a GPU or not")
+                       "minutes, a GPU or not and the cluster it goes to (on)")
+        where, current = target(chosen)
         if not isinstance(chosen.get("gpu", False), bool):
             raise fail(400, "Whether the job needs a GPU is true or false")
         send = body.get("send", False)
@@ -245,14 +286,13 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
             cluster_jobs.check_name(name)
         except ClusterError as exc:
             raise fail(400, "%s: use letters, digits and . _ -, and no spaces" % exc) from exc
-        current = app.state.cluster
         if not send:
             with tempfile.TemporaryDirectory(prefix="act-gui-job-") as tmp:
                 staging = Path(tmp) / name
                 staging.mkdir()
                 taken = queue.get(name) is not None or queue.directory(name).exists()
-                return dict(plan_for(body, staging, name).describe(current), sent=False,
-                            taken=taken)
+                return dict(plan_for(body, staging, name, current).describe(current), sent=False,
+                            taken=taken, cluster=where)
         if sum(1 for job in queue.list() if job.state in ACTIVE) >= MAX_ACTIVE:
             raise fail(429, "There are %d jobs waiting or running on the cluster, wait until "
                        "one is done" % MAX_ACTIVE)
@@ -261,7 +301,7 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         except ClusterError as exc:
             raise fail(409, str(exc)) from exc
         try:
-            plan = dataclasses.replace(plan_for(body, staging, name), request={
+            plan = dataclasses.replace(plan_for(body, staging, name, current), request={
                 key: value for key, value in body.items() if key not in _NOT_KEPT})
             job = queue.send(plan, current)
         except ClusterError as exc:
@@ -294,12 +334,7 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         @param staging The directory that stands for that of the new job.
         @return The plan.
         """
-        current = app.state.cluster
-        here = (current.server, current.user, current.workdir)
-        if here != (job.cluster.server, job.cluster.user, job.cluster.workdir):
-            raise fail(409, "The files of %s are on %s@%s in %s, and the settings name "
-                       "another cluster now. Send the calculation as a new job from its tab."
-                       % (job.name, job.cluster.user, job.cluster.server, job.cluster.workdir))
+        _, current = home_of(job)
         tasks = chosen.get("tasks", job.tasks)
         minutes = chosen.get("minutes", job.minutes)
         gpu = chosen.get("gpu", job.gpu)
@@ -370,7 +405,7 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
         job = queue.get(previous)
         if job is None:
             raise fail(404, "There is no such job")
-        if app.state.cluster is None:
+        if not app.state.clusters.entries:
             raise fail(400, "Give the server, your user name and a working directory in the "
                        "tab Settings first")
         if job.state in ACTIVE:
@@ -395,13 +430,17 @@ def register(app: FastAPI, manager: JobManager, queue: ClusterQueue,
             cluster_jobs.check_name(name)
         except ClusterError as exc:
             raise fail(400, "%s: use letters, digits and . _ -, and no spaces" % exc) from exc
-        current = app.state.cluster
+        # The files are copied on the cluster that has them
+        where, current = home_of(job)
+        if chosen.get("on") not in (None, where):
+            raise fail(400, "The files of %s are on the cluster %s: it is sent again there"
+                       % (previous, where))
         if not send:
             with tempfile.TemporaryDirectory(prefix="act-gui-job-") as tmp:
                 staging = Path(tmp) / name
                 staging.mkdir()
                 return dict(again_plan(job, chosen, name, staging).describe(current),
-                            sent=False, taken=taken(name))
+                            sent=False, taken=taken(name), cluster=where)
         if sum(1 for other in queue.list() if other.state in ACTIVE) >= MAX_ACTIVE:
             raise fail(429, "There are %d jobs waiting or running on the cluster, wait until "
                        "one is done" % MAX_ACTIVE)

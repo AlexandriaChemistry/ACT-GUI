@@ -2370,7 +2370,8 @@ class PageTest(unittest.TestCase):
         self.open_page()
         self.click('#nav button[data-view="cluster"]')
         self.assertTrue(self.browser.find_element(By.ID, "view-cluster").is_displayed())
-        self.assertIn("No cluster yet", self.text("#cl-chips"))
+        # As soon as the page has the settings
+        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").text)
         self.assertIn("tab Settings", self.text("#cl-chips"))
         # The settings are in the tab Settings, to which the tab Cluster leads
         self.click("#cl-tosettings")
@@ -2414,13 +2415,15 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: "spoel@good" in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
         self.assertEqual("", self.errors())
         self.assertIn("cpu,cpu-long", self.browser.find_element(By.ID, "cl-chips").get_attribute("textContent"))
-        self.assertEqual({"cluster": {"server": "good", "user": "spoel", "workdir": "act/jobs",
-                                      "load": "source", "load_name": "/opt/act/bin/ACTRC",
-                                      "partition": "cpu,cpu-long",
-                                      "gpu_partition": "GPU,CLUSTER-AMD", "gpu_gres": "gpu:1",
-                                      "account": "", "launcher": "srun",
-                                      "program": "alexandria", "poll_seconds": 120}},
-                         json.loads(self.config.read_text()))
+        kept = {"server": "good", "user": "spoel", "workdir": "act/jobs",
+                "load": "source", "load_name": "/opt/act/bin/ACTRC", "partition": "cpu,cpu-long",
+                "gpu_partition": "GPU,CLUSTER-AMD", "gpu_gres": "gpu:1", "account": "",
+                "launcher": "srun", "program": "alexandria", "poll_seconds": 120}
+        # Named after its server, the default as the first cluster
+        self.assertEqual({"clusters": {"default": "good", "list": [dict({"name": "good"}, **kept)]},
+                          "cluster": kept}, json.loads(self.config.read_text()))
+        self.assertEqual("good", self.browser.find_element(By.ID, "cl-name").get_attribute("value"))
+        self.assertTrue(self.browser.find_element(By.ID, "cl-default").is_selected())
         self.assertEqual("act/jobs", value("cl-workdir"))
         # Nothing to load: the field for it goes away
         Select(self.browser.find_element(By.ID, "cl-load")).select_by_value("none")
@@ -2443,6 +2446,57 @@ class PageTest(unittest.TestCase):
         self.click("#cl-check")
         self.wait(lambda b: b.find_element(By.ID, "cl-checkpill").text == "Not ready")
         self.assertIn("is not there", self.text("#cl-result"))
+
+        # A second cluster, under a name of its own
+        (self.cluster.dir / "home" / "act" / "other").mkdir(exist_ok=True)
+        which = Select(self.browser.find_element(By.ID, "cl-which"))
+        self.assertEqual(["good (default)", "New cluster…"], [o.text for o in which.options])
+        which.select_by_value("@new")
+        self.assertEqual("", self.browser.find_element(By.ID, "cl-server").get_attribute("value"))
+        self.assertEqual("CLUSTER,CLUSTER-AMD", self.browser.find_element(By.ID, "cl-partition").get_attribute("value"))
+        self.assertFalse(self.browser.find_element(By.ID, "cl-default").is_selected())
+        self.assertFalse(self.browser.find_element(By.ID, "cl-check").is_enabled())
+        self.assertFalse(self.browser.find_element(By.ID, "cl-forget").is_displayed())
+        for field, text in (("cl-name", "other"), ("cl-server", "good"), ("cl-user", "spoel"),
+                            ("cl-workdir", "act/other")):
+            self.browser.find_element(By.ID, field).send_keys(text)
+        self.click("#cl-save")
+        self.wait(lambda b: "other" in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
+        self.assertEqual("", self.errors())
+        self.assertEqual(["good (default)", "other", "New cluster…"], [o.text for o in which.options])
+        self.assertEqual("other", which.first_selected_option.get_attribute("value"))
+        written = json.loads(self.config.read_text())
+        self.assertEqual(["good", "other"], [c["name"] for c in written["clusters"]["list"]])
+        self.assertEqual("good", written["clusters"]["default"])
+        # Its login is tested, not that of the other one
+        self.click("#cl-check")
+        self.wait(lambda b: b.find_element(By.ID, "cl-checkpill").text == "Ready")
+        self.assertIn("act/other", self.text("#cl-result"))
+        # A name that is taken is refused
+        which.select_by_value("@new")
+        for field, text in (("cl-name", "good"), ("cl-server", "good"), ("cl-user", "spoel"),
+                            ("cl-workdir", "act/jobs")):
+            self.browser.find_element(By.ID, field).send_keys(text)
+        self.click("#cl-save")
+        self.wait(lambda b: "There is a cluster good already" in self.errors())
+        # The other one becomes the default
+        which.select_by_value("other")
+        self.assertEqual("act/other", self.browser.find_element(By.ID, "cl-workdir").get_attribute("value"))
+        self.click("#cl-default")
+        self.click("#cl-save")
+        self.wait(lambda b: json.loads(self.config.read_text())["clusters"]["default"] == "other")
+        self.assertEqual(["good", "other (default)", "New cluster…"], [o.text for o in which.options])
+        self.assertTrue(self.browser.find_element(By.ID, "cl-default").get_attribute("disabled"))
+        self.click('#nav button[data-view="cluster"]')
+        chips = self.text("#cl-chips")
+        self.assertIn("other (default) · jobs go to spoel@good in act/other", chips)
+        self.assertIn("good · jobs go to spoel@good in act/jobs/nothere", chips)
+        self.shot("30b-two-clusters")
+        # Forgotten, the first one is the default again
+        self.click('#nav button[data-view="settings"]')
+        self.click("#cl-forget")
+        self.wait(lambda b: [o.text for o in which.options] == ["good (default)", "New cluster…"])
+        self.assertEqual("good", json.loads(self.config.read_text())["clusters"]["default"])
         # The page is opened again: the settings are those of the file
         self.open_page()
         self.click('#nav button[data-view="settings"]')
@@ -2454,6 +2508,95 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
         self.assertEqual({}, json.loads(self.config.read_text()))
         self.assertEqual("", self.browser.find_element(By.ID, "cl-server").get_attribute("value"))
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_f_job_on_another_cluster(self):
+        """!
+        @brief With two clusters a job can go to either: the list of the
+        job offers them, the default first, and the job is shown with the
+        cluster it goes to. With one cluster there is no list.
+        """
+        data = Path(TESTDATA)
+        (self.cluster.dir / "home" / "act" / "other").mkdir(exist_ok=True)
+        self.open_page()
+        self.click('#nav button[data-view="settings"]')
+
+        def add(name, workdir):
+            Select(self.browser.find_element(By.ID, "cl-which")).select_by_value("@new")
+            for field, text in (("cl-name", name), ("cl-server", "good"), ("cl-user", "spoel"),
+                                ("cl-workdir", workdir)):
+                self.browser.find_element(By.ID, field).send_keys(text)
+            Select(self.browser.find_element(By.ID, "cl-load")).select_by_value("none")
+            self.click("#cl-save")
+            self.wait(lambda b: name in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, "#cl-which option"))
+        add("csb", "act/jobs")
+        self.click('#nav button[data-view="molecule"]')
+        self.browser.find_element(By.ID, "fffile").send_keys(str(data / "forcefields" / "SPCE.xml"))
+        self.browser.find_element(By.ID, "molfile").send_keys(str(data / "molecules" / "water_dimer.pdb"))
+        self.wait(lambda b: b.find_element(By.ID, "run-b2").is_enabled())
+        self.click('#tasks button[data-tab="b2"]')
+        self.click('#b2-place button[data-v="cluster"]')
+        # One cluster: nothing to choose
+        self.assertFalse(self.browser.find_element(By.ID, "b2-on").is_displayed())
+        self.click('#nav button[data-view="settings"]')
+        add("dardel", "act/other")
+        self.assertEqual("", self.errors())
+        self.click('#nav button[data-view="molecule"]')
+        on = Select(self.browser.find_element(By.ID, "b2-on"))
+        self.assertTrue(self.browser.find_element(By.ID, "b2-on").is_displayed())
+        self.assertEqual(["csb (default)", "dardel"], [o.text for o in on.options])
+        self.assertEqual("csb", on.first_selected_option.get_attribute("value"))
+        box = self.browser.find_element(By.ID, "b2-maxdimer")
+        box.clear()
+        box.send_keys("16")
+        name = self.browser.find_element(By.ID, "b2-jobname")
+        name.send_keys("virial-9")
+        self.click("#run-b2")
+        self.wait(lambda b: b.find_element(By.ID, "b2-job").is_displayed())
+        self.assertEqual("virial-9 · csb · spoel@good:act/jobs/virial-9", self.browser.find_element(By.ID, "b2-jobwhere").get_attribute("textContent"))
+        # Another cluster: the job that was shown is no more
+        on.select_by_value("dardel")
+        self.assertFalse(self.browser.find_element(By.ID, "b2-job").is_displayed())
+        self.click("#run-b2")
+        self.wait(lambda b: b.find_element(By.ID, "b2-job").is_displayed())
+        self.assertEqual("virial-9 · dardel · spoel@good:act/other/virial-9", self.browser.find_element(By.ID, "b2-jobwhere").get_attribute("textContent"))
+        self.shot("36b-job-on-another-cluster")
+        self.click("#b2-send")
+        self.wait(lambda b: b.find_element(By.ID, "view-cluster").is_displayed())
+        self.assertEqual("", self.errors())
+        self.assertTrue((self.cluster.dir / "home" / "act" / "other" / "virial-9" / "job.sh").is_file())
+        row = self.browser.execute_script(
+            "const r = document.querySelector('#cj-table tbody tr[data-job=\"virial-9\"]');"
+            "return r ? [...r.cells].map(c => c.textContent) : null")
+        self.assertEqual("dardel · spoel@good:act/other/virial-9", row[6])
+        # Done, it comes by itself: the page goes to its tab
+        def finished(_browser):
+            if row_of("virial-9")[2] == "Finished":
+                return True
+            if self.browser.find_element(By.ID, "cj-ask").is_enabled():
+                self.click("#cj-ask")
+            time.sleep(1)
+            return False
+
+        def row_of(job):
+            return self.browser.execute_script(
+                "const r = document.querySelector('#cj-table tbody tr[data-job=\"' + arguments[0] + '\"]');"
+                "return r ? [...r.cells].map(c => c.textContent) : null", job)
+        self.wait(finished, 120)
+        self.wait(lambda b: b.find_element(By.ID, "tab-b2").is_displayed())
+        self.assertIn("job virial-9 on the cluster", self.text("#b2-plotnote"))
+        # Take the job and the clusters away again
+        self.click('#nav button[data-view="cluster"]')
+        while self.browser.find_elements(By.CSS_SELECTOR, '#cj-table tr[data-job="virial-9"] button[data-act="forget"]'):
+            self.click('#cj-table tr[data-job="virial-9"] button[data-act="forget"]')
+            self.click('#cj-table tr[data-job="virial-9"] button[data-act="forget"]')
+            time.sleep(0.3)
+        self.click('#nav button[data-view="settings"]')
+        for _ in range(2):
+            self.click("#cl-forget")
+            time.sleep(0.3)
+        self.wait(lambda b: "No cluster yet" in b.find_element(By.ID, "cl-chips").get_attribute("textContent"))
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_d_molecule_jobs_on_the_cluster(self):

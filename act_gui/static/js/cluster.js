@@ -7,9 +7,10 @@
  * of the License, or (at your option) any later version.
  */
 /**
- * @file The cluster for long jobs: the user gives the server, the user
- * name there and a working directory, and can change how ACT is made
- * available in a job and where jobs go in Slurm. The server of the
+ * @file The clusters for long jobs: for each the user gives a name, the
+ * server, the user name there and a working directory, and can change how
+ * ACT is made available in a job and where jobs go in Slurm. One cluster
+ * is the default for new jobs. The server of the
  * interface keeps the settings in a file that it reads when it starts, and
  * logs in with the ssh program of this machine; the page never sees a
  * password or a key.
@@ -33,6 +34,11 @@ const FIELDS = {
   partition: "cl-partition", gpu_partition: "cl-gpupartition", gpu_gres: "cl-gres", account: "cl-account",
   launcher: "cl-launcher", program: "cl-program", poll_seconds: "cl-poll",
 };
+/** What the server last said about the clusters, and the one in the form: its name, empty for a new one. */
+const clusters = { state: null, editing: "" };
+/** The value of the list of clusters that stands for a new one. */
+const NEW_CLUSTER = "@new";
+
 /** What is asked for with each way of making ACT available. */
 const LOAD_LABELS = { module: "Name of the module", source: "The file, with its path", conda: "Name of the environment" };
 
@@ -44,33 +50,65 @@ function loadKind() {
 }
 
 /**
- * Show the settings that the server has.
- * @param {object} state What the server says: configured, cluster, proposed, file and problem.
+ * The clusters that the server has, with their settings.
+ * @returns {object[]} For each its name, whether it is the default and its settings.
  */
-function show(state) {
+const listed = () => (clusters.state && clusters.state.clusters) || [];
+
+/**
+ * Put the settings of a cluster in the form, or what is proposed for a new one.
+ * @param {string} name The name of the cluster, empty for a new one.
+ */
+function editCluster(name) {
+  const state = clusters.state, found = listed().find(c => c.name === name);
+  clusters.editing = found ? name : "";
+  $("#cl-which").value = found ? name : NEW_CLUSTER;
   // What the user has not given yet starts with what is proposed
-  const values = { server: "", user: "", workdir: "", ...state.proposed, ...(state.cluster || {}) };
+  const values = { server: "", user: "", workdir: "", ...state.proposed, ...(found ? found.settings : {}) };
   for (const [key, id] of Object.entries(FIELDS)) $("#" + id).value = values[key];
+  $("#cl-name").value = found ? name : "";
+  // The first cluster is the default; a new one can become it
+  $("#cl-default").checked = found ? found.default : !listed().length;
+  $("#cl-default").disabled = Boolean(found && found.default);
   loadKind();
+  $("#cl-check").disabled = !found;
+  $("#cl-forget").hidden = !found;
+  result("");
+}
+
+/**
+ * Show the settings that the server has.
+ * @param {object} state  What the server says: configured, clusters, default, proposed, file and problem.
+ * @param {string} chosen The cluster to show in the form; without it the one that was shown, or the default.
+ */
+function show(state, chosen) {
+  clusters.state = state;
+  const which = $("#cl-which");
+  which.textContent = "";
+  for (const c of listed()) which.append(el("option", { value: c.name }, c.default ? `${c.name} (default)` : c.name));
+  which.append(el("option", { value: NEW_CLUSTER }, listed().length ? "New cluster…" : "New cluster"));
+  const names = listed().map(c => c.name);
+  const wanted = chosen !== undefined ? chosen : names.includes(clusters.editing) ? clusters.editing : state.default;
+  editCluster(names.includes(wanted) ? wanted : "");
   const chips = $("#cl-chips");
   chips.textContent = "";
   if (state.configured) {
-    const c = state.cluster;
-    chips.append(el("span", { class: "chip" }, "jobs go to ", el("b", {}, `${c.user}@${c.server}`)),
-                 el("span", { class: "chip" }, "in ", el("b", {}, c.workdir)),
-                 el("span", { class: "chip" }, "partitions ", el("b", {}, c.partition)),
-                 el("span", { class: "chip" }, "with a GPU ", el("b", {}, `${c.gpu_partition}, ${c.gpu_gres}`)));
+    for (const { name, default: isDefault, settings: c } of listed()) {
+      chips.append(el("span", { class: "chip" }, el("b", {}, name), isDefault ? " (default) · " : " · ",
+        "jobs go to ", el("b", {}, `${c.user}@${c.server}`), " in ", el("b", {}, c.workdir),
+        " · partitions ", el("b", {}, c.partition), " · with a GPU ", el("b", {}, `${c.gpu_partition}, ${c.gpu_gres}`)));
+    }
   } else {
     chips.append(el("span", { class: "chip" }, "No cluster yet. Long jobs cannot be sent anywhere until one is set in the tab Settings."));
   }
   $("#cl-file").textContent = state.file
     ? `These settings are kept in ${state.file} and read when the interface starts.`
     : "These settings are kept until the interface stops.";
-  $("#cl-check").disabled = !state.configured;
-  $("#cl-forget").hidden = !state.configured;
   if (state.problem) alertBox(state.problem);
-  // The calculations that can go to the cluster offer it from now on, or no more
+  // The calculations that can go to a cluster offer them from now on, or no more
   session.clusterReady = state.configured;
+  session.clusters = [state.default, ...names.filter(n => n !== state.default)].filter(Boolean);
+  session.defaultCluster = state.default || "";
   document.dispatchEvent(new CustomEvent("act-cluster"));
 }
 
@@ -213,7 +251,9 @@ function showJobs(listing) {
         el("td", {}, el("span", { class: "pill" + (kind ? " " + kind : "") }, label),
           progressOf(job) ? el("div", { class: "muted fine jobprogress" }, progressOf(job)) : ""),
         el("td", { class: "mono" }, job.slurm + (job.slurm_state && !done ? ` ${job.slurm_state.toLowerCase()}` : "")),
-        el("td", {}, when(job.created)), el("td", {}, asked(job)), el("td", { class: "mono" }, `${job.server}:${job.directory}`),
+        el("td", {}, when(job.created)), el("td", {}, asked(job)),
+        el("td", { class: "mono", title: job.cluster ? `The cluster ${job.cluster} of the settings` : "No cluster of the settings is this one now" },
+          (job.cluster && session.clusters.length > 1 ? `${job.cluster} · ` : "") + `${job.server}:${job.directory}`),
         el("td", {}, buttons)));
       if (job.diagnosis) body.append(el("tr", { class: "more" }, el("td", { colSpan: 8 }, diagnosisOf(job))));
       else if (job.error) body.append(el("tr", { class: "more" }, el("td", { colSpan: 8 }, el("pre", { class: "code" }, job.error))));
@@ -418,7 +458,7 @@ function showAgain(name) {
   $("#cj-again-gpu").checked = suggest.gpu ?? job.gpu;
   $("#cj-again-job").hidden = true;
   const changed = [suggest.minutes ? "more time" : "", suggest.gpu === false ? "no GPU" : ""].filter(Boolean);
-  $("#cj-againnote").textContent = `The new job gets the files of ${name}, which are copied on the cluster, and the settings of the cluster as they are now. `
+  $("#cj-againnote").textContent = `The new job gets the files of ${name}, which are copied on the cluster${job.cluster ? ` ${job.cluster}` : ""}, and the settings of that cluster as they are now. `
     + (changed.length ? `It asks for ${changed.join(" and ")}, as proposed above; change what you like.`
       : job.diagnosis && job.diagnosis.fix === "processes" ? "Give it fewer processes, as proposed above." : "Change what it asks for.");
   $("#cj-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -446,7 +486,7 @@ async function showAgainJob() {
     const shown = await (await call(`/cluster/jobs/${encodeURIComponent(name)}/again`, { method: "POST", json: { cluster, send: false } })).json();
     panel.pending = { cluster: { ...cluster, name: shown.name }, send: true };
     $("#cj-again-name").value = shown.name;
-    $("#cj-again-where").textContent = `${shown.name} · ${shown.server}:${shown.directory}`;
+    $("#cj-again-where").textContent = `${shown.name} · ${shown.cluster && session.clusters.length > 1 ? `${shown.cluster} · ` : ""}${shown.server}:${shown.directory}`;
     const table = $("#cj-again-files");
     table.textContent = "";
     table.append(el("thead", {}, el("tr", {}, el("th", {}, "Name on the cluster"), el("th", {}, "From"))),
@@ -501,6 +541,11 @@ function form() {
   // A whole number; what is no number is refused by the server with a message
   const seconds = Number(given.poll_seconds);
   given.poll_seconds = given.poll_seconds !== "" && Number.isInteger(seconds) ? seconds : given.poll_seconds;
+  // Without a name a new cluster is named after its server
+  const name = $("#cl-name").value.trim();
+  if (name) given.name = name;
+  given.previous = clusters.editing;
+  given.default = $("#cl-default").checked;
   return given;
 }
 
@@ -511,8 +556,13 @@ async function save() {
   alertBox("");
   result("");
   try {
-    show(await (await call("/cluster", { method: "PUT", json: form() })).json());
-    toast("Saved the settings of the cluster");
+    const given = form(), state = await (await call("/cluster", { method: "PUT", json: given })).json();
+    // The cluster that was saved: by its name, or, without one, the one that is new or was shown
+    const names = listed().map(c => c.name);
+    const saved = given.name || (clusters.editing && state.clusters.some(c => c.name === clusters.editing) ? clusters.editing
+      : state.clusters.map(c => c.name).find(n => !names.includes(n)) || state.default);
+    show(state, saved);
+    toast(`Saved the settings of the cluster ${saved}`);
   } catch (e) {
     alertBox("The settings were not saved. " + e.message);
   } finally { button.disabled = false; }
@@ -549,7 +599,7 @@ async function check() {
   result("");
   loginPill("Logging in…");
   try {
-    const answer = await (await call("/cluster/check", { method: "POST" })).json();
+    const answer = await (await call("/cluster/check", { method: "POST", params: { name: clusters.editing } })).json();
     result(answer.message, answer.ok);
   } catch (e) {
     loginPill("");
@@ -562,8 +612,10 @@ async function forget() {
   alertBox("");
   result("");
   try {
-    show(await (await call("/cluster", { method: "DELETE" })).json());
-    toast("The settings of the cluster are gone");
+    const name = clusters.editing;
+    // The form shows the default cluster next, or a new one if there is none
+    show(await (await call("/cluster", { method: "DELETE", params: { name } })).json());
+    toast(`The settings of the cluster ${name} are gone`);
   } catch (e) { alertBox("The settings could not be removed. " + e.message); }
 }
 
@@ -582,8 +634,9 @@ export async function startCluster(told) {
   $("#cl-check").onclick = check;
   $("#cl-forget").onclick = forget;
   $("#cl-load").addEventListener("change", loadKind);
+  $("#cl-which").onchange = () => editCluster($("#cl-which").value === NEW_CLUSTER ? "" : $("#cl-which").value);
   // The settings that were saved are checked, so a change has to be saved first
-  for (const id of Object.values(FIELDS)) {
+  for (const id of [...Object.values(FIELDS), "cl-name", "cl-default"]) {
     const field = $("#" + id), changed = () => { $("#cl-check").disabled = true; result(""); };
     field.addEventListener("input", changed);
     field.addEventListener("change", changed);

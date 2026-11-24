@@ -14,7 +14,7 @@
  *
  * All text that comes from the server is put on the page as text.
  */
-import { alertBox, call, el, num, pill, seg, session, toast } from "./common.js";
+import { alertBox, call, clusterOptions, el, num, pill, seg, session, toast } from "./common.js";
 
 /**
  * The size of a file in words.
@@ -29,8 +29,9 @@ const fileSize = bytes => (bytes < 1024 ? `${bytes} bytes` : bytes < 1048576 ? `
  * @param {Element} host   Where the choice goes.
  * @param {object} options processes: whether the job asks for a number of
  *                         processes; onChange: called when the place changes.
- * @returns {object} onCluster(), whether the job goes to the cluster;
- *                   settings(), what the job asks for; show(body), the job
+ * @returns {object} onCluster(), whether the job goes to a cluster;
+ *                   settings(), what the job asks for, with the cluster
+ *                   it goes to if there are several; show(body), the job
  *                   as it would be sent; and update(), after the cluster changed.
  */
 export function clusterChoice(prefix, host, { processes = true, onChange = () => {} } = {}) {
@@ -44,7 +45,10 @@ export function clusterChoice(prefix, host, { processes = true, onChange = () =>
   const tasks = el("input", { type: "number", id: id("tasks"), min: "1", max: "4096", step: "1", value: "1" });
   const hours = el("input", { type: "number", id: id("hours"), min: "0.25", max: "720", step: "0.25", value: "1" });
   const gpu = el("input", { type: "checkbox", id: id("gpu") });
-  const opts = el("div", { class: "row", id: id("clusteropts"), hidden: true }, field("Name of the job", name),
+  // Which cluster, if there are several
+  const on = el("select", { id: id("on") });
+  const onField = field("Cluster", on);
+  const opts = el("div", { class: "row", id: id("clusteropts"), hidden: true }, onField, field("Name of the job", name),
     processes ? field("Processes", tasks) : "", field("Time limit (hours)", hours),
     el("div", { class: "field" }, el("span", { class: "lab" }, "Hardware"), el("label", { class: "check" }, gpu, " Needs a GPU")));
   const where = el("div", { class: "row top", id: id("where"), hidden: true },
@@ -69,15 +73,20 @@ export function clusterChoice(prefix, host, { processes = true, onChange = () =>
   const onCluster = () => !where.hidden && place.querySelector('button[aria-pressed="true"]').dataset.v === "cluster";
   const update = () => {
     where.hidden = !session.clusterReady;
+    clusterOptions(on);
+    onField.hidden = session.clusters.length < 2;
     opts.hidden = !onCluster();
     if (!onCluster()) { card.hidden = true; pending = null; }
     onChange();
   };
   seg(place, update);
   document.addEventListener("act-cluster", update);
+  // What is shown is what is sent: another cluster has to be shown again
+  on.onchange = () => { card.hidden = true; pending = null; };
 
   const settings = () => {
     const chosen = { minutes: Math.round(Number(hours.value) * 60), gpu: gpu.checked };
+    if (session.clusters.length > 1 && on.value) chosen.on = on.value;
     if (processes) chosen.tasks = Number(tasks.value);
     if (name.value.trim()) chosen.name = name.value.trim();
     return chosen;
@@ -92,7 +101,7 @@ export function clusterChoice(prefix, host, { processes = true, onChange = () =>
     const shown = await (await call("/cluster/jobs", { method: "POST", json: { ...body, cluster, send: false } })).json();
     // The name that was shown is the name that is sent
     pending = { ...body, cluster: { ...cluster, name: shown.name }, send: true };
-    whereto.textContent = `${shown.name} · ${shown.server}:${shown.directory}`;
+    whereto.textContent = `${shown.name} · ${shown.cluster && session.clusters.length > 1 ? `${shown.cluster} · ` : ""}${shown.server}:${shown.directory}`;
     files.textContent = "";
     files.append(el("thead", {}, el("tr", {}, el("th", {}, "Name on the cluster"), el("th", { class: "n" }, "Size"))),
       el("tbody", {}, ...shown.files.map(f => el("tr", {}, el("td", { class: "mono" }, f.name), el("td", { class: "n" }, fileSize(f.size))))));

@@ -241,6 +241,78 @@ class ClusterJobsApiTest(unittest.TestCase):
                                                  headers=self.headers).json()["jobs"][0]["job"])
         self.assertEqual(3, self.logins())
 
+    def test_jobs_on_two_clusters(self):
+        """!
+        @brief With two clusters a job goes to the default one, or to the
+        one that the request names; the list tells which cluster a job is
+        on, and a job is sent again on the cluster that has its files. The
+        jobs of both are asked for, each cluster once, as seldom as the
+        slower one says.
+        """
+        other = self.remote.parent / "other"
+        other.mkdir()
+        answer = self.client.put("/api/cluster", headers=self.headers,
+                                 json=dict(CLUSTER, name="second", previous="", workdir="act/other",
+                                           poll_seconds=300, partition="main"))
+        self.assertEqual(200, answer.status_code, answer.text)
+        self.assertEqual(["good", "second"], [c["name"] for c in answer.json()["clusters"]])
+        # Shown and sent to the default cluster, and to the other one
+        shown = self.post(name="first-1").json()
+        self.assertEqual(("good", "act/jobs/first-1"), (shown["cluster"], shown["directory"]))
+        shown = self.post(name="second-1", on="second").json()
+        self.assertEqual(("second", "act/other/second-1"), (shown["cluster"], shown["directory"]))
+        self.assertIn("#SBATCH --partition=main\n", shown["script"])
+        self.assertEqual(0, self.logins())
+        for name, on in (("first-1", None), ("second-1", "second")):
+            chosen = {"name": name, "tasks": 2}
+            if on:
+                chosen["on"] = on
+            answer = self.post(send=True, **chosen)
+            self.assertEqual(200, answer.status_code, answer.text)
+        self.assertTrue((self.remote / "first-1" / "mp.xml").is_file())
+        self.assertTrue((other / "second-1" / "mp.xml").is_file())
+        self.assertFalse((self.remote / "second-1").exists())
+        listed = self.client.get("/api/cluster/jobs", headers=self.headers).json()
+        self.assertEqual({"first-1": "good", "second-1": "second"},
+                         {job["name"]: job["cluster"] for job in listed["jobs"]})
+        # The slower of the two decides how often the clusters are asked
+        self.assertEqual(300, listed["poll_seconds"])
+        logins = self.logins()
+        checked = self.client.post("/api/cluster/jobs/check", headers=self.headers).json()
+        self.assertEqual({"finished"}, {job["state"] for job in checked["jobs"]})
+        # One login to ask each cluster and one to fetch each job
+        self.assertEqual(logins + 4, self.logins())
+        # A cluster that is not there
+        answer = self.post(name="third-1", on="nosuch")
+        self.assertEqual(400, answer.status_code)
+        self.assertIn("There is no cluster nosuch", answer.json()["detail"])
+        # Sent again: on the cluster that has the files, with its settings
+        again = self.client.post("/api/cluster/jobs/second-1/again", headers=self.headers,
+                                 json={"cluster": {}, "send": False}).json()
+        self.assertEqual(("second", "act/other/second-1-r2"), (again["cluster"], again["directory"]))
+        self.assertIn("#SBATCH --partition=main\n", again["script"])
+        refused = self.client.post("/api/cluster/jobs/second-1/again", headers=self.headers,
+                                   json={"cluster": {"on": "good"}, "send": False})
+        self.assertEqual(400, refused.status_code)
+        self.assertIn("on the cluster second", refused.json()["detail"])
+        sent = self.client.post("/api/cluster/jobs/second-1/again", headers=self.headers,
+                                json={"cluster": {"on": "second"}, "send": True})
+        self.assertEqual(200, sent.status_code, sent.text)
+        self.assertTrue((other / "second-1-r2" / "job.sh").is_file())
+        # Renamed, the cluster is still the one with the files
+        self.client.put("/api/cluster", headers=self.headers,
+                        json=dict(CLUSTER, name="dardel", previous="second", workdir="act/other"))
+        listed = self.client.get("/api/cluster/jobs", headers=self.headers).json()
+        self.assertEqual("dardel", {job["name"]: job["cluster"]
+                                    for job in listed["jobs"]}["second-1"])
+        # Forgotten, it has no jobs that can be sent again
+        self.client.delete("/api/cluster", params={"name": "dardel"}, headers=self.headers)
+        listed = self.client.get("/api/cluster/jobs", headers=self.headers).json()
+        self.assertEqual("", {job["name"]: job["cluster"] for job in listed["jobs"]}["second-1"])
+        gone = self.client.post("/api/cluster/jobs/second-1/again", headers=self.headers,
+                                json={"cluster": {}, "send": False})
+        self.assertEqual(409, gone.status_code)
+
     def test_failed_job_is_told_and_sent_again(self):
         """!
         @brief A job that failed tells why, its output can be read on the
@@ -328,7 +400,7 @@ class ClusterJobsApiTest(unittest.TestCase):
         self.client.put("/api/cluster", headers=self.headers, json=dict(CLUSTER, workdir="other"))
         moved = again()
         self.assertEqual(409, moved.status_code)
-        self.assertIn("another cluster", moved.json()["detail"])
+        self.assertIn("no cluster in the settings is that one now", moved.json()["detail"])
         self.assertEqual(logins + 1, self.logins())
 
     def test_training_stops_in_the_time_of_the_job(self):
@@ -796,7 +868,7 @@ class ClusterJobsApiTest(unittest.TestCase):
         for send in (False, True):
             answer = self.post(send=send, name="job1")
             self.assertEqual(400, answer.status_code)
-            self.assertIn("tab Cluster", answer.json()["detail"])
+            self.assertIn("tab Settings", answer.json()["detail"])
         self.assertEqual(logins, self.logins())
 
     def test_server_for_several_users_sends_no_jobs(self):
