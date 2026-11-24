@@ -621,6 +621,19 @@ class PageTest(unittest.TestCase):
         self.assertEqual([], self.browser.find_elements(By.CSS_SELECTOR, reset))
         self.assertEqual("", self.errors())
 
+    def fits_the_window(self, box):
+        """!
+        @brief The page is not wider than the window, also with a box with
+        long lines, such as the script of a job: the box scrolls sideways
+        instead.
+        @param box The id of the box.
+        """
+        sizes = self.browser.execute_script(
+            "const page = document.documentElement, box = document.getElementById(arguments[0]);"
+            "return [page.scrollWidth, page.clientWidth, box.scrollWidth, box.clientWidth];", box)
+        self.assertLessEqual(sizes[0], sizes[1], "the page is wider than the window: %s" % sizes)
+        return sizes
+
     def saved_file(self, selector, name, start, rename=None):
         """!
         @brief Press a button that saves a file, take or change the name
@@ -2635,6 +2648,9 @@ class PageTest(unittest.TestCase):
             box.send_keys(value)
         self.click("#run-b2")
         self.wait(lambda b: b.find_element(By.ID, "b2-job").is_displayed())
+        # The script has long lines: its box scrolls, the page does not
+        sizes = self.fits_the_window("b2-jobscript")
+        self.assertGreater(sizes[2], sizes[3])
         script = self.text("#b2-jobscript")
         self.assertIn("#SBATCH -n 4", script)
         self.assertIn("srun alexandria b2 ", script)
@@ -2653,6 +2669,7 @@ class PageTest(unittest.TestCase):
         self.click("#omm-gpu")
         self.click("#run-omm")
         self.wait(lambda b: b.find_element(By.ID, "omm-job").is_displayed())
+        self.fits_the_window("omm-jobscript")
         script = self.text("#omm-jobscript")
         self.assertIn("python3 run.py", script)
         self.assertIn("#SBATCH --gres=", script)
@@ -2772,6 +2789,7 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: b.find_element(By.ID, "ev-job").is_displayed())
         self.assertEqual("", self.errors())
         self.assertEqual("dimers-1 · spoel@good:act/jobs/dimers-1", self.text("#ev-jobwhere"))
+        self.fits_the_window("ev-jobscript")
         script = self.text("#ev-jobscript")
         for line in ("#SBATCH --job-name=dimers-1", "#SBATCH --partition=GPU,CLUSTER-AMD",
                      "#SBATCH --gres=gpu:1", "#SBATCH -n 2", "#SBATCH --time=0-01:30:00"):
@@ -2965,6 +2983,7 @@ class PageTest(unittest.TestCase):
         self.assertEqual("failing-1-r2", self.browser.find_element(
             By.ID, "cj-again-name").get_attribute("value"))
         self.assertIn("#SBATCH -n 1", self.text("#cj-again-script"))
+        self.fits_the_window("cj-again-script")
         rows = self.browser.execute_script(
             "return [...document.querySelectorAll('#cj-again-files tbody tr')]"
             ".map(r => [...r.cells].map(c => c.textContent))")
@@ -3034,6 +3053,7 @@ class PageTest(unittest.TestCase):
         self.click("#run-ev")
         self.wait(lambda b: b.find_element(By.ID, "ev-job").is_displayed() or self.errors())
         self.assertEqual("", self.errors())
+        self.fits_the_window("ev-jobscript")
         script = self.text("#ev-jobscript")
         for part in ("#SBATCH -n 4", "srun alexandria train_ff ", " -optimizer HYBRID ",
                      " -fit 'De b' ", " -max_generations 3 ", " -max_iter 20 ", " -pop_size 4 ",

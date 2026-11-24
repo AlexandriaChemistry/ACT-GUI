@@ -84,6 +84,9 @@ p { margin: 0; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; }
 .card > .head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .card > .body { padding: 16px; display: grid; gap: 16px; }
+/* What is wider than the card, such as the script of a job, scrolls in its
+   own box instead of making the card and the page wider */
+.card > .body > * { min-width: 0; }
 .bar { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-end; padding: 16px; }
 .field { display: grid; gap: 5px; min-width: 0; }
 .field > label, .lab { font-size: 12px; color: var(--muted); font-weight: 500; }
