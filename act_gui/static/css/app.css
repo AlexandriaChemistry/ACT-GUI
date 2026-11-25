@@ -273,6 +273,11 @@ table.data tr.off td:first-child { color: var(--ink); }
 .sites li:last-child { border-bottom: 0; }
 .sites li span { flex: 1 1 auto; min-width: 0; font-family: var(--mono); overflow-wrap: anywhere; }
 .sites li.none { color: var(--muted); font-family: var(--font); }
+.vsfile { display: grid; gap: 3px; }
+.check .mono { font-family: var(--mono); font-size: 13px; }
+.vsfile > .fine { margin: 0 0 0 24px; }
+.vsfile > details { margin-left: 24px; }
+.vsfile .sites { margin-top: 6px; }
 table.data td.order { color: var(--accent); font-weight: 600; }
 
 select.small { height: 28px; padding: 2px 6px; font: 13px var(--mono); }
