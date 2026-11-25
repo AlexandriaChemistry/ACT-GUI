@@ -16,7 +16,7 @@
  */
 import { $, $$, addLibrary, alertBox, withoutDefault, call, clusterOptions, el, libraryChoice, num, pill, runTask, saveFile, saveMade, seg, session, toast, upload } from "./common.js";
 import { css, limits, markPoint, plot, resetZoom, zoomPlot } from "./plot.js";
-import { countExtras, drawExtras, hasClouds } from "./particles.js";
+import { countExtras, drawExtras, hasClouds, shellsKey, wallKey, wallOf } from "./particles.js";
 
 /** What the workspace knows. */
 const state = {
@@ -680,12 +680,20 @@ async function fetchParticles(told) {
   if (!ev.particles.has(key)) {
     make(ev.job + "\n" + key, { task: "mp_particles", forcefield: ev.forcefield,
                                calculation: { molprop: state.file.file, compound: told.name, datafile: told.datafile } },
-         job => { ev.particles.set(key, job.result.molecules[0]); });
+         job => {
+           const made = job.result.molecules[0];
+           ev.particles.set(key, made);
+           // The shells are relaxed by a single point calculation, which may fail
+           if (made.shells && made.shells.present && !made.shells.relaxed) {
+             toast("The shells could not be relaxed, they are shown on their atoms. " + (made.shells.reason || ""));
+           }
+         });
   }
-  if (calcShow.clouds && !calcWidths.has(ffkey)) {
+  // The description of the force field has the widths of its charges and the wall of its shells
+  if (!calcWidths.has(ffkey)) {
     make(ffkey, { task: "ff_charges", forcefield: ev.forcefield }, job => {
       calcWidths.set(ffkey, job.result);
-      if (!hasClouds(job.result)) toast("This force field has point charges, which have no distribution to show.");
+      if (calcShow.clouds && !hasClouds(job.result)) toast("This force field has point charges, which have no distribution to show.");
     });
   }
   if (!wanted.length) return;
@@ -714,21 +722,24 @@ function calcExtras(told) {
   let drawn = { shells: 0, sites: 0, clouds: 0 };
   $("#ev-calcnote").textContent = atomsNote(told);
   if (made && (calcShow.sites || calcShow.clouds)) {
-    const widths = calcShow.clouds ? calcWidths.get(JSON.stringify(ev.forcefield)) || null : null;
+    const described = calcWidths.get(JSON.stringify(ev.forcefield)) || null;
+    const widths = calcShow.clouds ? described : null;
     // The positions of all particles, from nm to Å
     const frames = [made.coordinates.positions.map(c => c.map(v => v * 10))];
-    drawn = drawExtras(calcViewer, made.molecule.particles, frames, { sites: calcShow.sites, widths });
-    if (calcShow.sites && !drawn.shells && !drawn.sites && !drawn.clouds) {
+    drawn = drawExtras(calcViewer, made.molecule.particles, frames, { sites: calcShow.sites, widths, wall: wallOf(described) });
+    if (calcShow.sites && !drawn.nshell && !drawn.sites && !drawn.clouds) {
       const found = countExtras(made.molecule.particles);
       if (!found.shells && !found.sites) $("#ev-calcnote").textContent = atomsNote(told) + " The force field has no shells or virtual sites for them.";
     }
   }
-  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-  $("#ev-xlegend").hidden = drawn.shells + drawn.sites + drawn.clouds === 0;
-  $("#ev-xl-shells").hidden = !drawn.shells;
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`, shells = shellsKey(drawn);
+  $("#ev-xlegend").hidden = !shells && drawn.sites + drawn.clouds === 0;
+  $("#ev-xl-shells").hidden = !shells;
   $("#ev-xl-sites").hidden = !drawn.sites;
   $("#ev-xl-clouds").hidden = !drawn.clouds;
-  $("#ev-xl-nshells").textContent = plural(drawn.shells, "shell", "shells");
+  $("#ev-xl-nshells").textContent = shells;
+  $("#ev-xl-wall").hidden = !wallKey(drawn);
+  $("#ev-xl-nwall").textContent = wallKey(drawn);
   $("#ev-xl-nsites").textContent = plural(drawn.sites, "virtual site", "virtual sites");
   $("#ev-xl-nclouds").textContent = plural(drawn.clouds, "charge distribution", "charge distributions") + ", radius 1/ζ";
 }

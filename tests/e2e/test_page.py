@@ -21,6 +21,7 @@ the tests set it, so that running them sends nothing.
 """
 import json
 import os
+import re
 import socket
 import tempfile
 import threading
@@ -455,20 +456,34 @@ class PageTest(unittest.TestCase):
         self.assertNotIn("shell", key())
         self.click("#extras")
         found = drawn("charges")
+        # The shells are relaxed: an arrow on each atom shows where its
+        # shell went, magnified, since they move very little
+        arrows = r", arrows: displacement ×\d+, at most 0\.\d{3} Å"
+
+        def moved(text):
+            """The largest displacement of a shell in Å that the key tells"""
+            return float(re.search(r"at most (0\.\d{3}) Å", text).group(1))
         # One distribution on each atom, with that of its shell in it: the
         # halos of the shells are left out then
-        self.assertEqual("3 virtual sites | 3 charge distributions, radius 1/ζ", found)
+        self.assertRegex(found, "^3 shells" + arrows +
+                         r" \| 3 virtual sites \| 3 charge distributions, radius 1/ζ$")
+        self.assertGreater(moved(found), 0.001)
+        self.assertLess(moved(found), 0.1)
         self.assertEqual("", self.errors())
         self.shot("02c-sites-distributions")
         self.click("#clouds")
-        self.assertEqual("3 shells | 3 virtual sites", drawn("charges"))
-        self.shot("02b-shells-sites")
         found = drawn("charges")
-        # The minimized structure, a vibration and a trajectory have them too
+        self.assertRegex(found, "^3 shells" + arrows + r" \| 3 virtual sites$")
+        # The wall of this force field is at 0.2 Å, no shell is there
+        self.assertNotIn("wall", found)
+        self.shot("02b-shells-sites")
+        # The minimized structure has them too, with its own displacements;
+        # a vibration and a trajectory move, and have no arrows
         self.click('#tasks button[data-tab="minimize"]')
         self.click("#run-min")
         self.wait(lambda b: b.find_element(By.ID, "min-pill").text != "Minimizing…", 60)
-        self.assertEqual(found, drawn("minimize"))
+        self.assertRegex(drawn("minimize"), "^3 shells" + arrows + r" \| 3 virtual sites$")
+        found = "3 shells | 3 virtual sites"
         self.click('#tasks button[data-tab="modes"]')
         self.click("#run-nma")
         self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#modetable tr.pick")) > 0, 60)
@@ -489,6 +504,32 @@ class PageTest(unittest.TestCase):
         self.click("#extras")
         self.click("#clouds")
         self.wait(lambda b: key() == "")
+        # A force field that lets its shells go no further than 0.02 Å:
+        # the shells of the carbons of ethanol, which would go further,
+        # are held at that wall, which the key tells
+        with tempfile.TemporaryDirectory() as tmp:
+            text = (Path(TESTDATA) / "forcefields" / "ACS-pg1.xml").read_text(encoding="latin-1")
+            start = text.index('<interaction type="POLARIZATION"')
+            end = text.index(">", start) + 1
+            near = Path(tmp) / "near-wall.xml"
+            near.write_text(text[:end] + '\n    <option key="shellmaxdistance" value="0.002"/>'
+                            + text[end:], encoding="latin-1")
+            self.browser.find_element(By.ID, "fffile").send_keys(str(near))
+            box = self.browser.find_element(By.ID, "smiles")
+            box.clear()
+            box.send_keys("CCO")
+            self.click("#load")
+            self.wait(lambda b: "near-wall.xml" in b.find_element(By.ID, "molchips").text)
+        self.click('#tasks button[data-tab="charges"]')
+        self.click("#extras")
+        self.wait(lambda b: "wall" in key())
+        self.assertEqual("", self.errors())
+        found = drawn("charges")
+        # The positions have three decimals, so a distance is known to 0.002 Å
+        self.assertRegex(found, r"^9 shells, arrows: displacement ×50, at most 0\.0(19|2[012]) Å \| "
+                         r"[1-9] shells? at the wall, 0\.020 Å from (its atom|their atoms)$")
+        self.shot("02e-shells-at-the-wall")
+        self.click("#extras")
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_2c_dimer_scan(self):
@@ -540,7 +581,10 @@ class PageTest(unittest.TestCase):
         self.browser.execute_script("window.scrollTo(0, 0)")
         self.assertEqual("Shells", self.text("#extras-label"))
         self.click("#extras")
-        self.wait(lambda b: b.find_element(By.ID, "xl-nshells").text == "6 shells")
+        self.wait(lambda b: b.find_element(By.ID, "xl-nshells").text.startswith("6 shells"))
+        # Where the shells of the minimized dimer went
+        self.assertRegex(self.text("#xl-nshells"),
+                         r"^6 shells, arrows: displacement ×\d+, at most 0\.\d{3} Å$")
         self.assertEqual("scan", self.browser.find_element(By.ID, "xlegend").get_attribute("data-tab"))
         self.assertEqual("", self.errors())
         self.shot("05d-dimer-scan-shells")
@@ -2161,7 +2205,10 @@ class PageTest(unittest.TestCase):
         self.click("#ev-extras")
         self.wait(lambda b: b.find_element(By.ID, "ev-xlegend").is_displayed())
         self.assertEqual("", self.errors())
+        # The shells are relaxed, but with this force field they stay on
+        # their atoms in this dimer: no arrows, and none at the wall
         self.assertRegex(self.text("#ev-xl-nshells"), r"^\d+ shells$")
+        self.assertFalse(self.browser.find_element(By.ID, "ev-xl-wall").is_displayed())
         self.assertFalse(self.browser.find_element(By.ID, "ev-xl-clouds").is_displayed())
         self.click("#ev-clouds")
         self.wait(lambda b: b.find_element(By.ID, "ev-xl-clouds").is_displayed())
