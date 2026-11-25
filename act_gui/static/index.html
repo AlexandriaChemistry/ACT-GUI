@@ -231,8 +231,8 @@
           <div class="field"><span class="lab">Train the parameters of</span>
             <div class="row"><label class="check"><input type="checkbox" id="g-vdw-heavy" checked> Atoms</label>
               <label class="check"><input type="checkbox" id="g-vdw-h" checked> Hydrogen</label>
-              <label class="check"><input type="checkbox" id="g-vdw-vs"> Virtual sites</label>
-              <label class="check"><input type="checkbox" id="g-vdw-shell"> Shells</label></div></div>
+              <label class="check"><input type="checkbox" id="g-vdw-shell"> Shells</label></div>
+            <p class="muted fine" id="g-vdwsites"></p></div>
           <details class="more"><summary>Combination rules</summary><div class="grid2 mt8" id="g-vdwrules"></div></details></div>
         <div class="group"><h3>Bonded interactions</h3>
           <div class="grid2">
@@ -248,9 +248,8 @@
                 <label class="check"><input type="checkbox" id="g-ic-shell"> Shells</label></div></div>
             <details class="more mt8"><summary>Combination rules</summary><div class="grid2 mt8" id="g-icrules"></div></details></div></div>
         <div class="group"><h3>Virtual sites</h3>
-          <div class="checks" id="g-vsites"></div>
-          <label class="check"><input type="checkbox" id="g-exchange"> Exchange correction on σ-holes</label>
-          <p class="muted fine" id="g-ownsites"></p></div>
+          <p class="muted fine" id="g-ownsites"></p>
+          <div class="row"><button class="btn small" id="g-tovsites" type="button">Choose virtual sites…</button></div></div>
         <div class="group"><h3>Fixed parameters</h3>
           <p class="muted fine">Parameters with a known value, from experiments or quantum chemistry, are fixed at that value during training. A file has a line for each: interaction|potential|atom type|parameter|value|unit, as the file of actgui.</p>
           <div class="row"><button class="btn small" id="g-fixed-open" type="button" title="Add the parameters of a file">Open file…</button>
@@ -332,6 +331,7 @@
     </div>
 
     <div class="panel split" id="fftab-vsite" hidden>
+      <div class="stack">
       <div class="card">
         <div class="head"><h2>Pick the atoms that carry the site</h2><span class="spacer"></span>
           <button class="btn small" id="vs-clear" type="button">Clear selection</button></div>
@@ -343,6 +343,11 @@
         <div class="stage square"><div class="gl" id="gl2"></div>
           <div class="hint">Click the atoms in the order of the definition, or use the table</div></div>
         <div class="body"><p class="muted fine" id="vs-ffnote">A site is defined on the types of the atoms, so it is made in every molecule that has these atoms bonded in this way.</p></div>
+      </div>
+      <div class="card"><div class="head"><h2>Predefined sites</h2><span class="muted" id="vs-nfiles"></span></div>
+        <div class="body"><div class="checks" id="vs-files"></div>
+          <label class="check mt8"><input type="checkbox" id="vs-exchange" disabled> Exchange correction on σ-holes</label>
+          <p class="muted fine">Each set is made for the atom types it names, which have to be selected under Generate.</p></div></div>
       </div>
       <div class="stack">
         <div class="card"><div class="body">
@@ -357,12 +362,30 @@
           <div class="group" id="vs-params"></div>
           <div class="row"><button class="btn primary" id="vs-add" type="button" disabled>Add to the new force field</button></div>
         </div></div>
-        <div class="card"><div class="head"><h2>Sites for the new force field</h2><span class="muted" id="vs-count"></span><span class="spacer"></span>
+        <div class="card"><div class="head"><h2>Your own sites</h2><span class="muted" id="vs-count"></span><span class="spacer"></span>
             <button class="btn small" id="vs-open" type="button" title="Add the sites of a file that was saved here, or that gen_ff -vs reads">Open file…</button>
             <input class="visually-hidden" type="file" id="vs-file" accept=".json,application/json" tabindex="-1" aria-hidden="true">
             <button class="btn small" id="vs-save" type="button" hidden>Save as file</button></div>
           <div class="body"><ul class="sites" id="vs-list"></ul>
-            <p class="muted fine">They are used, next to the predefined ones, when a force field is made under Generate. The file that is saved can be given to <code>alexandria gen_ff -vs</code>.</p></div></div>
+            <p class="muted fine">They are used, next to the predefined ones, when a force field is generated. The file that is saved can be given to <code>alexandria gen_ff -vs</code>.</p></div></div>
+        <div class="card"><div class="head"><h2>Charge and Van der Waals of the sites</h2></div>
+          <div class="body">
+            <div class="group"><h3>Charge</h3>
+              <div class="grid2">
+                <div class="field"><label for="vs-qmin">Smallest charge (e)</label><input type="number" id="vs-qmin" step="any"></div>
+                <div class="field"><label for="vs-qmax">Largest charge (e)</label><input type="number" id="vs-qmax" step="any"></div>
+              </div>
+              <p class="muted fine">Training keeps the charge of each site between these two. It starts in the middle.</p></div>
+            <div class="group"><h3>Van der Waals parameters</h3>
+              <p class="muted fine" id="vs-vdwnote"></p>
+              <div class="row" id="vs-vdw"></div>
+              <div class="row" id="vs-vdwall" hidden><button class="btn small" id="vs-vdw-all" type="button">All</button><button class="btn small" id="vs-vdw-none" type="button">None</button></div></div>
+            <div class="notice" id="vs-stale" hidden>The force field of this workspace does not have these choices yet. Generate it again to use them.</div>
+            <div class="row"><button class="btn primary" id="vs-gen" type="button" disabled>Generate force field with these sites</button>
+              <label class="check" id="vs-regeo-label" hidden><input type="checkbox" id="vs-regeo" checked> <span id="vs-regeo-text">and extract the geometries again</span></label>
+              <span class="pill" id="vs-pill" hidden></span></div>
+            <p class="muted fine">This makes the force field anew from the choices under Generate, as the button there does. Changes that were made under Edit and validate are lost.</p>
+          </div></div>
       </div>
     </div>
 

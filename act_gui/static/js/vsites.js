@@ -13,6 +13,10 @@
  * that alexandria gen_ff -vs reads, on the types of the atoms, and is used
  * when a force field is made.
  *
+ * Everything else about the virtual sites of a new force field is chosen
+ * here as well: the predefined sets of sites, the bounds of the charge of a
+ * site, and which of the sites have Van der Waals parameters.
+ *
  * The positions are computed here as ACT computes them (vsitehandler.cpp),
  * for the preview only: the force field has the bounds, not the position.
  *
@@ -32,7 +36,13 @@ const state = {
   picked: [],       // the atoms that were picked, in order
   values: {},       // for each parameter of the kind: { value, min, max }
   sites: [],        // the sites that were added, as gen_ff reads them
-  onChange: null,   // called when the list of sites changes
+  onChange: null,   // called when what is chosen for the new force field changes
+  common: [],       // the predefined sets of sites: { name, label, sigma_hole, description, sites }
+  files: new Set(), // the names of the predefined sets that are chosen
+  charge: null,     // the charge of a site that is proposed: { min, max, limits }
+  vdw: new Set(),   // the site types with Van der Waals parameters
+  vdwSecond: false, // whether the second charges of the atoms have them too
+  secondCharges: () => [],  // gives the atom types that have a second charge
 };
 
 /** The viewer, made when it is first needed. */
@@ -313,13 +323,106 @@ function siteList() {
   list.textContent = "";
   if (!state.sites.length) list.append(el("li", { class: "none" }, "None yet."));
   state.sites.forEach((site, i) => {
-    const bounds = Object.entries(site.parameters).map(([name, b]) => `${name} ${num(b.min)} to ${num(b.max)}`).join(", ");
-    list.append(el("li", {}, el("span", {}, `${site.type} · ${site.interaction} · ${site.atoms.join(", ")} · ${bounds}`),
+    list.append(el("li", {}, el("span", {}, siteText(site)),
       el("button", { class: "btn small", type: "button", data: { remove: String(i) }, "aria-label": "Remove " + site.type }, "Remove")));
   });
   $("#vs-count").textContent = state.sites.length ? String(state.sites.length) : "";
   $("#vs-save").hidden = !state.sites.length;
+  vdwList();
+  changed();
+}
+
+/** Tell that what is chosen for the new force field changed. */
+function changed() {
   if (state.onChange) state.onChange();
+}
+
+/* ---------- the predefined sites, the charge and Van der Waals ---------- */
+
+/**
+ * A site in words, as in the lists.
+ * @param {object} site The site, as gen_ff reads it.
+ * @returns {string} Its type, kind, atoms and bounds.
+ */
+function siteText(site) {
+  const bounds = Object.entries(site.parameters || {}).map(([name, b]) => `${name} ${num(b.min)} to ${num(b.max)}`).join(", ");
+  return `${site.type} · ${site.interaction} · ${site.atoms.join(", ")}` + (bounds ? ` · ${bounds}` : "");
+}
+
+/** The predefined sets that are chosen. */
+const chosenSets = () => state.common.filter(set => state.files.has(set.name));
+
+/**
+ * The particle types of the sites that are chosen, each once: those of the
+ * predefined sets, then those of the user.
+ * @returns {string[]} The names.
+ */
+function siteTypes() {
+  const names = [];
+  for (const site of [...chosenSets().flatMap(set => set.sites), ...state.sites]) {
+    if (!names.includes(site.type)) names.push(site.type);
+  }
+  return names;
+}
+
+/** Fill the list of predefined sets, once. */
+function setList() {
+  const host = $("#vs-files");
+  host.textContent = "";
+  for (const set of state.common) {
+    const types = [...new Set(set.sites.map(site => site.type))];
+    const list = el("ul", { class: "sites" }, ...set.sites.map(site => el("li", {}, el("span", {}, siteText(site)))));
+    host.append(el("div", { class: "vsfile" },
+      el("label", { class: "check" }, el("input", { type: "checkbox", data: { name: set.name } }), " " + set.label),
+      el("p", { class: "muted fine" }, set.description || set.label),
+      el("details", { class: "more" },
+        el("summary", {}, `${set.sites.length} ${set.sites.length === 1 ? "site" : "sites"}: ${types.join(", ")}`), list)));
+  }
+}
+
+/** Show what follows from the predefined sets that are chosen. */
+function setsChosen() {
+  const sets = chosenSets(), holes = sets.some(set => set.sigma_hole), exchange = $("#vs-exchange");
+  $("#vs-nfiles").textContent = sets.length ? `${sets.length} of ${state.common.length}` : "";
+  // The correction is for sigma-holes only
+  exchange.disabled = !holes;
+  if (!holes) exchange.checked = false;
+  vdwList();
+}
+
+/** Offer the sites that can have Van der Waals parameters, and keep what was chosen of them. */
+function vdwList() {
+  const host = $("#vs-vdw"), types = siteTypes(), second = state.secondCharges();
+  for (const name of [...state.vdw]) if (!types.includes(name)) state.vdw.delete(name);
+  if (!second.length) state.vdwSecond = false;
+  host.textContent = "";
+  for (const name of types) {
+    host.append(el("label", { class: "check" }, el("input", { type: "checkbox", data: { site: name }, checked: state.vdw.has(name) }),
+                   el("span", { class: "mono" }, " " + name)));
+  }
+  if (second.length) {
+    host.append(el("label", { class: "check", title: "The second charge of an atom type is then a particle of its own: " + second.map(name => "v1" + name).join(", ") },
+                   el("input", { type: "checkbox", data: { second: "1" }, checked: state.vdwSecond }),
+                   ` Second charges of the atoms (${second.length})`));
+  }
+  const any = types.length + second.length > 0;
+  $("#vs-vdwall").hidden = types.length + (second.length ? 1 : 0) < 2;
+  $("#vs-vdwnote").textContent = any
+    ? "Tick the sites that take part in the Van der Waals interactions, with parameters of their own that are trained. The others have none."
+    : "No sites yet. Choose predefined sites or add your own, and tick here which of them take part in the Van der Waals interactions.";
+}
+
+/**
+ * The bounds of the charge that the form gives.
+ * @returns {object} The min and the max, each only if the field has a number.
+ */
+function chargeBounds() {
+  const bounds = {};
+  for (const [key, id] of [["min", "vs-qmin"], ["max", "vs-qmax"]]) {
+    const value = $("#" + id).valueAsNumber;
+    if (Number.isFinite(value)) bounds[key] = value;
+  }
+  return bounds;
 }
 
 /** The largest file with virtual sites that is read. */
@@ -431,21 +534,93 @@ async function loadMolecule() {
  */
 export const chosenSites = () => state.sites.map(site => ({ ...site }));
 
+/**
+ * The virtual sites of the new force field.
+ * @returns {object} The part "vsites" of the choices, as the server takes it:
+ * the predefined sets, the exchange correction, the bounds of the charge and
+ * the sites of the user.
+ */
+export const chosenVsites = () => ({ files: chosenSets().map(set => set.name), exchange: $("#vs-exchange").checked,
+                                     charge: chargeBounds(), sites: chosenSites() });
+
+/**
+ * The virtual sites with Van der Waals parameters that are trained.
+ * @returns {string[]} The names of their particle types; that of the second
+ * charge of an atom type is v1 and the name of the atom type.
+ */
+export function chosenVdwSites() {
+  const types = siteTypes().filter(name => state.vdw.has(name));
+  return state.vdwSecond ? [...types, ...state.secondCharges().map(name => "v1" + name)] : types;
+}
+
+/**
+ * What is chosen, in words, for the tab Generate.
+ * @returns {object} The sites (sets and own) and those with Van der Waals parameters.
+ */
+export function vsiteSummary() {
+  const sets = chosenSets().length, own = state.sites.length, vdw = chosenVdwSites();
+  const parts = [];
+  if (sets) parts.push(`${sets} predefined ${sets === 1 ? "set" : "sets"}`);
+  if (own) parts.push(`${own} of your own`);
+  return { sites: parts.length ? parts.join(" and ") : "None", vdw };
+}
+
+/** Show again what depends on the atom types, after these changed. */
+export function refreshVsites() {
+  if (state.onChange) vdwList();
+}
+
 /** Draw the molecule again, after the tab was shown or the size changed. */
 export function redrawVsites() {
+  vdwList();
   if (V) { V.resize(); scene(); }
   else if (state.mol) scene(true);
 }
 
 /**
  * Make this part of the page work.
- * @param {object[]} kinds     The kinds of sites that can be defined.
- * @param {function} onChange  Called when the list of sites changes.
+ * @param {object} gen             What a force field can be made from, see /api/generator:
+ * the kinds of sites, the atom types, the predefined sites and the charge of a site.
+ * @param {function} secondCharges Gives the names of the atom types that have a second charge.
+ * @param {function} onChange      Called when what is chosen for the new force field changes.
  */
-export function startVsites(kinds, atomtypes, onChange = null) {
-  state.kinds = kinds || [];
-  state.atomtypes = atomtypes || [];
+export function startVsites(gen, secondCharges = null, onChange = null) {
+  state.kinds = gen.site_kinds || [];
+  state.atomtypes = gen.atomtypes || [];
+  state.common = gen.vsites || [];
+  state.charge = gen.vsite_charge || { min: -4, max: 4, limits: [-10, 10] };
+  if (secondCharges) state.secondCharges = secondCharges;
   state.onChange = onChange;
+  setList();
+  $("#vs-files").addEventListener("change", e => {
+    const name = e.target.dataset.name;
+    if (!name) return;
+    if (e.target.checked) state.files.add(name); else state.files.delete(name);
+    setsChosen();
+    changed();
+  });
+  $("#vs-exchange").onchange = changed;
+  for (const [id, key] of [["vs-qmin", "min"], ["vs-qmax", "max"]]) {
+    const field = $("#" + id);
+    field.value = String(state.charge[key]);
+    [field.min, field.max] = state.charge.limits.map(String);
+    field.oninput = changed;
+  }
+  $("#vs-vdw").addEventListener("change", e => {
+    const box = e.target;
+    if (box.dataset.second) state.vdwSecond = box.checked;
+    else if (box.dataset.site) { if (box.checked) state.vdw.add(box.dataset.site); else state.vdw.delete(box.dataset.site); }
+    changed();
+  });
+  const allVdw = on => {
+    state.vdw = new Set(on ? siteTypes() : []);
+    state.vdwSecond = on && state.secondCharges().length > 0;
+    vdwList();
+    changed();
+  };
+  $("#vs-vdw-all").onclick = () => allVdw(true);
+  $("#vs-vdw-none").onclick = () => allVdw(false);
+  setsChosen();
   $("#vs-load").onclick = loadMolecule;
   $("#vs-smiles").addEventListener("keydown", e => { if (e.key === "Enter") loadMolecule(); });
   $("#vs-clear").onclick = () => { state.picked = []; atomTable(); kindList(); scene(); };
