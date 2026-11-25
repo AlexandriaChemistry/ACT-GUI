@@ -168,6 +168,40 @@ class RealProgramTest(unittest.TestCase):
         trajectory = self.client.get("/api/jobs/%s/files/o" % job["id"], headers=self.headers)
         self.assertEqual(200, trajectory.status_code)
         self.assertEqual(4, trajectory.text.count("ENDMDL"))
+        # Each structure has all particles, the shells as well, in the order
+        # of the molecule: the viewer of the page relies on that
+        loaded = self.run_task({"task": "charges", "molecule": {"smiles": "CC(=O)C"}})
+        particles = loaded["result"]["molecules"][0]["molecule"]["particles"]
+        self.assertGreater(len(particles), 10)
+        first = trajectory.text.split("ENDMDL")[0]
+        atoms = [line for line in first.splitlines() if line.startswith(("ATOM", "HETATM"))]
+        self.assertEqual(len(particles), len(atoms))
+        for particle, line in zip(particles, atoms):
+            self.assertTrue(line[12:16].strip().startswith(particle["name"][:4]),
+                            (particle["name"], line))
+
+    def test_charge_distributions(self):
+        """!
+        @brief The kind of distribution and the widths of the particle types
+        of a force field, and not the rest of its description.
+        """
+        job = self.run_task({"task": "ff_charges", "forcefield": {"default": True}})
+        self.assertEqual("finished", job["status"], job["error"])
+        self.assertEqual({"distribution", "types"}, set(job["result"]))
+        self.assertIn(job["result"]["distribution"], ("Gaussian", "Slater", "Point"))
+        described = self.run_task({"task": "ff_describe", "forcefield": {"default": True}})
+        types = described["result"]["forcefield"]["particletypes"]["types"]
+        with_zeta = {t["identifier"]: [p["value"] for p in t["parameters"]
+                                       if p["type"] == "zeta"][0]
+                     for t in types if any(p["type"] == "zeta" for p in t["parameters"])}
+        self.assertGreater(len(with_zeta), 10)
+        self.assertEqual(with_zeta, {name: widths["zeta"]
+                                     for name, widths in job["result"]["types"].items()
+                                     if "zeta" in widths})
+        # The force field is needed
+        answer = self.client.post("/api/jobs", headers=self.headers,
+                                  json={"task": "ff_charges"})
+        self.assertEqual(400, answer.status_code)
 
     def test_wrong_smiles_fails_with_a_message(self):
         """!

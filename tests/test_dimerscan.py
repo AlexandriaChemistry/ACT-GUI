@@ -148,6 +148,8 @@ class DimerScanTest(unittest.TestCase):
             self.assertEqual("bonds", options["constrain"])
             self.assertEqual("[ freeze ]\n1 4\n", Path(options["freeze"]).read_text())
             self.assertTrue(options["json"])
+            # With the shells and virtual sites in the structure, for the viewer
+            self.assertIs(True, options["ws"])
             self.assertEqual("SQE", options["qalg"])
             points = result.data["points"]
             self.assertEqual(6, len(points))

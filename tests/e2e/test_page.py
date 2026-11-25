@@ -408,6 +408,89 @@ class PageTest(unittest.TestCase):
         self.assertEqual("", self.errors())
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_2b3_shells_sites_and_charge_distributions(self):
+        """!
+        @brief The shells and virtual sites of a molecule, and the
+        distributions of its charges, are drawn in the viewer when they are
+        switched on: for the structure, the minimized one, a vibration and
+        a trajectory.
+        """
+        self.open_page()
+
+        def key():
+            return self.browser.execute_script(
+                "const k = document.getElementById('xlegend');"
+                "return k.hidden ? '' : [...k.children].filter(c => !c.hidden)"
+                ".map(c => c.textContent.trim()).join(' | ')")
+
+        def drawn(tab):
+            self.wait(lambda b: b.find_element(By.ID, "xlegend").get_attribute("data-tab") == tab)
+            return key()
+        # Without shells and virtual sites there is nothing to switch on
+        self.browser.find_element(By.ID, "fffile").send_keys(
+            str(Path(TESTDATA) / "forcefields" / "ACS-g1.xml"))
+        box = self.browser.find_element(By.ID, "smiles")
+        box.clear()
+        box.send_keys("O")
+        self.click("#load")
+        self.wait(lambda b: "ACS-g1.xml" in b.find_element(By.ID, "molchips").text)
+        self.assertFalse(self.browser.find_element(By.ID, "extras-label").is_displayed())
+        self.assertTrue(self.browser.find_element(By.ID, "clouds-label").is_displayed())
+        self.assertEqual("", key())
+        # The charges are Gaussian: one distribution on each atom
+        self.click("#clouds")
+        self.wait(lambda b: key() != "")
+        self.assertEqual("3 charge distributions, radius 1/ζ", key())
+        self.assertEqual("", self.errors())
+        # Water with shells and three virtual sites
+        self.browser.find_element(By.ID, "fffile").send_keys(
+            str(Path(TESTDATA) / "forcefields" / "ACS-pg-vs3.xml"))
+        self.click("#load")
+        self.wait(lambda b: "ACS-pg-vs3.xml" in b.find_element(By.ID, "molchips").text)
+        label = self.browser.find_element(By.ID, "extras-label")
+        self.assertTrue(label.is_displayed())
+        self.assertEqual("Shells and sites", label.text)
+        # The distributions of the other force field are fetched by themselves
+        self.wait(lambda b: "charge distribution" in key())
+        self.assertNotIn("shell", key())
+        self.click("#extras")
+        found = drawn("charges")
+        # One distribution on each atom, with that of its shell in it: the
+        # halos of the shells are left out then
+        self.assertEqual("3 virtual sites | 3 charge distributions, radius 1/ζ", found)
+        self.assertEqual("", self.errors())
+        self.shot("02c-sites-distributions")
+        self.click("#clouds")
+        self.assertEqual("3 shells | 3 virtual sites", drawn("charges"))
+        self.shot("02b-shells-sites")
+        found = drawn("charges")
+        # The minimized structure, a vibration and a trajectory have them too
+        self.click('#tasks button[data-tab="minimize"]')
+        self.click("#run-min")
+        self.wait(lambda b: b.find_element(By.ID, "min-pill").text != "Minimizing…", 60)
+        self.assertEqual(found, drawn("minimize"))
+        self.click('#tasks button[data-tab="modes"]')
+        self.click("#run-nma")
+        self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#modetable tr.pick")) > 0, 60)
+        self.assertEqual(found, drawn("modes"))
+        self.click('#tasks button[data-tab="simulate"]')
+        steps = self.browser.find_element(By.ID, "nsteps")
+        steps.clear()
+        steps.send_keys("200")
+        self.click("#run-sim")
+        self.wait(lambda b: b.find_element(By.ID, "run-sim").is_enabled()
+                  and b.find_element(By.ID, "simbar").get_attribute("style").find("100%") >= 0, 60)
+        self.assertEqual("", self.errors())
+        self.assertEqual(found, drawn("simulate"))
+        self.shot("02d-trajectory-with-shells")
+        self.click("#clouds")
+        self.wait(lambda b: key() == "3 virtual sites | 3 charge distributions, radius 1/ζ")
+        # Switched off, the viewer has the atoms only
+        self.click("#extras")
+        self.click("#clouds")
+        self.wait(lambda b: key() == "")
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_2c_dimer_scan(self):
         """!
         @brief The interaction energy of a water dimer at three distances,
@@ -453,6 +536,15 @@ class PageTest(unittest.TestCase):
         self.wait(lambda b: "Minimized at 0.250 nm" in b.find_element(By.ID, "scene-title").text)
         self.assertEqual("", self.errors())
         self.shot("05c-dimer-scan")
+        # The minimized dimer has its shells, which can be shown
+        self.browser.execute_script("window.scrollTo(0, 0)")
+        self.assertEqual("Shells", self.text("#extras-label"))
+        self.click("#extras")
+        self.wait(lambda b: b.find_element(By.ID, "xl-nshells").text == "6 shells")
+        self.assertEqual("scan", self.browser.find_element(By.ID, "xlegend").get_attribute("data-tab"))
+        self.assertEqual("", self.errors())
+        self.shot("05d-dimer-scan-shells")
+        self.click("#extras")
         saved = self.saved_file("#scan-xvg", "dimer-scan.xvg", "@")
         self.assertIn('legend "EPOT"', saved)
         self.assertEqual(3, len([line for line in saved.splitlines() if line and line[0] not in "#@"]))
@@ -892,6 +984,14 @@ class PageTest(unittest.TestCase):
         self.click("#vs-load")
         self.wait(lambda b: len(b.find_elements(By.CSS_SELECTOR, "#vs-atoms tbody tr")) == 6)
         self.assertEqual("", self.errors())
+        # The shells that the force field gives the molecule can be shown
+        existing = self.browser.find_element(By.ID, "vs-existing-label")
+        self.assertTrue(existing.is_displayed())
+        self.assertEqual("Show the shells it has", existing.text)
+        self.click("#vs-existing")
+        self.assertEqual("", self.errors())
+        self.shot("17b-ff-vsite-shells")
+        self.click("#vs-existing")
         rows = self.browser.execute_script(
             "return [...document.querySelectorAll('#vs-atoms tbody tr')]"
             ".map(r => [...r.cells].map(c => c.textContent))")
