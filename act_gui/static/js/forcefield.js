@@ -159,6 +159,7 @@ function setCurrent(ref, base, data, changes = 0) {
   parameterTable();
   validation();
   editCard();
+  shellCard();
 }
 
 /**
@@ -269,6 +270,13 @@ function allTypes(on) {
 }
 
 /** Build the form with the choices for a new force field. */
+/** How the choices for the force constant of the shells are shown. */
+const SHELL_FOLLOWS = {
+  no: "Follows from charge and polarizability",
+  alpha: "Fixed, the polarizability follows",
+  charge: "Fixed, the charge of the shell follows",
+};
+
 function generatorForm() {
   const gen = state.gen;
   for (const type of gen.atomtypes) state.types.set(type.name, { on: type.default, shell: type.shell, vsite: type.vsite });
@@ -298,6 +306,10 @@ function generatorForm() {
   fill($("#g-ic"), gen.induction.potentials.map(p => p.name), gen.induction.default, v => v === "NONE" ? "None" : v);
   $("#g-ic").onchange = inductionPotential;
   inductionPotential();
+  fill($("#g-kshell-follows"), gen.shells.follows.map(f => f.name), "no", v => SHELL_FOLLOWS[v] || v);
+  $("#g-kshell").min = String(gen.shells.kshell[0]);
+  $("#g-kshell").max = String(gen.shells.kshell[1]);
+  $("#g-kshell-follows").onchange = () => { $("#g-kshell-field").hidden = $("#g-kshell-follows").value === "no"; };
   const sites = $("#g-vsites");
   for (const site of gen.vsites) {
     sites.append(el("label", { class: "check" }, el("input", { type: "checkbox", data: { name: site.name } }), " " + site.label));
@@ -343,7 +355,9 @@ function generatorChoices() {
               sites: chosenSites() },
     rules: { VANDERWAALS: chosenRules($("#g-vdwrules")) },
     fixed: state.fixed.flatMap(file => file.entries),
+    shells: { follows: $("#g-kshell-follows").value },
   };
+  if (choices.shells.follows !== "no") choices.shells.kshell = numberOf("g-kshell");
   if (choices.induction.potential !== "NONE") choices.rules.INDUCTIONCORRECTION = chosenRules($("#g-icrules"));
   return choices;
 }
@@ -1042,6 +1056,92 @@ async function applyChange() {
   } finally { button.disabled = false; }
 }
 
+/* ---------- force constants of the shells ---------- */
+
+/**
+ * The shell types of a force field, with their force constant if it is fixed.
+ * The force constant is fixed if the polarization parameters have a kshell
+ * that is not Dependent; then the polarizability or the charge of the shell
+ * follows from it, whichever is Dependent.
+ * @param {object} ff The description of a force field.
+ * @returns {object[]} For each shell type its identifier, kshell (null if
+ *   it is not fixed) and what follows ("alpha" or "charge", null if none).
+ */
+export function shellsOf(ff) {
+  const pol = ff.interactions.find(i => i.type === "POLARIZATION");
+  if (!pol) return [];
+  const shells = new Map(ff.particletypes.types.filter(t => t.type === "Shell").map(t => [t.identifier, t]));
+  const result = [];
+  for (const list of pol.parameterlists) {
+    const shell = shells.get(list.identifier);
+    const alpha = list.parameters.find(p => p.type === "alpha");
+    const charge = shell && shell.parameters.find(p => p.type === "charge");
+    if (!alpha || !charge) continue;
+    const k = list.parameters.find(p => p.type === "kshell");
+    const fixed = !!k && k.mutability !== "Dependent";
+    const follows = !fixed ? null : alpha.mutability === "Dependent" ? "alpha" : charge.mutability === "Dependent" ? "charge" : null;
+    result.push({ identifier: list.identifier, kshell: fixed ? k.value : null, follows });
+  }
+  return result;
+}
+
+/** Show the force constants of the shells of the force field, if it has shells. */
+function shellCard() {
+  const shells = state.current ? shellsOf(state.current.data.forcefield) : [];
+  $("#k-card").hidden = shells.length === 0;
+  pill("k-pill", "");
+  if (!shells.length) return;
+  const list = $("#k-state");
+  list.textContent = "";
+  const fixed = shells.filter(s => s.kshell !== null);
+  if (!fixed.length) list.append(el("li", { class: "plain" }, el("span", {}, "Each force constant follows from the charge and the polarizability of the shell.")));
+  for (const s of fixed) {
+    const what = s.follows === "alpha" ? "the polarizability follows" : s.follows === "charge" ? "the charge follows" : "neither follows";
+    list.append(el("li", { class: "plain" }, el("span", {}, el("span", { class: "what" }, s.identifier), `: ${num(s.kshell)} kJ/mol nm², ${what}`)));
+  }
+  const types = $("#k-types");
+  types.textContent = "";
+  for (const s of shells) {
+    types.append(el("label", { class: "check" }, el("input", { type: "checkbox", checked: true, data: { name: s.identifier } }), " " + s.identifier));
+  }
+  shellAction();
+}
+
+/** Show the field of the force constant only where it is used. */
+function shellAction() {
+  $("#k-value-field").hidden = $("#k-action").value === "release";
+}
+
+/** Fix or release the force constants of the shell types that are selected. */
+async function applyShells() {
+  const action = $("#k-action").value, boxes = $$("#k-types input");
+  const chosen = boxes.filter(b => b.checked).map(b => b.dataset.name);
+  if (!chosen.length) { toast("Select at least one shell type."); return; }
+  const options = { fixkshell: action };
+  if (chosen.length < boxes.length) options.a = chosen;
+  if (action !== "release") {
+    const k = numberOf("k-value");
+    if (k !== null) options.kshell = k;
+  }
+  const button = $("#k-apply");
+  button.disabled = true;
+  pill("k-pill", "Changing…");
+  alertBox("");
+  try {
+    const job = await runTask({ task: "ff_shells", forcefield: state.current.ref, options });
+    if (!job.result.changed || !job.files.includes("o")) {
+      pill("k-pill", "Nothing changed", "warn");
+      toast("The force field did not change.");
+      return;
+    }
+    setCurrent({ job: job.id }, state.current.base, job.result, state.current.changes + 1);
+    toast(action === "release" ? "The force constants follow from charge and polarizability" : "Fixed the force constants");
+  } catch (e) {
+    pill("k-pill", "Failed", "bad");
+    alertBox("The force constants could not be changed. " + e.message);
+  } finally { button.disabled = false; }
+}
+
 /* ---------- validation ---------- */
 
 /** Show the problems that were found in the force field. */
@@ -1197,6 +1297,8 @@ export async function startForceFields(told) {
   $("#p-apply").onclick = applyChange;
   $("#p-cancel").onclick = () => { state.picked = null; parameterTable(); editCard(); };
   $("#v-repair").onclick = repair;
+  $("#k-apply").onclick = applyShells;
+  $("#k-action").onchange = shellAction;
   try {
     state.gen = await (await call("/generator")).json();
     generatorForm();
