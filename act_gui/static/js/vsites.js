@@ -24,6 +24,7 @@
  */
 import { $, alertBox, el, num, runTask, saveBlob, session, toast } from "./common.js";
 import { css } from "./plot.js";
+import { countExtras, drawExtras } from "./particles.js";
 
 /* global $3Dmol */
 
@@ -32,7 +33,8 @@ const state = {
   kinds: [],        // the kinds of sites: { name, atoms, parameters }
   atomtypes: [],    // the atom types that a new force field can have: { name, element, bonds }
   types: new Map(), // the atom type that the user chose for an atom, where it is not the proposed one
-  mol: null,        // the molecule: { atoms: [{ elem, type }], bonds, xyz (nm) }
+  mol: null,        // the molecule: { atoms: [{ elem, type }], bonds, xyz (nm), particles, all (Å, of all particles) }
+  existing: false,  // whether the shells and virtual sites that the molecule has already are drawn
   picked: [],       // the atoms that were picked, in order
   values: {},       // for each parameter of the kind: { value, min, max }
   sites: [],        // the sites that were added, as gen_ff reads them
@@ -175,8 +177,11 @@ function scene(zoom = false) {
     v.addSphere({ center: c, radius: 0.6, color: css("--accent"), opacity: 0.35 });
     v.addLabel(String(order + 1), { position: c, fontSize: 13, fontColor: css("--ink"), backgroundOpacity: 0, inFront: true });
   });
+  // What the force field of the workspace gives the molecule already
+  if (state.existing) drawExtras(v, state.mol.particles, [state.mol.all], { sites: true });
+  // The site that is being defined, in another colour than those that are there when these are shown
   for (const pos of previewPositions()) {
-    v.addSphere({ center: { x: pos[0] * A, y: pos[1] * A, z: pos[2] * A }, radius: 0.22, color: css("--warn") });
+    v.addSphere({ center: { x: pos[0] * A, y: pos[1] * A, z: pos[2] * A }, radius: 0.22, color: css(state.existing ? "--accent" : "--warn") });
   }
   if (zoom) v.zoomTo();
   v.render();
@@ -516,7 +521,14 @@ async function loadMolecule() {
       bonds: compound.molecule.bonds.filter(b => local.has(b.atoms[0]) && local.has(b.atoms[1]))
         .map(b => [local.get(b.atoms[0]), local.get(b.atoms[1]), b.order]),
       xyz: index.map(i => compound.coordinates.positions[i]),
+      particles,
+      all: compound.coordinates.positions.map(c => c.map(v => v * 10)),
     };
+    // The shells and virtual sites that the force field has for this molecule can be shown
+    const found = countExtras(particles), any = found.shells + found.sites > 0;
+    $("#vs-existing-label").hidden = !any;
+    $("#vs-existing-text").textContent = `Show the ${[found.shells ? "shells" : "", found.sites ? "virtual sites" : ""].filter(Boolean).join(" and ")} it has`;
+    if (!any) { state.existing = false; $("#vs-existing").checked = false; }
     state.picked = [];
     state.types = new Map();
     $("#vs-ffnote").textContent = "A site is defined on the types of the atoms, so it is made in every molecule that has these atoms bonded in this way. " +
@@ -624,6 +636,7 @@ export function startVsites(gen, secondCharges = null, onChange = null) {
   $("#vs-load").onclick = loadMolecule;
   $("#vs-smiles").addEventListener("keydown", e => { if (e.key === "Enter") loadMolecule(); });
   $("#vs-clear").onclick = () => { state.picked = []; atomTable(); kindList(); scene(); };
+  $("#vs-existing").onchange = e => { state.existing = e.target.checked; scene(); };
   $("#vs-atoms").addEventListener("click", e => {
     // A click on the list of atom types chooses a type, not the atom
     if (e.target.closest("select")) return;

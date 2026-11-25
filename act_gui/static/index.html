@@ -51,11 +51,16 @@
           <div class="seg" id="colour" role="group" aria-label="Colour">
             <button aria-pressed="false" data-v="element">Element</button><button aria-pressed="true" data-v="charge">Charge</button></div>
           <label class="check"><input type="checkbox" id="labels" checked> Labels</label>
+          <label class="check" id="extras-label" hidden title="The shells that make atoms polarizable and the virtual sites of the force field"><input type="checkbox" id="extras"> <span id="extras-text">Shells and sites</span></label>
+          <label class="check" id="clouds-label" hidden title="A charge with a Gaussian or Slater distribution, as a transparent sphere with the width of the distribution as its radius"><input type="checkbox" id="clouds"> Charge distributions</label>
         </div>
         <div class="stage"><div class="gl" id="gl"></div>
           <button class="btn small corner" id="reset" type="button">Reset view</button>
           <div class="hint">Drag to rotate · scroll to zoom · shift-drag to move</div>
           <div class="legend" id="qlegend"><span id="qlo">−0.4 e</span><i></i><span id="qhi">+0.4 e</span></div>
+          <div class="key" id="xlegend" hidden><span id="xl-shells"><i class="shell"></i><span id="xl-nshells"></span></span>
+            <span id="xl-sites"><i class="site"></i><span id="xl-nsites"></span></span>
+            <span id="xl-clouds"><i class="cloud neg"></i><i class="cloud pos"></i><span id="xl-nclouds"></span></span></div>
         </div>
       </div>
 
@@ -334,6 +339,7 @@
       <div class="stack">
       <div class="card">
         <div class="head"><h2>Pick the atoms that carry the site</h2><span class="spacer"></span>
+          <label class="check" id="vs-existing-label" hidden title="The shells and virtual sites that the force field of the workspace gives this molecule"><input type="checkbox" id="vs-existing"> <span id="vs-existing-text">Show the sites it has</span></label>
           <button class="btn small" id="vs-clear" type="button">Clear selection</button></div>
         <div class="bar">
           <div class="field grow"><label for="vs-smiles">Molecule to try it on (SMILES)</label>

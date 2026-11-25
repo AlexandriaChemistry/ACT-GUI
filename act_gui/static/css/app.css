@@ -16,6 +16,7 @@
   --neg: #c0392b;         /* negative charge */
   --pos: #2563c4;         /* positive charge */
   --series2: #6b7885;     /* second plot series */
+  --shell: #7d3fc0;       /* a shell in the viewers */
   --font: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
   --radius: 10px;
@@ -27,14 +28,14 @@
   --bg: #000000; --surface: #0d0d0d; --stage: #050505; --ink: #ffffff; --muted: #b4b4b4;
   --line: #2e2e2e; --accent: #6eaaf0; --accent-ink: #000000; --accent-soft: #10243d;
   --good: #58c08a; --warn: #e0a84a; --bad: #f0796c; --neg: #f0796c; --pos: #7fb0f5;
-  --series2: #9a9a9a; color-scheme: dark;
+  --series2: #9a9a9a; --shell: #c39bff; color-scheme: dark;
 }
 /* Hippy: dark purple, yellow text and thick orange borders around everything */
 :root[data-theme="hippy"] {
   --bg: #2b0a3d; --surface: #3a1152; --stage: #22072f; --ink: #ffe94d; --muted: #e8cf6a;
   --line: #ff8c1a; --accent: #ff8c1a; --accent-ink: #2b0a3d; --accent-soft: #5a1f62;
   --good: #9dff6a; --warn: #ffb347; --bad: #ff6b8b; --neg: #ff6b6b; --pos: #6fd6ff;
-  --series2: #e0a3ff; --frame: 4px solid #ff8c1a; color-scheme: dark;
+  --series2: #e0a3ff; --shell: #ff7ad9; --frame: 4px solid #ff8c1a; color-scheme: dark;
 }
 :root[data-theme="hippy"] .card, :root[data-theme="hippy"] dialog.save { border: var(--frame); }
 :root[data-theme="hippy"] .btn, :root[data-theme="hippy"] .seg, :root[data-theme="hippy"] input[type="text"],
@@ -137,6 +138,11 @@ button.chip[aria-pressed="true"] b { color: var(--accent); }
 .stage .hint { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted); pointer-events: none; }
 .stage .legend { position: absolute; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 8px; font: 12px var(--mono); color: var(--muted); pointer-events: none; }
 .stage .legend i { width: 120px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #d0392b, #f4f4f4, #2a5fd0); border: 1px solid var(--line); }
+.stage .key { position: absolute; left: 12px; top: 10px; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); pointer-events: none; }
+.stage .key i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin: 0 4px 0 0; vertical-align: -1px; }
+.stage .key i.shell { background: var(--shell); } .stage .key i.site { background: var(--warn); }
+.stage .key i.cloud { opacity: 0.45; margin-right: 0; } .stage .key i.cloud.neg { background: var(--neg); }
+.stage .key i.cloud.pos { background: var(--pos); margin: 0 4px 0 2px; }
 .stage .nogl { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: var(--muted); }
 .stat { display: grid; gap: 2px; }
 .stat .v { font: 500 26px/1.15 var(--mono); font-variant-numeric: tabular-nums; }

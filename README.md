@@ -25,6 +25,33 @@ In development. What is there:
   the energies plotted while the simulation runs and the trajectory
   animated afterwards.
 
+The viewer of the molecule shows what a molecule has besides its atoms
+when that is switched on above it:
+
+- *Shells and sites*: a shell, which makes its atom polarizable, as a
+  transparent sphere around the atom, a halo that moves off the atom when
+  the shell does; a virtual site as a small sphere with a dashed line to
+  the nearest of the atoms it belongs to. The box is there for a molecule
+  that has them.
+- *Charge distributions*: for a force field with Gaussian or Slater
+  charges, a transparent sphere on each atom and on each virtual site with
+  a charge, with the width of the distribution, 1/zeta, as its radius, red
+  for a negative and blue for a positive charge. The charge of an atom,
+  that of its shell and its second charge are in the same place, so an
+  atom has one sphere for what is distributed of them together, as wide as
+  the widest. The halos of the shells are left out then: the viewer does
+  not draw a transparent sphere inside another one. A force field with
+  point charges has nothing to show, which is said. The widths come from
+  the force field (`alexandria edit_ff -json`).
+
+Both hold for the structure, the minimized structure, the vibrations, the
+trajectory of a simulation and the dimers of a scan, and a line in the
+viewer says how many of each are drawn. For the trajectory and the scan
+`alexandria` writes the shells and virtual sites to the pdb files (the
+option `-ws`), so the trajectory and the last structure that are saved
+have them as well. The viewers of the structures of a molprop file have
+atoms only, since such a file has no shells or sites.
+
 The wavenumber axis of the spectrum can be reversed, to run from high to
 low as in measured spectra. The spectrum and the energies can be saved as PDF files, which
 [plotXVG](https://github.com/AlexandriaChemistry/plotXVG) makes on the
@@ -115,7 +142,9 @@ there or opened from a file:
   generated and can be saved as a file. *Open file* adds the sites of such
   a file, one that was saved here or one that was written for `gen_ff -vs`.
   This tab comes after *Geometry*, since `geometry_ff` has to be run
-  before virtual sites can be added. The predefined sets of sites, such as
+  before virtual sites can be added. The shells and virtual sites that the
+  force field of the workspace gives the molecule already can be shown in
+  the viewer; the site that is being defined has another colour then. The predefined sets of sites, such as
   the σ-holes on halogen atoms, are chosen here as well, each with what its
   file says about it and the list of its sites, and the exchange correction
   on σ-holes. The charge of a site is trained between two bounds, -4 and 4 e
