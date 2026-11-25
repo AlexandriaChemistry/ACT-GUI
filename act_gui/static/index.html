@@ -674,9 +674,16 @@
     </div>
     <div class="card" id="ev-calc" hidden>
       <div class="head"><h2 id="ev-calcname">Structure</h2><span class="muted" id="ev-calcwhat"></span><span class="spacer"></span>
+        <span class="row" id="ev-calcboxes" hidden>
+          <label class="check" title="The shells that make atoms polarizable and the virtual sites of the force field"><input type="checkbox" id="ev-extras"> Shells and sites</label>
+          <label class="check" title="A charge with a Gaussian or Slater distribution, as a transparent sphere with the width of the distribution as its radius"><input type="checkbox" id="ev-clouds"> Charge distributions</label>
+          <span class="pill" id="ev-calcpill" hidden></span></span>
         <button class="btn small" id="ev-calcclose" type="button">Close</button></div>
       <div class="cols plot-left">
-        <div class="body"><div class="stage square" id="ev-calcstage"><div class="gl" id="gl3"></div></div>
+        <div class="body"><div class="stage square" id="ev-calcstage"><div class="gl" id="gl3"></div>
+          <div class="key" id="ev-xlegend" hidden><span id="ev-xl-shells"><i class="shell"></i><span id="ev-xl-nshells"></span></span>
+            <span id="ev-xl-sites"><i class="site"></i><span id="ev-xl-nsites"></span></span>
+            <span id="ev-xl-clouds"><i class="cloud neg"></i><i class="cloud pos"></i><span id="ev-xl-nclouds"></span></span></div></div>
           <p class="muted fine" id="ev-calcnote"></p></div>
         <div class="body"><div class="xscroll"><table class="data" id="ev-calctab"></table></div>
           <p class="muted fine">Energies in kJ/mol: the reference (SAPT) and the force field (ACT) for this structure, and their difference. The term that is plotted is in bold.</p></div>

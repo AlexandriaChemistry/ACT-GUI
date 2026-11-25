@@ -226,7 +226,17 @@ reference (SAPT), the force field (ACT) and their difference for every
 term of that structure. The points come from the result of `train_ff` in
 JSON, which names the calculation of each; with an older `alexandria`
 whose result does not have them the plot is made from the xvg file and
-cannot be clicked. For a compound with several structures, such as a
+cannot be clicked. Above the 3D view, *Shells and sites* and *Charge
+distributions* show the shells, the virtual sites and the charge
+distributions of the force field that was compared or trained, as in the
+viewer of the molecule, to help understand a point that lies far from the
+line. They are made when a box is ticked, and again for each point that
+is clicked while it is: `alexandria gentop -json` reads the structure as
+an SDF file with the bonds of the molprop file and formal charges that add
+up to the charge of each compound, since `gentop` reads a dimer of a
+molprop file only from a structure file. For a comparison that ran on the
+cluster the force field is not known to the page, and the boxes are not
+there. For a compound with several structures, such as a
 dimer, a histogram shows which energies the reference and the force field
 have, for each term of the energy.
 

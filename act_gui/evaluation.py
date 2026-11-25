@@ -27,6 +27,8 @@ import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from . import molfile
+
 
 class EvaluationError(ValueError):
     """!
@@ -714,17 +716,17 @@ def _atoms(experiment: Any, fragments: Any) -> List[Dict[str, Any]]:
     return atoms
 
 
-def structure(paths: Sequence["os.PathLike[str]"], name: str,
-              datafile: str) -> List[Dict[str, Any]]:
+def _calculation(paths: Sequence["os.PathLike[str]"], name: str,
+                 datafile: str) -> Tuple[Any, Any]:
     """!
-    @brief The atoms of a calculation in molprop files, found by the name
-    or the IUPAC name of the compound and the data file of the calculation,
-    as train_ff names them. The files are read piece by piece, such that a
-    large file needs little memory.
+    @brief A calculation in molprop files, found by the name or the IUPAC
+    name of the compound and the data file of the calculation, as train_ff
+    names them. The files are read piece by piece, such that a large file
+    needs little memory.
     @param paths    The molprop files.
     @param name     The name of the compound.
     @param datafile The data file of the calculation.
-    @return The atoms, see _atoms().
+    @return The element of the compound and that of the calculation.
     @throws EvaluationError if the files do not have the calculation, or
     cannot be read.
     """
@@ -742,7 +744,7 @@ def structure(paths: Sequence["os.PathLike[str]"], name: str,
                 if name in names:
                     for experiment in element.findall("experiment"):
                         if experiment.get("datafile") == datafile:
-                            return _atoms(experiment, element.find("fragments"))
+                            return element, experiment
                 element.clear()
                 if root is not None:
                     root.clear()
@@ -750,6 +752,58 @@ def structure(paths: Sequence["os.PathLike[str]"], name: str,
             raise EvaluationError("The molprop file cannot be read") from exc
     raise EvaluationError("The molprop file that is open has no calculation %s of %s"
                           % (datafile, name))
+
+
+def structure(paths: Sequence["os.PathLike[str]"], name: str,
+              datafile: str) -> List[Dict[str, Any]]:
+    """!
+    @brief The atoms of a calculation in molprop files, see _calculation().
+    @param paths    The molprop files.
+    @param name     The name of the compound.
+    @param datafile The data file of the calculation.
+    @return The atoms, see _atoms().
+    @throws EvaluationError if the files do not have the calculation, or
+    cannot be read.
+    """
+    molecule, experiment = _calculation(paths, name, datafile)
+    return _atoms(experiment, molecule.find("fragments"))
+
+
+def structure_file(paths: Sequence["os.PathLike[str]"], name: str, datafile: str) -> str:
+    """!
+    @brief A calculation in molprop files as an SDF file, from which
+    gentop makes the particles of a force field, see molfile.
+    @param paths    The molprop files.
+    @param name     The name of the compound.
+    @param datafile The data file of the calculation.
+    @return The file: the atoms of the calculation, the bonds of the
+    compound and the formal charges that make up the charge of each of its
+    compounds.
+    @throws EvaluationError if the files do not have the calculation, if
+    they cannot be read or if the structure cannot be written.
+    """
+    molecule, experiment = _calculation(paths, name, datafile)
+    atoms = _atoms(experiment, molecule.find("fragments"))
+    bonds = []
+    for bond in molecule.findall("bond"):
+        try:
+            bonds.append((int(bond.get("ai", "")) - 1, int(bond.get("aj", "")) - 1,
+                          float(bond.get("bondorder", "1"))))
+        except ValueError as exc:
+            raise EvaluationError("A bond of the compound cannot be read") from exc
+    fragments = []
+    listed = molecule.find("fragments")
+    for fragment in listed.findall("fragment") if listed is not None else []:
+        members = [int(word) - 1 for word in (fragment.text or "").split() if word.isdigit()]
+        try:
+            charge = int(round(float(fragment.get("charge", "0"))))
+        except ValueError as exc:
+            raise EvaluationError("The charge of a compound cannot be read") from exc
+        fragments.append((members, charge))
+    try:
+        return molfile.sdf(name, atoms, bonds, fragments)
+    except molfile.MolfileError as exc:
+        raise EvaluationError(str(exc)) from exc
 
 
 def user_selection(molecules: Any, text: Any) -> str:

@@ -16,6 +16,7 @@
  */
 import { $, $$, addLibrary, alertBox, withoutDefault, call, clusterOptions, el, libraryChoice, num, pill, runTask, saveFile, saveMade, seg, session, toast, upload } from "./common.js";
 import { css, limits, markPoint, plot, resetZoom, zoomPlot } from "./plot.js";
+import { countExtras, drawExtras, hasClouds } from "./particles.js";
 
 /** What the workspace knows. */
 const state = {
@@ -569,6 +570,19 @@ async function comparisonPlot() {
 let calcViewer = null, calcViewerTried = false;
 
 /**
+ * What the viewer of a calculation shows besides the atoms, as in the
+ * molecule workspace: sites, the shells and virtual sites, and clouds, the
+ * charge distributions. It holds for the next point that is clicked too.
+ */
+const calcShow = { sites: false, clouds: false };
+
+/** The charge distributions of the force fields that were asked for, by the force field, see the task ff_charges. */
+const calcWidths = new Map();
+
+/** What is being made now: the particles of a calculation or the distributions of a force field, by their key. */
+const calcMaking = new Set();
+
+/**
  * Show the structure and the energies of the point of a term of the interaction energy that was clicked.
  * @param {string} option The term that is plotted.
  * @param {number} series The series of the point in the plot.
@@ -579,6 +593,7 @@ async function showCalculation(option, series, id) {
   if (!data || !data.points) return;
   const points = data.points, compound = points.compound[id], key = points.calculation[id];
   ev.marked = { option, series, id };
+  ev.shown = null;
   markPoint("evplot", { series, id });
   try {
     // The structure comes from the molprop file that is open
@@ -615,11 +630,121 @@ function calculationCard(told, option) {
     note.textContent = told.structure_error || "Open the molprop file of this comparison to see the structure.";
   } else {
     stage.hidden = false;
-    const parts = new Set(told.atoms.map(a => a.fragment)).size;
-    note.textContent = `${told.atoms.length} atoms` + (parts > 1 ? ", the second compound with green carbons." : ".");
+    note.textContent = atomsNote(told);
+    state.ev.shown = told;
     structureView(told);
+    fetchParticles(told);
   }
+  // The shells and the charges need the force field of the comparison
+  $("#ev-calcboxes").hidden = !told.atoms.length || !state.ev.forcefield;
   card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+/**
+ * What is told under the structure of a calculation.
+ * @param {object} told The calculation.
+ * @returns {string} The number of atoms and the colours of the compounds.
+ */
+function atomsNote(told) {
+  const parts = new Set(told.atoms.map(a => a.fragment)).size;
+  return `${told.atoms.length} atoms` + (parts > 1 ? ", the second compound with green carbons." : ".");
+}
+
+/**
+ * The key of a calculation among those of which the particles were made.
+ * @param {object} told The calculation.
+ * @returns {string} Its compound and data file.
+ */
+const calcKey = told => `${told.name}\n${told.datafile}`;
+
+/**
+ * Make the particles of the force field for a calculation, its shells and
+ * virtual sites with the charges, once for each calculation, and the
+ * charge distributions of the force field, once for each force field, as
+ * far as the viewer shows them; then draw them.
+ * @param {object} told The calculation.
+ */
+async function fetchParticles(told) {
+  const ev = state.ev;
+  if (!ev || !ev.forcefield || !(calcShow.sites || calcShow.clouds) || !state.file) return;
+  const key = calcKey(told), ffkey = JSON.stringify(ev.forcefield);
+  const boxes = $$("#ev-calcboxes input");
+  const wanted = [], making = [];
+  // Each once, also when a second box is ticked while the first is being made
+  const make = (what, task, keep) => {
+    if (calcMaking.has(what)) return;
+    calcMaking.add(what);
+    making.push(what);
+    wanted.push(runTask(task).then(keep));
+  };
+  if (!ev.particles.has(key)) {
+    make(ev.job + "\n" + key, { task: "mp_particles", forcefield: ev.forcefield,
+                               calculation: { molprop: state.file.file, compound: told.name, datafile: told.datafile } },
+         job => { ev.particles.set(key, job.result.molecules[0]); });
+  }
+  if (calcShow.clouds && !calcWidths.has(ffkey)) {
+    make(ffkey, { task: "ff_charges", forcefield: ev.forcefield }, job => {
+      calcWidths.set(ffkey, job.result);
+      if (!hasClouds(job.result)) toast("This force field has point charges, which have no distribution to show.");
+    });
+  }
+  if (!wanted.length) return;
+  boxes.forEach(b => { b.disabled = true; });
+  pill("ev-calcpill", "Making the particles…");
+  try {
+    await Promise.all(wanted);
+    pill("ev-calcpill", "");
+  } catch (e) {
+    pill("ev-calcpill", "Failed", "bad");
+    alertBox("The shells, virtual sites and charges of this structure could not be made with the force field. " + e.message);
+  } finally {
+    making.forEach(what => calcMaking.delete(what));
+    boxes.forEach(b => { b.disabled = false; });
+  }
+  if (state.ev === ev && ev.shown === told) structureView(told);
+}
+
+/**
+ * Draw the shells, the virtual sites and the charge distributions of a
+ * calculation, as far as they are asked for and were made.
+ * @param {object} told The calculation.
+ */
+function calcExtras(told) {
+  const ev = state.ev, made = ev && ev.particles.get(calcKey(told));
+  let drawn = { shells: 0, sites: 0, clouds: 0 };
+  $("#ev-calcnote").textContent = atomsNote(told);
+  if (made && (calcShow.sites || calcShow.clouds)) {
+    const widths = calcShow.clouds ? calcWidths.get(JSON.stringify(ev.forcefield)) || null : null;
+    // The positions of all particles, from nm to Å
+    const frames = [made.coordinates.positions.map(c => c.map(v => v * 10))];
+    drawn = drawExtras(calcViewer, made.molecule.particles, frames, { sites: calcShow.sites, widths });
+    if (calcShow.sites && !drawn.shells && !drawn.sites && !drawn.clouds) {
+      const found = countExtras(made.molecule.particles);
+      if (!found.shells && !found.sites) $("#ev-calcnote").textContent = atomsNote(told) + " The force field has no shells or virtual sites for them.";
+    }
+  }
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  $("#ev-xlegend").hidden = drawn.shells + drawn.sites + drawn.clouds === 0;
+  $("#ev-xl-shells").hidden = !drawn.shells;
+  $("#ev-xl-sites").hidden = !drawn.sites;
+  $("#ev-xl-clouds").hidden = !drawn.clouds;
+  $("#ev-xl-nshells").textContent = plural(drawn.shells, "shell", "shells");
+  $("#ev-xl-nsites").textContent = plural(drawn.sites, "virtual site", "virtual sites");
+  $("#ev-xl-nclouds").textContent = plural(drawn.clouds, "charge distribution", "charge distributions") + ", radius 1/ζ";
+}
+
+/**
+ * Show or hide the shells and virtual sites, or the charge distributions,
+ * of the structure of a calculation.
+ * @param {string} what  sites or clouds.
+ * @param {boolean} on   Whether they are shown.
+ */
+function calcShowing(what, on) {
+  calcShow[what] = on;
+  const told = state.ev && state.ev.shown;
+  if (!told) return;
+  structureView(told);
+  fetchParticles(told);
 }
 
 /**
@@ -641,6 +766,7 @@ function structureView(told) {
   if (!v) return;
   v.resize();
   v.removeAllModels();
+  v.removeAllShapes();
   v.setBackgroundColor(css("--stage"));
   // As coordinates, from which the viewer finds the bonds
   const xyz = `${told.atoms.length}\n${told.name}\n` + told.atoms.map(a => `${a.element} ${a.x} ${a.y} ${a.z}`).join("\n") + "\n";
@@ -649,6 +775,7 @@ function structureView(told) {
   model.setStyle({}, look("default"));
   const second = told.atoms.map((a, i) => (a.fragment > 0 ? i : -1)).filter(i => i >= 0);
   if (second.length) model.setStyle({ index: second }, look("greenCarbon"));
+  calcExtras(told);
   v.zoomTo();
   v.render();
 }
@@ -658,14 +785,15 @@ function structureView(told) {
  * @param {object} job    The calculation.
  * @param {string} source Where it ran, if not on this computer.
  */
-function compared(job, source = "") {
+function compared(job, source = "", forcefield = null) {
   $("#ev-source").textContent = source;
   // The properties that were chosen, the first one first; of an older job all that it has
   const result = job.result, chosen = (job.observables || []).map(describedObservable).filter(Boolean);
   const files = chosen.length ? [...new Set(chosen.flatMap(o => o.plots))].filter(name => job.files.includes(name))
     : Object.keys(PLOT_NAMES).filter(name => job.files.includes(name));
   const wanted = chosen.length ? [...new Set(chosen.flatMap(o => o.statistics))] : null;
-  state.ev = { job: job.id, task: job.task || "evaluate", files, sets: {}, marked: null };
+  // The force field that was compared, of which the particles of a structure are made; null if it is not known
+  state.ev = { job: job.id, task: job.task || "evaluate", files, sets: {}, marked: null, forcefield, particles: new Map(), shown: null };
   $("#ev-calc").hidden = true;
   const table = $("#ev-stats");
   table.textContent = "";
@@ -1328,7 +1456,7 @@ async function compare() {
       alertBox("Nothing could be compared: no compound of the file could be used with this force field, or the file has no data for these properties. The log file tells why.");
     } else pill("ev-pill", "Done", "good");
     if (train) trained(job);
-    compared(job, train ? "· the trained force field" : "");
+    compared(job, train ? "· the trained force field" : "", train ? { job: job.id } : body.forcefield);
   } catch (e) {
     const stopped = e.message === "The calculation was stopped";
     pill("ev-pill", stopped ? "Stopped" : "Failed", stopped ? "warn" : "bad");
@@ -1511,7 +1639,8 @@ export function startMolprops(told) {
       $("#tr-bar").style.width = "100%";
       trained(job);
     }
-    compared(job, `· job ${e.detail.name} on the cluster` + (train ? ", the trained force field" : ""));
+    // The force field of a comparison on the cluster is not known here, that of a training is the one it wrote
+    compared(job, `· job ${e.detail.name} on the cluster` + (train ? ", the trained force field" : ""), train ? { job: job.id } : null);
     $('#nav button[data-view="molprop"]').click();
     requestAnimationFrame(() => {
       if (train) trainingPlot();
@@ -1602,6 +1731,8 @@ export function startMolprops(told) {
   $("#ev-zoomin").onclick = () => zoomPlot("evplot", 0.8);
   $("#ev-zoomout").onclick = () => zoomPlot("evplot", 1.25);
   $("#ev-zoomall").onclick = () => resetZoom("evplot");
+  $("#ev-extras").onchange = e => calcShowing("sites", e.target.checked);
+  $("#ev-clouds").onchange = e => calcShowing("clouds", e.target.checked);
   $("#ev-calcclose").onclick = () => {
     $("#ev-calc").hidden = true;
     if (state.ev) state.ev.marked = null;

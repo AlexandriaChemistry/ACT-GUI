@@ -43,6 +43,9 @@ CHOSEN = "chosen"
 TRAINING = "training"
 ## The settings of a scan of the distance between the compounds of a dimer
 SCAN = "scan"
+## A calculation of a compound in a molprop file, of which the particles of
+## a force field are made
+CALCULATION = "calculation"
 ## What an OpenMM simulation of the package writes, by the name under which it is fetched
 OPENMM_RESULTS = {"energy": "energy.xvg", "temperature": "temperature.xvg", "final": "final.pdb",
                   "trajectory": "trajectory.pdb", "output": "output.txt"}
@@ -259,6 +262,13 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          fixed={"json": True, "validate": True, "molinfo": False},
          downloads=("g",),
          needs=(MOLPROP,), workspace="molprop", digest=evaluation.described),
+    # The particles of a structure of a comparison, for the viewer: the
+    # shells and virtual sites of the force field, and the charges
+    Task(name="mp_particles", command="gentop",
+         title="The particles of a calculation in a molprop file",
+         fixed={"json": True},
+         outputs={"c": "particles.pdb"},
+         needs=(FORCEFIELD, CALCULATION), workspace="molprop"),
     Task(name="mp_clean", command="edit_mp",
          title="Write a molprop file without calculations that are there twice",
          # As it is validated: the calculations that are there twice with
@@ -292,6 +302,32 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
 
 ## The values that the option mut of edit_ff takes
 _MUTABILITIES = ("Fixed", "Bounded")
+
+
+def _calculation(value: Any, uploads: UploadStore) -> str:
+    """!
+    @brief The structure of a calculation in a molprop file that a request
+    names, as gentop reads it.
+    @param value   The object "calculation" of the request: "molprop" with
+    the upload of the molprop file, "compound" with the name of the
+    compound and "datafile" with the data file of the calculation.
+    @param uploads The uploaded files.
+    @return The structure as an SDF file, see evaluation.structure_file().
+    @throws RequestError if there is no such calculation.
+    """
+    if not isinstance(value, Mapping):
+        raise RequestError("The request has no calculation")
+    upload = uploads.get(value.get("molprop"))
+    if upload is None or upload.kind != "molprop":
+        raise RequestError("The molprop file is not known, open it again")
+    name, datafile = value.get("compound"), value.get("datafile")
+    if not isinstance(name, str) or not isinstance(datafile, str) \
+            or not 0 < len(name) <= evaluation.MAX_NAME_LENGTH or not 0 < len(datafile) <= 100:
+        raise RequestError("Give the compound and the data file of the calculation")
+    try:
+        return evaluation.structure_file([uploads.path(upload)], name, datafile)
+    except evaluation.EvaluationError as exc:
+        raise RequestError(str(exc)) from exc
 
 
 def _identifiers(value: Any) -> str:
@@ -531,6 +567,9 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
                 inputs["sel"] = [InputFile("selection.dat", text)]
             except (evaluation.EvaluationError, training.TrainingError) as exc:
                 raise RequestError(str(exc)) from exc
+
+    if CALCULATION in task.needs:
+        inputs["f"] = [InputFile("calculation.sdf", _calculation(request.get(CALCULATION), uploads))]
 
     if SCAN in task.needs:
         try:
