@@ -79,7 +79,11 @@ there or opened from a file:
   `interaction|potential|atom type|parameter|value|unit` for each, as
   `actgui` read them. It does what the program `actgui` of
   ACT-utilities, which it replaces, did. The table of atom types and the virtual sites that
-  `gen_ff` got can be saved as well.
+  `gen_ff` got can be saved as well. Under *Shells* the force constant of
+  the spring between shell and core can be fixed (`gen_ff -fixkshell`),
+  such that training changes only the charge of the shell or its
+  polarizability and the other one follows; its value is given or comes
+  from the starting values (`-kshell`).
 - *Geometry* takes the bond lengths, angles and dihedral angles from the
   compounds of a molprop file with `alexandria geometry_ff`. The file is
   one of its own, or the file that is open in the tab *Molprop data*, and
@@ -120,7 +124,13 @@ there or opened from a file:
   problems that `edit_ff -validate` finds, with a button to write the force
   field without those that writing removes. Of a particle type the charge
   and the width of its distribution (zeta) can be changed, also those of a
-  virtual site; the mass cannot.
+  virtual site; the mass cannot. For a force field with shells the card
+  *Force constants of the shells* tells which are fixed and fixes them,
+  with the charge or the polarizability following, or lets them follow
+  from both again, for all shell types or those that are ticked
+  (`edit_ff -fixkshell`, `-kshell`, `-a`); without a value the current
+  force constant is kept. This needs an `alexandria` that has these
+  options.
 
 - *Compare* lists what differs between the force field of the workspace
   and another one, the default or a file: the parameters with another

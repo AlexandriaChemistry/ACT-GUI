@@ -247,6 +247,11 @@
               <div class="row"><label class="check"><input type="checkbox" id="g-ic-atom" checked> Atoms</label>
                 <label class="check"><input type="checkbox" id="g-ic-shell"> Shells</label></div></div>
             <details class="more mt8"><summary>Combination rules</summary><div class="grid2 mt8" id="g-icrules"></div></details></div></div>
+        <div class="group"><h3>Shells</h3>
+          <div class="field"><label for="g-kshell-follows">Force constant of the spring between shell and core</label><select id="g-kshell-follows"></select></div>
+          <div class="field" id="g-kshell-field" hidden><label for="g-kshell">Force constant (kJ/mol nm²)</label>
+            <input type="number" id="g-kshell" min="1" step="any" placeholder="From the starting values"></div>
+          <p class="muted fine" id="g-kshell-help">The force constant is q²/(4πε₀α) for the charge q of the shell and the polarizability α. If it is fixed, training changes only one of the two and the other one follows. Only for atom types with a shell.</p></div>
         <div class="group"><h3>Virtual sites</h3>
           <div class="checks" id="g-vsites"></div>
           <label class="check"><input type="checkbox" id="g-exchange"> Exchange correction on σ-holes</label>
@@ -384,6 +389,19 @@
             <p class="muted fine" id="p-note"></p>
             <div class="row"><button class="btn primary" id="p-apply" type="button">Apply</button><button class="btn" id="p-cancel" type="button">Cancel</button>
               <span class="pill" id="p-pill" hidden></span></div></div></div>
+        <div class="card" id="k-card" hidden><div class="head"><h2>Force constants of the shells</h2><span class="spacer"></span><span class="pill" id="k-pill" hidden></span></div>
+          <div class="body"><ul class="list" id="k-state"></ul>
+            <div class="grid2">
+              <div class="field"><label for="k-action">Force constant</label><select id="k-action">
+                <option value="charge">Fix it, the charge of the shell follows</option>
+                <option value="alpha">Fix it, the polarizability follows</option>
+                <option value="release">Let it follow from charge and polarizability</option></select></div>
+              <div class="field" id="k-value-field"><label for="k-value">Force constant (kJ/mol nm²)</label>
+                <input type="number" id="k-value" min="1" step="any" placeholder="The current one"></div>
+            </div>
+            <div class="field"><span class="lab">Shell types</span><div class="checks" id="k-types"></div></div>
+            <p class="muted fine">The force constant is q²/(4πε₀α) for the charge q of the shell and the polarizability α. If it is fixed, training changes only one of the two and the other one follows. Releasing it fixes the one that followed at its value.</p>
+            <div class="row"><button class="btn primary" id="k-apply" type="button">Apply</button></div></div></div>
         <div class="card"><div class="head"><h2>Validation</h2><span class="spacer"></span><span class="pill" id="v-pill" hidden></span></div>
           <div class="body"><ul class="list" id="v-list"></ul>
             <p class="muted fine" id="v-note">The parameters are checked each time the force field is read: values within their bounds, a minimum that is not larger than the maximum, no negative value where that is not allowed, and each parameter defined once.</p>
