@@ -187,6 +187,18 @@ class GeneratorTest(unittest.TestCase):
             {"vsites": {"files": "vsite4_amine"}},
             {"vsites": {"files": ["vsite4_amine", "vsite4_amine"]}},
             {"vsites": {"exchange": "true"}},
+            {"vsites": {"charge": [-4, 4]}},
+            {"vsites": {"charge": {"min": "-4"}}},
+            {"vsites": {"charge": {"min": 1, "max": -1}}},
+            {"vsites": {"charge": {"min": -40}}},
+            {"vsites": {"charge": {"max": float("nan")}}},
+            {"vsites": {"charge": {"min": -1, "value": 0}}},
+            {"vdw": {"sites": "v2cl1"}},
+            {"vdw": {"sites": ["cl"]}},
+            {"vdw": {"sites": ["v2cl1|x"]}},
+            {"vdw": {"sites": ["v2cl1 -o x"]}},
+            {"vdw": {"sites": [{"type": "v2cl1"}]}},
+            {"vdw": {"sites": ["v2cl1", "v2cl1"]}},
             {"rules": {"BONDS": {"kb": "Geometric"}}},
             {"rules": {"VANDERWAALS": {"delta": "Geometric"}}},
             {"rules": {"VANDERWAALS": {"sigma": "Geometric VANDERWAALS:x:y"}}},
@@ -337,6 +349,78 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual([{"type": "v1cl", "interaction": "VSITE1", "atoms": ["cl"]}],
                          json.loads(made.vsites)["virtual_sites"])
 
+    def test_van_der_waals_on_some_virtual_sites(self):
+        """!
+        @brief The virtual sites that are named have Van der Waals
+        parameters that are trained, the others do not; the second charge
+        of an atom type that is named is a particle of its own.
+        """
+        chosen = self.choices(
+            atomtypes=[{"name": "ow"}, {"name": "hw"}, {"name": "cl", "vsite": True},
+                       {"name": "f", "vsite": True}, {"name": "c3"}],
+            vdw={"sites": ["v2cl1", "vx1", "v1cl"]},
+            vsites={"files": ["vsite2_halogen_sigma_holes"],
+                    "sites": [{"type": "vx1", "interaction": "VSITE3S",
+                               "atoms": ["hw_b", "ow_b", "hw_b"],
+                               "parameters": {"vs3sa": {"min": 0, "max": 0.4}}},
+                              {"type": "vx2", "interaction": "VSITE2",
+                               "atoms": ["ow_b", "hw_b"],
+                               "parameters": {"vs2a": {"min": -0.5, "max": 0.5}}}]})
+        self.assertEqual(("v2cl1", "vx1", "v1cl"), chosen.vdw_sites)
+        self.assertFalse(chosen.vdw_vsite)
+        made = ffgen.build(chosen, self.types)
+        rows = table_of(made.atomtypes)
+        for name, trained in (("v2cl1", True), ("vx1", True), ("v1cl", True),
+                              ("v2f1", False), ("v2br1", False), ("vx2", False)):
+            self.assertEqual("Bounded" if trained else "Fixed",
+                             rows[name]["VANDERWAALS:sigma:mut"], name)
+            self.assertEqual("Bounded" if trained else "Fixed",
+                             rows[name]["VANDERWAALS:epsilon:mut"], name)
+        # The second charge of chlorine is a particle, that of fluorine is not
+        self.assertEqual("", rows["cl"][":chargeVS:min"])
+        self.assertEqual(("-9", "0"), (rows["f"][":chargeVS:min"], rows["f"][":chargeVS:max"]))
+        self.assertNotIn("v1f", rows)
+        self.assertIn({"type": "v1cl", "interaction": "VSITE1", "atoms": ["cl"]},
+                      json.loads(made.vsites)["virtual_sites"])
+        # A site that the force field does not have cannot get parameters
+        for missing in ("v3bw", "v1ow", "v1br"):
+            chosen = self.choices(atomtypes=[{"name": "ow"}, {"name": "hw"},
+                                             {"name": "cl", "vsite": True}],
+                                  vdw={"sites": ["v1cl", missing]})
+            with self.assertRaises(ffgen.GeneratorError) as caught:
+                ffgen.build(chosen, self.types)
+            self.assertIn(missing, str(caught.exception))
+        # All sites, as before, when that is asked for
+        chosen = self.choices(atomtypes=[{"name": "cl"}, {"name": "c3"}],
+                              vdw={"particles": {"vsite": True}},
+                              vsites={"files": ["vsite2_halogen_sigma_holes"]})
+        rows = table_of(ffgen.build(chosen, self.types).atomtypes)
+        self.assertEqual({"Bounded"}, {rows[name]["VANDERWAALS:sigma:mut"]
+                                       for name in ("v2f1", "v2cl1", "v2br1", "v2i1")})
+
+    def test_charge_of_virtual_sites(self):
+        """!
+        @brief The bounds of the charge of the virtual sites can be chosen;
+        the second charge of an atom keeps its own.
+        """
+        sites = {"files": ["vsite3_water_bisector"],
+                 "sites": [{"type": "vx1", "interaction": "VSITE2", "atoms": ["ow_b", "hw_b"],
+                            "parameters": {"vs2a": {"min": -0.5, "max": 0.5}}}]}
+        types = [{"name": "ow", "vsite": True}, {"name": "hw"}]
+        self.assertEqual(ffgen.VSITE_CHARGE_RANGE, self.choices(atomtypes=types).vsite_charge)
+        chosen = self.choices(atomtypes=types, vdw={"sites": ["v1ow"]},
+                              vsites=dict(sites, charge={"min": -1.5, "max": 0.25}))
+        self.assertEqual((-1.5, 0.25), chosen.vsite_charge)
+        rows = table_of(ffgen.build(chosen, self.types).atomtypes)
+        for name in ("v3bw", "vx1"):
+            self.assertEqual(("-1.5", "0.25", "Bounded"),
+                             tuple(rows[name][":q:" + k] for k in ("min", "max", "mut")), name)
+        self.assertEqual(("-8", "0"), (rows["v1ow"][":q:min"], rows["v1ow"][":q:max"]))
+        # One bound, the other as proposed
+        self.assertEqual((-4.0, 2.0),
+                         self.choices(atomtypes=types,
+                                      vsites={"charge": {"max": 2}}).vsite_charge)
+
     def test_predefined_virtual_sites(self):
         """!
         @brief Predefined virtual sites come with their particle types, and
@@ -357,9 +441,12 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual(("VS", "0", "v2cl1", "v2cl1_z", "0"),
                          (hole["element"], hole["mass"], hole["bondtype"], hole["zetatype"],
                           hole["atomicnumber"]))
-        self.assertEqual(("-2", "0", "Bounded"),
-                         tuple(hole[":q:" + k] for k in ("min", "max", "mut")))
+        # The charge of a site can have either sign, and starts without one
+        self.assertEqual(("-4", "4", "Bounded", "False"),
+                         tuple(hole[":q:" + k] for k in ("min", "max", "mut", "nonneg")))
         self.assertEqual("Fixed", hole["VANDERWAALS:sigma:mut"])
+        # What the file says about its sites goes along to gen_ff
+        self.assertIn("Kriz and van der Spoel", json.loads(made.vsites)["description"])
         # The exchange correction is on the sigma-holes only
         self.assertEqual(("0", "50000", "Bounded"),
                          tuple(hole["VDWCORRECTION:aexp:" + k] for k in ("min", "max", "mut")))
@@ -571,6 +658,21 @@ class GeneratorTest(unittest.TestCase):
         }
         chosen = ffgen.parse_choices(request, self.types)
         self.assertGreater(len(chosen.types), 10)
+        # The predefined virtual sites, with what they are and their sites
+        self.assertEqual(list(ffgen.VSITE_FILES), [v["name"] for v in described["vsites"]])
+        for sites in described["vsites"]:
+            self.assertTrue(sites["description"], sites["name"])
+            self.assertEqual(ffgen.read_vsites(sites["name"]), sites["sites"])
+        halogens = described["vsites"][0]
+        self.assertIn("Kriz and van der Spoel", halogens["description"])
+        self.assertEqual({"v2f1", "v2cl1", "v2br1", "v2i1"},
+                         {site["type"] for site in halogens["sites"]})
+        self.assertEqual({"min": -4.0, "max": 4.0, "limits": [-10.0, 10.0]},
+                         described["vsite_charge"])
+        request["vsites"] = {"charge": {"min": described["vsite_charge"]["min"],
+                                        "max": described["vsite_charge"]["max"]}}
+        self.assertEqual(ffgen.VSITE_CHARGE_RANGE,
+                         ffgen.parse_choices(request, self.types).vsite_charge)
         # Each potential with the rules it proposes
         for potential in described["vdw"]["potentials"]:
             request["vdw"] = {"potential": potential["name"]}

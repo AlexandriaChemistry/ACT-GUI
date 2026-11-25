@@ -603,6 +603,17 @@ class ApiTest(unittest.TestCase):
                          tuple(options[k] for k in ("p", "val", "min", "max", "mut", "nonneg",
                                                     "force")))
         self.assertEqual(self.run.calls[0]["workdir"] / "forcefield.xml", options["o"])
+        # A change of the mutability is forced, since edit_ff does not touch
+        # a fixed parameter otherwise; another change is not, unless asked
+        for given, force in (({"mut": "Bounded"}, True), ({"mut": "Fixed", "val": 1}, True),
+                             ({"mut": "Bounded", "force": False}, False), ({"val": 1}, None),
+                             ({"min": 0, "max": 2}, None)):
+            answer = self.client.post("/api/jobs", headers=self.headers, json={
+                "task": "ff_edit", "forcefield": uploaded,
+                "options": dict(given, p="chi", a="h_z")})
+            self.assertEqual(200, answer.status_code, answer.text)
+            self.wait(answer.json()["id"])
+            self.assertEqual(force, self.run.calls[-1]["options"].get("force"), given)
         ncalls = len(self.run.calls)
         wrong = [
             {},

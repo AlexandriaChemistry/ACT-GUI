@@ -257,6 +257,41 @@ class RealProgramTest(unittest.TestCase):
                          kinds["VANDERWAALS"]["combination_rules"]["sigma"]["rule"])
         self.assertIn("VSITE2", kinds)
         self.assertIn("INDUCTIONCORRECTION", kinds)
+        # The charge of a virtual site can have either sign and starts at zero
+        particles = {p["identifier"]: {q["type"]: q for q in p["parameters"]}
+                     for p in described["particletypes"]["types"]}
+        charge = particles["v2cl1"]["charge"]
+        self.assertEqual((-4, 4, 0, "Bounded"), (charge["minimum"], charge["maximum"],
+                                                  charge["value"], charge["mutability"]))
+        # No virtual site has Van der Waals parameters that are trained
+        for name in ("v2cl1", "v2f1", "v3ow"):
+            self.assertEqual("Fixed", self.parameter(polarizable, "VANDERWAALS", name,
+                                                     "epsilon")["mutability"], name)
+
+        # Van der Waals parameters on some of the virtual sites, one of them
+        # the second charge of an atom type, and other bounds of the charge
+        some = self.run_task({"task": "gen_ff", "generator": {
+            "atomtypes": [{"name": "hc"}, {"name": "c3"}, {"name": "f"},
+                          {"name": "cl", "vsite": True}, {"name": "br", "vsite": True}],
+            "vdw": {"sites": ["v2cl1", "v1cl"]},
+            "vsites": {"files": ["vsite2_halogen_sigma_holes"],
+                       "charge": {"min": -1.5, "max": 0.5}}}})
+        self.assertEqual("finished", some["status"], some["error"])
+        self.assertTrue(some["result"]["validation"]["ok"])
+        for name, trained in (("v2cl1", "Bounded"), ("v1cl", "Bounded"), ("v2f1", "Fixed"),
+                              ("v2br1", "Fixed"), ("cl", "Bounded")):
+            self.assertEqual(trained, self.parameter(some, "VANDERWAALS", name,
+                                                     "epsilon")["mutability"], name)
+        particles = {p["identifier"]: {q["type"]: q for q in p["parameters"]}
+                     for p in some["result"]["forcefield"]["particletypes"]["types"]}
+        charge = particles["v2f1"]["charge"]
+        self.assertEqual((-1.5, 0.5, -0.5), (charge["minimum"], charge["maximum"],
+                                             charge["value"]))
+        # The second charge of chlorine is a particle, that of bromine is not
+        self.assertIn("v1cl", particles)
+        self.assertNotIn("chargeVS", particles["cl"])
+        self.assertNotIn("v1br", particles)
+        self.assertIn("chargeVS", particles["br"])
 
     def test_describe_edit_and_use_a_force_field(self):
         """!
@@ -301,6 +336,19 @@ class RealProgramTest(unittest.TestCase):
         after = self.parameter(fixed, interaction, identifier, before["type"])
         self.assertEqual("Fixed", after["mutability"])
         self.assertAlmostEqual(new, after["value"], places=5)
+        # And back: training may change a fixed parameter again, with the
+        # value and the bounds it had
+        freed = self.run_task({"task": "ff_edit", "forcefield": {"job": fixed["id"]},
+                               "options": {"p": before["type"], "a": identifier,
+                                           "mut": "Bounded"}})
+        self.assertEqual("finished", freed["status"], freed["error"])
+        self.assertTrue(freed["result"]["changed"])
+        self.assertIn("o", freed["files"])
+        after = self.parameter(freed, interaction, identifier, before["type"])
+        self.assertEqual("Bounded", after["mutability"])
+        self.assertAlmostEqual(new, after["value"], places=5)
+        self.assertAlmostEqual(before["minimum"], after["minimum"], places=5)
+        self.assertAlmostEqual(before["maximum"], after["maximum"], places=5)
         job = self.run_task({"task": "minimize", "molecule": {"smiles": "CC(=O)C"},
                              "forcefield": {"job": fixed["id"]}})
         self.assertEqual("finished", job["status"], job["error"])

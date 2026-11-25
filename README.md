@@ -74,7 +74,8 @@ there or opened from a file:
 - *Generate* makes a new force field with `alexandria gen_ff` from a few
   choices: the charge model, the potentials with their combination rules,
   the atom types and which of them get a shell or a second charge, and
-  predefined virtual sites. Parameters with a known value are fixed at
+  the virtual sites that are chosen in the tab *Virtual sites*. Parameters
+  with a known value are fixed at
   that value from files with a line
   `interaction|potential|atom type|parameter|value|unit` for each, as
   `actgui` read them. It does what the program `actgui` of
@@ -114,13 +115,28 @@ there or opened from a file:
   generated and can be saved as a file. *Open file* adds the sites of such
   a file, one that was saved here or one that was written for `gen_ff -vs`.
   This tab comes after *Geometry*, since `geometry_ff` has to be run
-  before virtual sites can be added.
+  before virtual sites can be added. The predefined sets of sites, such as
+  the σ-holes on halogen atoms, are chosen here as well, each with what its
+  file says about it and the list of its sites, and the exchange correction
+  on σ-holes. The charge of a site is trained between two bounds, -4 and 4 e
+  unless you give others, and starts in the middle. Of the sites that are
+  chosen you tick those that take part in the Van der Waals interactions:
+  they get parameters of their own that are trained, the others have none.
+  The second charges of the atoms can be ticked too, and are then particles
+  of their own. Since a force field has to be generated again to get new
+  sites, the tab has a button for that, which uses the choices of
+  *Generate*; if the geometries were extracted before, it extracts them
+  again from the same molprop file, since a new force field has no bonded
+  parameters. The page says when the sites that are chosen are not those of
+  the force field of the workspace.
 - *Edit and validate* lists the parameters with their value, bounds and
   mutability, changes them with `alexandria edit_ff`, and shows the
   problems that `edit_ff -validate` finds, with a button to write the force
   field without those that writing removes. Of a particle type the charge
   and the width of its distribution (zeta) can be changed, also those of a
-  virtual site; the mass cannot.
+  virtual site; the mass cannot. A parameter that training does not change
+  (Fixed) can be made one that it does (Bounded), and the page says when
+  its minimum and maximum are the same and leave no room for that.
 
 - *Compare* lists what differs between the force field of the workspace
   and another one, the default or a file: the parameters with another

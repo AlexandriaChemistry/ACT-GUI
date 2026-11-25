@@ -21,7 +21,7 @@
  */
 import { $, $$, addLibrary, alertBox, call, el, libraryChoice, num, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
 import { compareWith, startDiff } from "./ffdiff.js";
-import { chosenSites, redrawVsites, startVsites } from "./vsites.js";
+import { chosenVdwSites, chosenVsites, redrawVsites, refreshVsites, startVsites, vsiteSummary } from "./vsites.js";
 import { css, markPoint, plot, resetZoom, zoomPlot } from "./plot.js";
 
 /** What the workspace knows. */
@@ -32,6 +32,7 @@ const state = {
   qmodel: "",          // the charge model
   current: null,       // the force field: { ref, base, changes, data }, data as edit_ff describes it
   genJob: null,        // the calculation that made a force field, for its files
+  genSites: "",        // the virtual sites that the force field was made with, see sitesChosen
   geoJob: null,        // the calculation that extracted geometries, for its log
   molprop: null,       // the molprop file: { file, label }
   filter: "",          // the interaction of which the parameters are listed
@@ -256,7 +257,10 @@ function typeTable() {
   table.textContent = "";
   table.append(el("thead", {}, head), body);
   $("#g-ntypes").textContent = `${count} of ${state.gen.atomtypes.length} selected`;
-  $("#run-gen").disabled = count === 0;
+  $("#run-gen").disabled = $("#vs-gen").disabled = count === 0;
+  // The second charges are among the sites that can have Van der Waals parameters
+  refreshVsites();
+  sitesChanged();
 }
 
 /**
@@ -298,10 +302,6 @@ function generatorForm() {
   fill($("#g-ic"), gen.induction.potentials.map(p => p.name), gen.induction.default, v => v === "NONE" ? "None" : v);
   $("#g-ic").onchange = inductionPotential;
   inductionPotential();
-  const sites = $("#g-vsites");
-  for (const site of gen.vsites) {
-    sites.append(el("label", { class: "check" }, el("input", { type: "checkbox", data: { name: site.name } }), " " + site.label));
-  }
   typeTable();
   $("#g-types").addEventListener("change", e => {
     const box = e.target;
@@ -334,13 +334,12 @@ function generatorChoices() {
   const choices = {
     atomtypes: [...state.types].filter(([, c]) => c.on).map(([name, c]) => ({ name, shell: c.shell, vsite: c.vsite })),
     vdw: { potential: $("#g-vdw").value, nexcl: numberOf("g-nexcl"),
-           particles: { heavy: $("#g-vdw-heavy").checked, hydrogen: $("#g-vdw-h").checked,
-                        vsite: $("#g-vdw-vs").checked, shell: $("#g-vdw-shell").checked } },
+           particles: { heavy: $("#g-vdw-heavy").checked, hydrogen: $("#g-vdw-h").checked, shell: $("#g-vdw-shell").checked },
+           sites: chosenVdwSites() },
     charge: { model: state.qmodel, epsilonr: numberOf("g-epsr"), maxrow: numberOf("g-row"), symmetric: $("#g-qsymm").checked },
     bonds: $("#g-bonds").value, angles: $("#g-angles").value, dihedrals: $("#g-dihedrals").value,
     induction: { potential: $("#g-ic").value, particles: { atom: $("#g-ic-atom").checked, shell: $("#g-ic-shell").checked } },
-    vsites: { files: $$("#g-vsites input").filter(b => b.checked).map(b => b.dataset.name), exchange: $("#g-exchange").checked,
-              sites: chosenSites() },
+    vsites: chosenVsites(),
     rules: { VANDERWAALS: chosenRules($("#g-vdwrules")) },
     fixed: state.fixed.flatMap(file => file.entries),
   };
@@ -377,23 +376,72 @@ function generated(job) {
   $("#g-result").hidden = false;
 }
 
-/** Make a force field of the choices in the form. */
-async function generate() {
-  const button = $("#run-gen");
-  button.disabled = true;
-  pill("gen-pill", "Generating…");
+/**
+ * What is chosen for the virtual sites, as one text, to tell whether the
+ * force field of the workspace was made with it.
+ * @returns {string} The sites and those with Van der Waals parameters.
+ */
+const sitesChosen = () => JSON.stringify([chosenVsites(), chosenVdwSites()]);
+
+/** Show what is chosen for the virtual sites, and whether the force field has it. */
+function sitesChanged() {
+  const told = vsiteSummary();
+  $("#g-ownsites").textContent = told.sites === "None"
+    ? "None. Predefined sites and sites of your own are chosen in the tab Virtual sites."
+    : `${told.sites}, see the tab Virtual sites.`;
+  $("#g-vdwsites").textContent = told.vdw.length
+    ? `Virtual sites: ${told.vdw.length > 6 ? told.vdw.length + " sites" : told.vdw.join(", ")}, chosen in the tab Virtual sites.`
+    : "Virtual sites have none, unless they are ticked in the tab Virtual sites.";
+  $("#vs-stale").hidden = sitesChosen() === state.genSites;
+}
+
+/** Offer to extract the geometries again after a force field is made, if they were extracted before. */
+function geometryAgain() {
+  const again = Boolean(state.geoJob && state.molprop && !(state.molprop.shared && !session.molprop));
+  $("#vs-regeo-label").hidden = !again;
+  if (again) $("#vs-regeo-text").textContent = `and extract the geometries again from ${$("#mp-name").textContent.split(" · ")[0] || "the molprop file"}`;
+}
+
+/**
+ * Make a force field of the choices in the form.
+ * @param {string} pillId Where the progress is told: in the tab Generate or in the tab Virtual sites.
+ * @returns {boolean} Whether a force field was made.
+ */
+async function generate(pillId = "gen-pill") {
+  const buttons = [$("#run-gen"), $("#vs-gen")];
+  for (const button of buttons) button.disabled = true;
+  pill("gen-pill", ""); pill("vs-pill", "");
+  pill(pillId, "Generating…");
   alertBox("");
   try {
+    const chosen = sitesChosen();
     const job = await runTask({ task: "gen_ff", generator: generatorChoices() });
     state.genJob = job.id;
+    state.genSites = chosen;
     generated(job);
     setCurrent({ job: job.id }, "New force field", job.result);
+    sitesChanged();
     const ok = job.result.validation.ok;
-    pill("gen-pill", ok ? "Done" : "Done, with problems", ok ? "good" : "warn");
+    pill(pillId, ok ? "Done" : "Done, with problems", ok ? "good" : "warn");
+    return true;
   } catch (e) {
-    pill("gen-pill", "Failed", "bad");
+    pill(pillId, "Failed", "bad");
     alertBox("The force field could not be made. " + e.message);
-  } finally { button.disabled = false; }
+    return false;
+  } finally { for (const button of buttons) button.disabled = false; }
+}
+
+/**
+ * Make the force field again from the tab Virtual sites, and take its bonded
+ * parameters from the molprop file again if that was done before: a new
+ * force field has none.
+ */
+async function generateWithSites() {
+  const again = !$("#vs-regeo-label").hidden && $("#vs-regeo").checked;
+  if (!await generate("vs-pill") || !again) return;
+  pill("vs-pill", "Extracting the geometries…");
+  const done = await geometry();
+  pill("vs-pill", done ? "Done" : "Made, but the geometries could not be extracted", done ? "good" : "warn");
 }
 
 /* ---------- geometry ---------- */
@@ -557,12 +605,16 @@ function geometryLabel() {
     : state.molprop ? state.molprop.label : "";
   $("#mp-shared").hidden = !session.molprop || Boolean(shared);
   $("#run-geo").disabled = !(state.current && state.molprop);
+  geometryAgain();
 }
 
-/** Take the bonded parameters of the force field from a molprop file. */
+/**
+ * Take the bonded parameters of the force field from a molprop file.
+ * @returns {boolean} Whether the force field has them now.
+ */
 async function geometry() {
-  if (!state.current || !state.molprop) return;
-  if (state.molprop.shared && session.molprop.used < 1) { toast("No compound is ticked in the tab Molprop data."); return; }
+  if (!state.current || !state.molprop) return false;
+  if (state.molprop.shared && session.molprop.used < 1) { toast("No compound is ticked in the tab Molprop data."); return false; }
   const button = $("#run-geo"), sqe = $('#geo-qalg button[aria-pressed="true"]').dataset.v === "SQE";
   button.disabled = true;
   pill("geo-pill", "Reading the compounds…");
@@ -579,7 +631,7 @@ async function geometry() {
       pill("geo-pill", "No compound could be used", "warn");
       alertBox("None of the compounds in the file could be used with this force field, so it was not changed. " +
                "The log file tells why, for instance atom types that the force field does not have.");
-      return;
+      return false;
     }
     const fixed = sqe ? monovalentTypes(job.result.forcefield) : [];
     if (fixed.length) {
@@ -589,10 +641,12 @@ async function geometry() {
     }
     setCurrent({ job: job.id }, state.current.base, job.result, state.current.changes + 1);
     pill("geo-pill", "Done", "good");
+    return true;
   } catch (e) {
     pill("geo-pill", "Failed", "bad");
     alertBox("The geometries could not be extracted. " + e.message);
-  } finally { button.disabled = !(state.current && state.molprop); }
+    return false;
+  } finally { button.disabled = !(state.current && state.molprop); geometryAgain(); }
 }
 
 /* ---------- histograms of the geometries ---------- */
@@ -992,11 +1046,23 @@ function editCard() {
   if (other) other.remove();
   if (["Bounded", "Fixed"].includes(param.mutability)) select.value = param.mutability;
   else { select.prepend(el("option", { value: "" }, `Leave as it is: ${param.mutability}`)); select.value = ""; }
-  $("#p-note").textContent = param.mutability === "Bounded"
-    ? "A value outside the bounds is set to the nearest bound."
-    : param.mutability === "ACM"
-      ? "This charge comes from the charge model for each molecule, so a value that is set here is not used."
-      : `Training does not change this parameter (${param.mutability}). A new value or new bounds are set all the same.`;
+  editNote();
+}
+
+/** Tell what a change of the parameter that was picked does, for what the form says now. */
+function editNote() {
+  const picked = state.picked;
+  if (!picked) return;
+  const param = picked.param, bounded = ($("#p-mut").value || param.mutability) === "Bounded";
+  const low = numberOf("p-min"), high = numberOf("p-max");
+  $("#p-note").textContent = bounded && low !== null && low === high
+    ? "The minimum and the maximum are the same, so training cannot change the value: give it room by changing them."
+    : param.mutability === "Bounded"
+      ? "A value outside the bounds is set to the nearest bound."
+      : param.mutability === "ACM"
+        ? "This charge comes from the charge model for each molecule, so a value that is set here is not used."
+        : bounded ? `Training did not change this parameter (${param.mutability}); it will, within the bounds.`
+          : `Training does not change this parameter (${param.mutability}). A new value or new bounds are set all the same.`;
 }
 
 /**
@@ -1020,8 +1086,9 @@ async function applyChange() {
   const mut = $("#p-mut").value;
   if (mut && mut !== param.mutability) options.mut = mut;
   if (Object.keys(options).length === 2) { toast("Nothing was changed in the form."); return; }
-  // A parameter that training does not change is changed only when forced
-  if (param.mutability !== "Bounded" && ("val" in options || "min" in options || "max" in options)) options.force = true;
+  // A parameter that training does not change is changed only when forced,
+  // also when it is only to be one that training may change
+  if (param.mutability !== "Bounded") options.force = true;
   const button = $("#p-apply");
   button.disabled = true;
   pill("p-pill", "Changing…");
@@ -1134,7 +1201,9 @@ export async function startForceFields(told) {
     const ref = state.current && state.current.ref;
     if (ref && ref.job) saveFile(e.currentTarget, `/jobs/${ref.job}/files/o`, {}, "Saving…", saveName());
   };
-  $("#run-gen").onclick = generate;
+  $("#run-gen").onclick = () => generate();
+  $("#vs-gen").onclick = generateWithSites;
+  $("#g-tovsites").onclick = () => $('#fftabs button[data-tab="vsite"]').click();
   $("#g-fixed-open").onclick = () => $("#g-fixed-file").click();
   $("#g-fixed-file").onchange = e => {
     const file = e.target.files[0];
@@ -1195,15 +1264,16 @@ export async function startForceFields(told) {
     editCard();
   });
   $("#p-apply").onclick = applyChange;
+  for (const id of ["p-mut", "p-min", "p-max"]) $("#" + id).addEventListener("input", editNote);
   $("#p-cancel").onclick = () => { state.picked = null; parameterTable(); editCard(); };
   $("#v-repair").onclick = repair;
   try {
     state.gen = await (await call("/generator")).json();
+    startVsites(state.gen, () => [...state.types].filter(([, choice]) => choice.on && choice.vsite).map(([name]) => name), sitesChanged);
+    // What is chosen at the start is what a force field that was not made here has
+    state.genSites = sitesChosen();
     generatorForm();
-    startVsites(state.gen.site_kinds, state.gen.atomtypes, () => {
-      const n = chosenSites().length;
-      $("#g-ownsites").textContent = n ? `and ${n} of your own, see the tab Virtual sites` : "";
-    });
+    sitesChanged();
   } catch (e) {
     alertBox("The choices for a new force field could not be fetched. " + e.message);
   }
