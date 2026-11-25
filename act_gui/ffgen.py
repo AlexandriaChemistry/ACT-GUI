@@ -206,6 +206,16 @@ _FIXED_NAMES = {"interaction": re.compile(r"^[A-Z_]{0,40}$"),
                 "parameter": re.compile(r"^[A-Za-z0-9_]{1,30}$"),
                 "unit": re.compile(r"^[A-Za-z0-9/^ ]{0,30}$")}
 MAX_SITE_PARAMETER = 1000.0
+## The smallest and largest charge of a virtual site that are proposed, in e.
+## A site starts in the middle, without a charge.
+VSITE_CHARGE_RANGE = (-4.0, 4.0)
+## The smallest and largest charge of a virtual site that can be asked for
+VSITE_CHARGE_LIMITS = (-10.0, 10.0)
+## The most virtual sites that can be named to get Van der Waals parameters
+MAX_VDW_SITES = 500
+## What the name of the particle type of a virtual site in such a list looks
+## like: that of a site, or v1 and the atom type of a second charge
+_VDW_SITE = re.compile(r"^v[A-Za-z0-9+_-]{1,19}$")
 
 ## The combination rules of the exchange correction on virtual sites
 _VDW_CORRECTION_RULES = (("aexp", "Kronecker"), ("bexp", "Arithmetic"), ("vsite", "Geometric"))
@@ -301,6 +311,21 @@ def read_vsites(name: str) -> List[Dict[str, Any]]:
         return list(json.load(handle).get("virtual_sites", []))
 
 
+def describe_vsites(name: str) -> str:
+    """!
+    @brief What a file with predefined virtual sites says about them.
+    @param name The name of the file, one of VSITE_FILES.
+    @return The description in the file, with its reference if it has one;
+    empty if the file has none.
+    @throws GeneratorError for an unknown name.
+    """
+    if name not in VSITE_FILES:
+        raise GeneratorError("There are no virtual sites '%s'" % (name,))
+    with open(DATA_DIR / (name + ".json"), "r", encoding="utf-8") as handle:
+        description = json.load(handle).get("description", "")
+    return description if isinstance(description, str) else ""
+
+
 @dataclass(frozen=True)
 class TypeChoice:
     """!
@@ -327,8 +352,12 @@ class Choices:
     vdw_hydrogen: bool = True
     ## The same for the other atoms
     vdw_heavy: bool = True
-    ## The same for virtual sites
+    ## The same for all virtual sites
     vdw_vsite: bool = False
+    ## The particle types of the virtual sites that have such parameters when
+    ## not all have them: those of the sites, and v1 plus the atom type for
+    ## the second charge of an atom type
+    vdw_sites: Tuple[str, ...] = ()
     ## The same for shells
     vdw_shell: bool = False
     ## The number of bonds within which there are no nonbonded interactions
@@ -357,6 +386,8 @@ class Choices:
     vsite_files: Tuple[str, ...] = ()
     ## Whether sigma-holes get an exchange correction
     exchange: bool = False
+    ## The smallest and largest charge of a virtual site, in e
+    vsite_charge: Tuple[float, float] = VSITE_CHARGE_RANGE
     ## The combination rules, by interaction and parameter
     rules: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     ## The virtual sites that the user defined, in the form of gen_ff -vs
@@ -523,6 +554,52 @@ def _sites(given: Any, chosen: List["TypeChoice"],
     return tuple(sites)
 
 
+def _vdw_sites(given: Any) -> Tuple[str, ...]:
+    """!
+    @brief Check the virtual sites that get Van der Waals parameters.
+    @param given What the request gave: a list of names of particle types.
+    @return The names. Whether the force field has these virtual sites is
+    checked by build.
+    @throws GeneratorError if it is no list of names of virtual sites.
+    """
+    if given is None:
+        return ()
+    if not isinstance(given, list):
+        raise GeneratorError("The virtual sites with Van der Waals parameters must be a list")
+    if len(given) > MAX_VDW_SITES:
+        raise GeneratorError("At most %d virtual sites can be named" % MAX_VDW_SITES)
+    for name in given:
+        if not isinstance(name, str) or not _VDW_SITE.fullmatch(name):
+            raise GeneratorError("'%s' is not the name of a virtual site" % (name,))
+    if len(set(given)) != len(given):
+        raise GeneratorError("A virtual site with Van der Waals parameters is given twice")
+    return tuple(given)
+
+
+def _vsite_charge(given: Any) -> Tuple[float, float]:
+    """!
+    @brief Check the bounds of the charge of the virtual sites.
+    @param given What the request gave: an object with min and max, None
+    for the bounds that are proposed.
+    @return The smallest and the largest charge.
+    @throws GeneratorError if they are no numbers within the limits, or the
+    smallest is larger than the largest.
+    """
+    if given is None:
+        return VSITE_CHARGE_RANGE
+    given = _object(given, "The charge of the virtual sites")
+    for key in given:
+        if key not in ("min", "max"):
+            raise GeneratorError("The charge of the virtual sites has no '%s'" % (key,))
+    low = float(_number(given.get("min"), VSITE_CHARGE_RANGE[0], VSITE_CHARGE_LIMITS,
+                        "The smallest charge of a virtual site"))
+    high = float(_number(given.get("max"), VSITE_CHARGE_RANGE[1], VSITE_CHARGE_LIMITS,
+                         "The largest charge of a virtual site"))
+    if low > high:
+        raise GeneratorError("The smallest charge of a virtual site is larger than the largest")
+    return (low, high)
+
+
 def _fixed(given: Any) -> Tuple[Mapping[str, Any], ...]:
     """!
     @brief Check the parameters that the user fixed, as the file of actgui
@@ -573,12 +650,13 @@ def parse_choices(request: Any, atom_types: Mapping[str, AtomType]) -> Choices:
     @brief Check what the browser sent and fill in what it left out.
     @param request    The object "generator" of a request: atomtypes (a
     list of objects with name, vsite and shell), vdw (potential, particles,
-    nexcl), charge (model, epsilonr, maxrow, symmetric), bonds, angles,
-    dihedrals, induction (potential, particles), vsites (files, exchange
-    and sites, the virtual sites of the user), rules (by interaction and
-    parameter), fixed (the parameters that the user fixed, see _fixed) and
-    shells (follows, one of SHELL_FOLLOWS, and kshell, the fixed force
-    constant, or none).
+    sites, the virtual sites with parameters that are trained, and nexcl),
+    charge (model, epsilonr, maxrow, symmetric), bonds, angles, dihedrals,
+    induction (potential, particles), vsites (files, exchange, charge with
+    the min and max of the charge of a site, and sites, the virtual sites of
+    the user), rules (by interaction and parameter), fixed (the parameters
+    that the user fixed, see _fixed) and shells (follows, one of
+    SHELL_FOLLOWS, and kshell, the fixed force constant, or none).
     @param atom_types The atom types that can be chosen.
     @return The choices.
     @throws GeneratorError if something is not one of the possibilities.
@@ -660,6 +738,7 @@ def parse_choices(request: Any, atom_types: Mapping[str, AtomType]) -> Choices:
         vdw_hydrogen=_flag(vdw_on.get("hydrogen"), True, "hydrogen"),
         vdw_heavy=_flag(vdw_on.get("heavy"), True, "heavy"),
         vdw_vsite=_flag(vdw_on.get("vsite"), False, "vsite"),
+        vdw_sites=_vdw_sites(vdw.get("sites")),
         vdw_shell=_flag(vdw_on.get("shell"), False, "shell"),
         nexcl=int(_number(vdw.get("nexcl"), 2, NEXCL_RANGE, "The number of excluded bonds",
                           whole=True)),
@@ -681,6 +760,7 @@ def parse_choices(request: Any, atom_types: Mapping[str, AtomType]) -> Choices:
         induction_shell=_flag(induction_on.get("shell"), False, "shell"),
         vsite_files=tuple(files),
         exchange=_flag(vsites.get("exchange"), False, "exchange"),
+        vsite_charge=_vsite_charge(vsites.get("charge")),
         rules=rules,
         sites=_sites(vsites.get("sites"), types, atom_types),
         fixed=_fixed(request.get("fixed")),
@@ -811,7 +891,7 @@ def _vdw(table: _Table, choices: Choices, name: str, element: str, kind: str) ->
     elif kind == SHELL:
         trained = choices.vdw_shell
     else:
-        trained = choices.vdw_vsite
+        trained = choices.vdw_vsite or name in choices.vdw_sites
     for param, (low, high, unit) in VDW_POTENTIALS[choices.vdw].bounds.items():
         table.parameter(name, VDW, param, low, high, BOUNDED if trained else FIXED, unit)
 
@@ -846,13 +926,11 @@ def build(choices: Choices, atom_types: Mapping[str, AtomType],
     @param extra_vsites More virtual sites in the form that gen_ff -vs
     reads, next to the predefined ones and those of the choices.
     @return The table, the virtual sites and the options.
+    @throws GeneratorError if a virtual site is to get Van der Waals
+    parameters that the force field does not have.
     """
     table = _Table()
     point = choices.charge_model == "POINT"
-    # A distributed charge on top of an atom is stored as a second charge of
-    # the atom type. Only if virtual sites have Van der Waals interactions
-    # they must be particles of their own.
-    second_charge = not choices.vdw_vsite
 
     # The virtual sites, and the particle types they need
     sites: List[Dict[str, Any]] = []
@@ -869,7 +947,8 @@ def build(choices: Choices, atom_types: Mapping[str, AtomType],
         table.add(name, {"element": "VS", "mass": 0, "bondtype": name, "poltype": "",
                          "acmtype": "", "vdwtype": name, "atomicnumber": 0,
                          "zetatype": name + "_z", "radius": 0, "row": 1})
-        table.parameter(name, "", "q", -2, 0, BOUNDED, "e", False)
+        table.parameter(name, "", "q", choices.vsite_charge[0], choices.vsite_charge[1],
+                        BOUNDED, "e", False)
         if point:
             table.parameter(name, COULOMB, "zeta", 0, 0, FIXED, "1/nm")
         else:
@@ -878,8 +957,15 @@ def build(choices: Choices, atom_types: Mapping[str, AtomType],
         _vdw_correction(table, name, correction, exchange)
 
     # The atom types, each with its shell and its virtual site if it has them
+    second_charges = set()
     for choice in choices.types:
         atom = atom_types[choice.name]
+        if choice.vsite:
+            second_charges.add("v1" + atom.name)
+        # A distributed charge on top of an atom is stored as a second charge
+        # of the atom type. Only if it has Van der Waals interactions it must
+        # be a particle of its own.
+        second_charge = not (choices.vdw_vsite or "v1" + atom.name in choices.vdw_sites)
         for kind in (ATOM, SHELL, VSITE):
             if kind == VSITE and (not choice.vsite or second_charge):
                 continue
@@ -949,6 +1035,11 @@ def build(choices: Choices, atom_types: Mapping[str, AtomType],
             if kind == ATOM:
                 table.rows[name]["comment"] = atom.comment
 
+    for name in choices.vdw_sites:
+        if name not in site_types and name not in second_charges:
+            raise GeneratorError("The virtual site %s is to get Van der Waals parameters, but "
+                                 "the force field has no such site" % name)
+
     # The parameters that the user fixed, of the types that are there
     for entry in choices.fixed:
         if entry["type"] in table.rows:
@@ -981,8 +1072,13 @@ def build(choices: Choices, atom_types: Mapping[str, AtomType],
         options["cr"] = " ".join(rules)
     vsites = None
     if sites:
-        vsites = json.dumps({"description": "Virtual sites selected in the user interface "
-                             "of ACT", "virtual_sites": sites}, indent=2) + "\n"
+        # What the files of the predefined sites say about them goes along
+        about = [text for text in (describe_vsites(name) for name in choices.vsite_files) if text]
+        description = "Virtual sites selected in the user interface of ACT"
+        if about:
+            description += ": " + "; ".join(about)
+        vsites = json.dumps({"description": description, "virtual_sites": sites},
+                            indent=2) + "\n"
     return GeneratorInput(atomtypes=table.text(), vsites=vsites, options=options)
 
 
@@ -992,7 +1088,8 @@ def describe(atom_types: Mapping[str, AtomType]) -> Dict[str, Any]:
     @param atom_types The atom types that can be chosen.
     @return The atom types, the potentials with their parameters and the
     combination rules that are proposed, the charge models, the functions,
-    the predefined virtual sites and the limits of the numbers.
+    the predefined virtual sites with what their files say about them and
+    their sites, the charge of a virtual site and the limits of the numbers.
     """
     def potentials(group: Mapping[str, Potential]) -> List[Dict[str, Any]]:
         """The potentials of a group as a list"""
@@ -1016,8 +1113,11 @@ def describe(atom_types: Mapping[str, AtomType]) -> Dict[str, Any]:
         "angles": list(ANGLE_FUNCTIONS),
         "dihedrals": list(DIHEDRAL_FUNCTIONS),
         "induction": {"default": "NONE", "potentials": potentials(INDUCTION_POTENTIALS)},
-        "vsites": [{"name": name, "label": label, "sigma_hole": sigma}
+        "vsites": [{"name": name, "label": label, "sigma_hole": sigma,
+                    "description": describe_vsites(name), "sites": read_vsites(name)}
                    for name, (label, sigma) in VSITE_FILES.items()],
+        "vsite_charge": {"min": VSITE_CHARGE_RANGE[0], "max": VSITE_CHARGE_RANGE[1],
+                         "limits": list(VSITE_CHARGE_LIMITS)},
         "rules": list(COMBINATION_RULES),
         "site_kinds": [{"name": name, "atoms": natom, "parameters": list(names)}
                        for name, (natom, names) in SITE_KINDS.items()],

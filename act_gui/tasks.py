@@ -333,6 +333,11 @@ def _edit_options(given: Dict[str, Any]) -> Dict[str, Any]:
         raise RequestError("Option 'force' must be true or false")
     if not any(key in options for key in ("val", "min", "max", "mut", "nonneg")):
         raise RequestError("Give what to change: the value, a bound or the mutability")
+    if "mut" in options:
+        # edit_ff leaves a parameter that training does not change as it is
+        # unless it is forced, also when that is what is to be changed: from
+        # Fixed to Bounded it would do nothing
+        options.setdefault("force", True)
     return options
 
 

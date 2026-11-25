@@ -715,11 +715,43 @@ class PageTest(unittest.TestCase):
         self.click('#g-qmodel button[data-v="P+G"]')
         self.assertTrue(self.browser.find_element(
             By.CSS_SELECTOR, '#g-types input[data-name="cl"][data-key="vsite"]').is_selected())
-        self.click('#g-vsites input[data-name="vsite2_halogen_sigma_holes"]')
+        # The predefined virtual sites are chosen in the tab Virtual sites,
+        # with what they are, the charge of a site and which of the sites
+        # have Van der Waals parameters
+        self.assertIn("None", self.text("#g-ownsites"))
+        self.assertIn("have none", self.text("#g-vdwsites"))
+        self.click("#g-tovsites")
+        self.assertTrue(self.browser.find_element(By.ID, "fftab-vsite").is_displayed())
+        self.assertEqual(7, len(self.browser.find_elements(By.CSS_SELECTOR, "#vs-files .vsfile")))
+        self.assertIn("Kriz and van der Spoel", self.text("#vs-files"))
+        self.assertFalse(self.browser.find_element(By.ID, "vs-exchange").is_enabled())
+        self.assertFalse(self.browser.find_element(By.ID, "vs-stale").is_displayed())
+        self.assertEqual(("-4", "4"), tuple(self.browser.find_element(By.ID, name)
+                                              .get_attribute("value")
+                                              for name in ("vs-qmin", "vs-qmax")))
+
+        def offered():
+            return self.browser.execute_script(
+                "return [...document.querySelectorAll('#vs-vdw label')]"
+                ".map(l => l.textContent.trim())")
+        # The second charges of the four atom types can have them as well
+        self.assertEqual(["Second charges of the atoms (4)"], offered())
+        self.click('#vs-files input[data-name="vsite2_halogen_sigma_holes"]')
+        self.assertEqual("1 of 7", self.text("#vs-nfiles"))
+        self.assertTrue(self.browser.find_element(By.ID, "vs-exchange").is_enabled())
+        self.assertEqual(["v2f1", "v2cl1", "v2br1", "v2i1", "Second charges of the atoms (4)"],
+                         offered())
+        self.assertTrue(self.browser.find_element(By.ID, "vs-stale").is_displayed())
+        self.click('#vs-vdw input[data-site="v2cl1"]')
+        self.shot("11b-ff-predefined-sites")
+        self.click('#fftabs button[data-tab="gen"]')
+        self.assertIn("1 predefined set", self.text("#g-ownsites"))
+        self.assertIn("Virtual sites: v2cl1", self.text("#g-vdwsites"))
         self.shot("11-ff-choices")
         self.click("#run-gen")
         self.wait(lambda b: b.find_element(By.ID, "gen-pill").text == "Done")
         self.assertEqual("", self.errors())
+        self.assertFalse(self.browser.find_element(By.ID, "vs-stale").is_displayed())
         chips = self.text("#ffchips")
         self.assertIn("New force field", chips)
         self.assertIn("polarizable", chips)
@@ -737,6 +769,14 @@ class PageTest(unittest.TestCase):
         table = self.saved_file("#g-save-f", "atomtypes.csv", "#atomtype|")
         self.assertEqual(["v2f1", "v2cl1", "v2br1", "v2i1", "hc", "c3", "c3_s", "o1", "cl"],
                          [line.split("|")[0] for line in table.splitlines()[1:]])
+        header = table.splitlines()[0].split("|")
+        made_rows = {line.split("|")[0]: dict(zip(header, line.split("|")))
+                     for line in table.splitlines()[1:]}
+        # The charge of a site has either sign; only the site that was ticked
+        # has Van der Waals parameters that are trained
+        self.assertEqual(("-4", "4"), (made_rows["v2f1"][":q:min"], made_rows["v2f1"][":q:max"]))
+        self.assertEqual(("Bounded", "Fixed"), (made_rows["v2cl1"]["VANDERWAALS:epsilon:mut"],
+                                                made_rows["v2f1"]["VANDERWAALS:epsilon:mut"]))
         # The name that is proposed can be changed, and a save can be cancelled
         self.saved_file("#g-save-vs", "vsites.json", "{", rename="halogen-sites.json")
         self.click("#g-save-vs")
@@ -794,6 +834,45 @@ class PageTest(unittest.TestCase):
         self.assertEqual("", self.errors())
         charge = self.parameter_rows()[kinds.index("charge")]
         self.assertAlmostEqual(before - 1.5, float(charge[4].replace("\u2212", "-")), places=6)
+        # A parameter that training does not change can be made one that it does
+        self.show_parameters("VANDERWAALS", "v2f1")
+        rows = self.parameter_rows()
+        epsilon = [row[1] for row in rows].index("epsilon")
+        self.assertEqual("Fixed", rows[epsilon][7])
+        self.browser.execute_script(
+            "document.querySelectorAll('#p-table tbody tr')[arguments[0]].click()", epsilon)
+        self.assertIn("Training does not change", self.text("#p-note"))
+        Select(self.browser.find_element(By.ID, "p-mut")).select_by_value("Bounded")
+        self.assertIn("it will, within the bounds", self.text("#p-note"))
+        self.click("#p-apply")
+        self.wait(lambda b: "(3 changes)" in b.find_element(By.ID, "ffchips").text)
+        self.assertEqual("", self.errors())
+        self.assertEqual("Bounded", self.parameter_rows()[epsilon][7])
+        # Another choice of sites is told, and the force field is made again
+        # from the tab where they are chosen
+        self.click('#fftabs button[data-tab="vsite"]')
+        self.assertFalse(self.browser.find_element(By.ID, "vs-stale").is_displayed())
+        self.click('#vs-vdw input[data-site="v2f1"]')
+        self.assertTrue(self.browser.find_element(By.ID, "vs-stale").is_displayed())
+        low = self.browser.find_element(By.ID, "vs-qmin")
+        low.clear()
+        low.send_keys("-1.5")
+        self.assertFalse(self.browser.find_element(By.ID, "vs-regeo-label").is_displayed())
+        self.click("#vs-gen")
+        self.wait(lambda b: b.find_element(By.ID, "vs-pill").text == "Done")
+        self.assertEqual("", self.errors())
+        self.assertFalse(self.browser.find_element(By.ID, "vs-stale").is_displayed())
+        self.assertNotIn("change", self.text("#ffchips"))
+        self.shot("12b-ff-sites-generated")
+        self.click('#fftabs button[data-tab="gen"]')
+        table = self.saved_file("#g-save-f", "atomtypes.csv", "#atomtype|")
+        made_rows = {line.split("|")[0]: dict(zip(header, line.split("|")))
+                     for line in table.splitlines()[1:]}
+        self.assertEqual(("-1.5", "4"), (made_rows["v2f1"][":q:min"], made_rows["v2f1"][":q:max"]))
+        self.assertEqual(("Bounded", "Bounded", "Fixed"),
+                         tuple(made_rows[name]["VANDERWAALS:epsilon:mut"]
+                               for name in ("v2cl1", "v2f1", "v2br1")))
+        self.click('#fftabs button[data-tab="edit"]')
         self.show_parameters("@particles", "no such type")
         self.assertIn("No type", self.text("#p-empty"))
 
@@ -893,6 +972,7 @@ class PageTest(unittest.TestCase):
         # The force field is made with it, if it has the types of these atoms
         self.click('#fftabs button[data-tab="gen"]')
         self.assertIn("1 of your own", self.text("#g-ownsites"))
+        self.assertNotIn("predefined", self.text("#g-ownsites"))
         self.click("#g-none")
         for atomtype in sorted(set(types) | {"hc"}):
             self.click('#g-types input[data-name="%s"][data-key="on"]' % atomtype)
@@ -1003,6 +1083,23 @@ class PageTest(unittest.TestCase):
             sigma = [r for r in self.parameter_rows() if r[1] == "sigma"][0]
             self.assertEqual("0.35", sigma[2])
             self.assertIn("Fixed", sigma)
+            # It can be given back to the training, which needs room for it
+            index = [r[1] for r in self.parameter_rows()].index("sigma")
+            self.browser.execute_script(
+                "document.querySelectorAll('#p-table tbody tr')[arguments[0]].click()", index)
+            Select(self.browser.find_element(By.ID, "p-mut")).select_by_value("Bounded")
+            self.assertIn("minimum and the maximum are the same", self.text("#p-note"))
+            for name, value in (("p-min", "0.3"), ("p-max", "0.4")):
+                box = self.browser.find_element(By.ID, name)
+                box.clear()
+                box.send_keys(value)
+            self.assertIn("it will, within the bounds", self.text("#p-note"))
+            self.click("#p-apply")
+            self.wait(lambda b: "(1 change)" in b.find_element(By.ID, "ffchips").text)
+            self.assertEqual("", self.errors())
+            sigma = self.parameter_rows()[index]
+            self.assertEqual(("0.35", "0.3", "0.4", "Bounded"),
+                             (sigma[2], sigma[4], sigma[5], sigma[7]))
             # A parameter that the type does not have
             self.click('#fftabs button[data-tab="gen"]')
             other = Path(tmp) / "kappa.csv"
@@ -1281,6 +1378,28 @@ class PageTest(unittest.TestCase):
         self.confirm_save("geometry_ff.log")
         self.wait(lambda b: log.is_file() and log.stat().st_size > 0)
         self.assertIn("Cannot find atomtype", log.read_text(errors="replace"))
+        # With other virtual sites the force field is made again in the tab
+        # where they are chosen, and the geometries are extracted again from
+        # the same file; here that file does not fit, which is said
+        self.click('#fftabs button[data-tab="vsite"]')
+        again = self.browser.find_element(By.ID, "vs-regeo-label")
+        self.assertTrue(again.is_displayed())
+        self.assertIn("from molprop.xml", again.text)
+        self.assertTrue(self.browser.find_element(By.ID, "vs-regeo").is_selected())
+        self.click('#vs-files input[data-name="vsite3_water_bisector"]')
+        self.assertTrue(self.browser.find_element(By.ID, "vs-stale").is_displayed())
+        self.click("#vs-gen")
+        self.wait(lambda b: b.find_element(By.ID, "vs-pill").text.startswith("Made, but"))
+        self.assertIn("None of the compounds", self.errors())
+        self.assertFalse(self.browser.find_element(By.ID, "vs-stale").is_displayed())
+        self.click('#fftabs button[data-tab="gen"]')
+        self.assertIn("VSITE3S", self.text("#g-inter"))
+        # Without the box only the force field is made
+        self.click('#fftabs button[data-tab="vsite"]')
+        self.click("#vs-regeo")
+        self.click("#vs-gen")
+        self.wait(lambda b: b.find_element(By.ID, "vs-pill").text == "Done")
+        self.assertEqual("", self.errors())
 
     # --- the molprop workspace ---
 
