@@ -1114,6 +1114,66 @@ class PageTest(unittest.TestCase):
             self.click("#g-fixed li button")
         self.assertEqual("", self.text("#g-fixed"))
 
+    def test_5d_force_constants_of_the_shells(self):
+        """!
+        @brief A force field is made with a fixed force constant of its
+        shells, from which the charge of the shell follows; the edit tab
+        shows it, releases it and fixes it again with alpha following.
+        """
+        self.open_force_fields()
+        # Without the sites of the tests before
+        self.click('#fftabs button[data-tab="vsite"]')
+        while self.browser.find_elements(By.CSS_SELECTOR, "#vs-list li button"):
+            self.click("#vs-list li button")
+        self.click('#fftabs button[data-tab="gen"]')
+        self.click("#g-none")
+        for name in ("hc", "c3"):
+            self.click('#g-types input[data-name="%s"][data-key="on"]' % name)
+        self.click('#g-types input[data-name="c3"][data-key="shell"]')
+        # The field of the force constant is only there if it is fixed
+        self.assertFalse(self.browser.find_element(By.ID, "g-kshell-field").is_displayed())
+        Select(self.browser.find_element(By.ID, "g-kshell-follows")).select_by_value("charge")
+        self.assertTrue(self.browser.find_element(By.ID, "g-kshell-field").is_displayed())
+        self.browser.find_element(By.ID, "g-kshell").send_keys("300000")
+        self.click("#run-gen")
+        self.wait(lambda b: b.find_element(By.ID, "gen-pill").text in ("Done", "Failed"))
+        self.assertEqual("", self.errors())
+        self.assertEqual("Done", self.text("#gen-pill"))
+        # The edit tab tells how it is
+        self.click('#fftabs button[data-tab="edit"]')
+        self.assertTrue(self.browser.find_element(By.ID, "k-card").is_displayed())
+        self.assertIn("c3_s: 300000 kJ/mol nm², the charge follows", self.text("#k-state"))
+        self.assertEqual(["c3_s"], self.browser.execute_script(
+            "return [...document.querySelectorAll('#k-types input')].map(b => b.dataset.name)"))
+        self.assertTrue(self.browser.find_element(By.ID, "k-apply").is_enabled())
+        self.shot("13b-ff-shells")
+        # Released, there is no force constant to give
+        Select(self.browser.find_element(By.ID, "k-action")).select_by_value("release")
+        self.assertFalse(self.browser.find_element(By.ID, "k-value-field").is_displayed())
+        self.click("#k-apply")
+        self.wait(lambda b: "(1 change)" in b.find_element(By.ID, "ffchips").text)
+        self.assertEqual("", self.errors())
+        self.assertIn("Each force constant follows", self.text("#k-state"))
+        # Fixed again, at another value, with the polarizability following
+        Select(self.browser.find_element(By.ID, "k-action")).select_by_value("alpha")
+        self.assertTrue(self.browser.find_element(By.ID, "k-value-field").is_displayed())
+        self.browser.find_element(By.ID, "k-value").send_keys("500000")
+        self.click("#k-apply")
+        self.wait(lambda b: "(2 changes)" in b.find_element(By.ID, "ffchips").text)
+        self.assertEqual("", self.errors())
+        self.assertIn("c3_s: 500000 kJ/mol nm², the polarizability follows", self.text("#k-state"))
+        self.show_parameters("POLARIZATION", "c3_s")
+        alpha = [r for r in self.parameter_rows() if r[1] == "alpha"][0]
+        self.assertIn("Dependent", alpha)
+        # A force field without shells has no such card
+        self.click('#fftabs button[data-tab="gen"]')
+        self.click('#g-types input[data-name="c3"][data-key="shell"]')
+        Select(self.browser.find_element(By.ID, "g-kshell-follows")).select_by_value("no")
+        self.click("#run-gen")
+        self.wait(lambda b: b.find_element(By.ID, "gen-pill").text in ("Done", "Failed"))
+        self.click('#fftabs button[data-tab="edit"]')
+        self.assertFalse(self.browser.find_element(By.ID, "k-card").is_displayed())
+
     def test_6_change_a_force_field_and_use_it(self):
         """!
         @brief The default force field is opened, one parameter is fixed,

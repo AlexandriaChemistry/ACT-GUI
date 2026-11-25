@@ -379,6 +379,52 @@ class RealProgramTest(unittest.TestCase):
             chi = self.parameter(real, "ELECTRONEGATIVITYEQUALIZATION", identifier, "chi")
             self.assertAlmostEqual(6.5, chi["value"], places=5)
 
+    def kshell(self, job, shell):
+        """!
+        @brief The force constant of a shell type and what follows from it.
+        @param job   A job with a description of a force field.
+        @param shell The shell type.
+        @return The force constant, None if it is not fixed, and the
+        mutabilities of alpha and of the charge of the shell.
+        """
+        k = self.parameter(job, "POLARIZATION", shell, "kshell")
+        alpha = self.parameter(job, "POLARIZATION", shell, "alpha")
+        charge = None
+        for ptype in job["result"]["forcefield"]["particletypes"]["types"]:
+            if ptype["identifier"] == shell:
+                charge = [p for p in ptype["parameters"] if p["type"] == "charge"][0]
+        fixed = k is not None and k["mutability"] != "Dependent"
+        return (k["value"] if fixed else None, alpha["mutability"], charge["mutability"])
+
+    def test_force_constants_of_the_shells(self):
+        """!
+        @brief A force field made with fixed force constants of the shells,
+        which are then released and fixed again at another value.
+        """
+        made = self.run_task({"task": "gen_ff", "generator": {
+            "atomtypes": [{"name": "c3", "shell": True}, {"name": "hc"}],
+            "shells": {"follows": "charge", "kshell": 300000}}})
+        self.assertEqual("finished", made["status"], made["error"])
+        self.assertTrue(made["result"]["validation"]["ok"])
+        k, alpha, charge = self.kshell(made, "c3_s")
+        self.assertAlmostEqual(300000, k, places=3)
+        self.assertEqual(("Bounded", "Dependent"), (alpha, charge))
+        released = self.run_task({"task": "ff_shells", "forcefield": {"job": made["id"]},
+                                  "options": {"fixkshell": "release"}})
+        self.assertEqual("finished", released["status"], released["error"])
+        self.assertTrue(released["result"]["changed"])
+        self.assertEqual((None, "Bounded", "Fixed"), self.kshell(released, "c3_s"))
+        fixed = self.run_task({"task": "ff_shells", "forcefield": {"job": released["id"]},
+                               "options": {"fixkshell": "alpha", "a": ["c3_s"], "kshell": 500000}})
+        self.assertEqual("finished", fixed["status"], fixed["error"])
+        k, alpha, charge = self.kshell(fixed, "c3_s")
+        self.assertAlmostEqual(500000, k, places=3)
+        self.assertEqual(("Dependent", "Fixed"), (alpha, charge))
+        # A type that is no shell is refused by edit_ff
+        wrong = self.run_task({"task": "ff_shells", "forcefield": {"job": made["id"]},
+                               "options": {"fixkshell": "alpha", "a": ["c3"]}})
+        self.assertEqual("failed", wrong["status"])
+
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_geometry_from_a_molprop_file(self):
         """!

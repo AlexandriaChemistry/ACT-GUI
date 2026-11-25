@@ -307,6 +307,30 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual("", rows["hc"]["POLARIZATION:alpha:min"])
         self.assertEqual("", rows["hc"]["poltype"])
 
+    def test_fixed_force_constant_of_the_shells(self):
+        """!
+        @brief A fixed force constant of the shells is an option of gen_ff,
+        with or without its value; it needs a shell.
+        """
+        shell = [{"name": "c3", "shell": True}, {"name": "hc"}]
+        made = ffgen.build(self.choices(atomtypes=shell), self.types)
+        self.assertNotIn("fixkshell", made.options)
+        made = ffgen.build(self.choices(atomtypes=shell, shells={"follows": "charge"}), self.types)
+        self.assertEqual("charge", made.options["fixkshell"])
+        self.assertNotIn("kshell", made.options)
+        made = ffgen.build(self.choices(atomtypes=shell, shells={"follows": "alpha", "kshell": 3e5}),
+                           self.types)
+        self.assertEqual(("alpha", 3e5), (made.options["fixkshell"], made.options["kshell"]))
+        for wrong in ({"follows": "both"}, {"follows": "no", "kshell": 3e5},
+                      {"follows": "alpha", "kshell": -1}, {"follows": "alpha", "kshell": "3e5"},
+                      {"follows": "alpha", "other": 1}):
+            with self.subTest(wrong=wrong):
+                with self.assertRaises(ffgen.GeneratorError):
+                    self.choices(atomtypes=shell, shells=wrong)
+        # Without a shell there is nothing to fix
+        with self.assertRaises(ffgen.GeneratorError):
+            self.choices(shells={"follows": "alpha"})
+
     def test_second_charge(self):
         """!
         @brief A distributed charge on top of an atom is a second charge of

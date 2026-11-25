@@ -233,8 +233,9 @@ class ApiTest(unittest.TestCase):
         names = [task["name"] for task in tasks]
         self.assertEqual(["charges", "minimize", "nma", "simulate", "openmm", "dimer_scan",
                           "b2", "openmm_run", "gen_ff", "geometry_ff", "ff_describe", "ff_edit",
-                          "ff_repair", "mp_describe", "mp_clean", "evaluate", "train"], names)
-        self.assertEqual(["molecule"] * 8 + ["forcefield"] * 5 + ["molprop"] * 4,
+                          "ff_shells", "ff_repair", "mp_describe", "mp_clean", "evaluate", "train"],
+                         names)
+        self.assertEqual(["molecule"] * 8 + ["forcefield"] * 6 + ["molprop"] * 4,
                          [task["workspace"] for task in tasks])
         # Only the training runs on several processes; the simulation, the
         # scan and the training tell how far they are

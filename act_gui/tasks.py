@@ -229,6 +229,13 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          outputs={"o": "forcefield.xml"},
          downloads=("o",),
          needs=(FORCEFIELD,), forcefield="o", workspace="forcefield"),
+    Task(name="ff_shells", command="edit_ff",
+         title="Fix or release the force constants of the shells",
+         options=("fixkshell", "a", "kshell"),
+         fixed={"json": True},
+         outputs={"o": "forcefield.xml"},
+         downloads=("o",),
+         needs=(FORCEFIELD,), forcefield="o", workspace="forcefield"),
     Task(name="ff_repair", command="edit_ff",
          title="Write a force field without the problems that can be repaired",
          fixed={"json": True, "validate": True},
@@ -331,6 +338,41 @@ def _edit_options(given: Dict[str, Any]) -> Dict[str, Any]:
         # unless it is forced, also when that is what is to be changed: from
         # Fixed to Bounded it would do nothing
         options.setdefault("force", True)
+    return options
+
+
+## What can be done with the force constants of the shells, see the option
+## -fixkshell of edit_ff: fix them with alpha or the charge following, or
+## let them follow from both again
+_SHELL_ACTIONS = ("alpha", "charge", "release")
+
+## The force constants of shells that can be given, in kJ/mol nm2
+_KSHELL_RANGE = ffgen.KSHELL_RANGE
+
+
+def _shell_options(given: Dict[str, Any]) -> Dict[str, Any]:
+    """!
+    @brief Check the options of a change of the force constants of the shells.
+    @param given The options of the request that the task lists: fixkshell,
+    a with the shell types (all if not given) and kshell, the force
+    constant (the current one if not given).
+    @return The options for edit_ff.
+    @throws RequestError if the change is not clear or not accepted.
+    """
+    options = dict(given)
+    if options.get("fixkshell") not in _SHELL_ACTIONS:
+        raise RequestError("Give what to do with the force constants of the shells: %s"
+                           % ", ".join(_SHELL_ACTIONS))
+    if "a" in options:
+        options["a"] = _identifiers(options["a"])
+    if "kshell" in options:
+        value = options["kshell"]
+        if (isinstance(value, bool) or not isinstance(value, (int, float)) or value != value
+                or not _KSHELL_RANGE[0] <= value <= _KSHELL_RANGE[1]):
+            raise RequestError("The force constant must be a number between %g and %g kJ/mol nm2"
+                               % _KSHELL_RANGE)
+        if options["fixkshell"] == "release":
+            raise RequestError("A force constant is only used if it is fixed")
     return options
 
 
@@ -537,6 +579,8 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
         chosen[name] = value
     if task.name == "ff_edit":
         chosen = _edit_options(chosen)
+    elif task.name == "ff_shells":
+        chosen = _shell_options(chosen)
     number = 1
     if task.parallel:
         # The processes, the individuals, and an optimizer that can do with them

@@ -68,5 +68,21 @@ class WholeTextTest(unittest.TestCase):
                     tasks._edit_options(wrong)
 
 
+    def test_change_of_the_force_constants_of_the_shells(self):
+        """!
+        @brief What to do with the force constants of the shells and the
+        shell types go onto the command line of edit_ff.
+        """
+        self.assertEqual({"fixkshell": "charge", "a": "c3_s o3_s", "kshell": 3e5},
+                         tasks._shell_options({"fixkshell": "charge", "a": ["c3_s", "o3_s"],
+                                               "kshell": 3e5}))
+        self.assertEqual({"fixkshell": "release"}, tasks._shell_options({"fixkshell": "release"}))
+        for wrong in ({}, {"fixkshell": "keep"}, {"fixkshell": "alpha", "a": "c3_s\n"},
+                      {"fixkshell": "alpha", "kshell": 0}, {"fixkshell": "alpha", "kshell": True},
+                      {"fixkshell": "release", "kshell": 3e5}):
+            with self.subTest(wrong=wrong):
+                with self.assertRaises(tasks.RequestError):
+                    tasks._shell_options(wrong)
+
 if __name__ == "__main__":
     unittest.main()
