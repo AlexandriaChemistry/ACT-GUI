@@ -16,6 +16,7 @@
  */
 import { $, $$, addLibrary, alertBox, withoutDefault, call, el, fmt, libraryChoice, moveInk, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
 import { css, esc, limits, markPoint, plot, redrawPlots } from "./plot.js";
+import { countExtras, drawExtras, hasClouds, pdbAtoms, pdbFrames } from "./particles.js";
 import { startForceFields } from "./forcefield.js";
 import { startMolprops } from "./molprop.js";
 import { startCluster } from "./cluster.js";
@@ -34,12 +35,15 @@ const state = {
   forcefield: {},       // {} for the default or { ref, label }, ref as the server takes it
   mol: null,            // the molecule that was loaded, see moleculeFrom()
   xyz: null,            // the coordinates shown in the charges tab
+  xyzAll: null,         // the same of all particles, with the shells and virtual sites
+  widths: new Map(),    // the charge distributions of the force fields that were asked for, see the task ff_charges
   min: null,            // result of the minimization
   nma: null,            // result of the normal mode analysis
   sim: { points: [], series: "EPOT", job: null, pdb: null, nsteps: 0 },
   scan: { parts: [], points: [], job: null, running: null, picked: -1, pdb: null },  // the scan of a dimer: its compounds, points and the structure shown
   ui: { style: "ball", colour: "charge", labels: true, tab: "charges", focus: -1, ghost: true, mode: 0,
-        reverse: false },   // reverse: wavenumbers from high to low in the spectrum
+        reverse: false,     // reverse: wavenumbers from high to low in the spectrum
+        sites: false, clouds: false },  // whether the shells and virtual sites, and the charge distributions, are drawn
 };
 
 /* ---------- the server ---------- */
@@ -83,8 +87,9 @@ function savePdf(button, jobId, task, option, series = "", reverse = false) {
  * the atoms with their net charge, that of the atom and its shells, and
  * the bonds between the atoms.
  * @param {object} molecule The object "molecule" of a result.
- * @returns {object} name, formula, charge, atoms, bonds, nshell and index,
- * the position of each atom in the list of particles.
+ * @returns {object} name, formula, charge, atoms, bonds, nshell, index,
+ * the position of each atom in the list of particles, and particles, that
+ * list itself, for what the viewer shows besides the atoms.
  */
 function moleculeFrom(molecule) {
   const particles = molecule.particles;
@@ -103,7 +108,7 @@ function moleculeFrom(molecule) {
   const bonds = molecule.bonds.filter(b => local.has(b.atoms[0]) && local.has(b.atoms[1]))
     .map(b => [local.get(b.atoms[0]), local.get(b.atoms[1]), b.order]);
   return { name: molecule.name, formula: molecule.formula, charge: molecule.charge, mass: molecule.mass,
-           atoms, bonds, nshell, index };
+           atoms, bonds, nshell, index, particles };
 }
 
 /**
@@ -112,6 +117,59 @@ function moleculeFrom(molecule) {
  * @returns {number[][]} The coordinates of the atoms.
  */
 const atomCoords = coords => state.mol.index.map(i => coords[i].map(v => v * NM));
+
+/**
+ * The coordinates of all particles in Å.
+ * @param {number[][]} coords The coordinates of all particles in nm.
+ * @returns {number[][]} The same in Å.
+ */
+const allCoords = coords => coords.map(c => c.map(v => v * NM));
+
+/**
+ * The charge distributions of the force field of the molecule, if they are
+ * drawn and were fetched.
+ * @returns {object|null} The distributions, see the task ff_charges.
+ */
+const shownWidths = () => (state.ui.clouds && state.mol ? state.widths.get(state.mol.ffkey) || null : null);
+
+/**
+ * Draw the shells, the virtual sites and the charge distributions, as far as they are asked for.
+ * @param {number[][][]} frames For each structure the position of each particle in Å.
+ * @param {number[][]} disp     The displacement of each particle of a vibration, null for none.
+ */
+function extras(frames, disp = null) {
+  if (!frames || !(state.ui.sites || state.ui.clouds)) return;
+  drawn = drawExtras(V, state.mol.particles, frames, { sites: state.ui.sites, widths: shownWidths(), disp });
+}
+
+/** How many shells, virtual sites and charge distributions the viewer shows now. */
+let drawn = { shells: 0, sites: 0, clouds: 0 };
+
+/** Tell under the viewer what the spheres are that are no atoms. */
+function extrasLegend() {
+  const legend = $("#xlegend"), plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  legend.hidden = drawn.shells + drawn.sites + drawn.clouds === 0;
+  $("#xl-shells").hidden = !drawn.shells;
+  $("#xl-sites").hidden = !drawn.sites;
+  $("#xl-clouds").hidden = !drawn.clouds;
+  $("#xl-nshells").textContent = plural(drawn.shells, "shell", "shells");
+  $("#xl-nsites").textContent = plural(drawn.sites, "virtual site", "virtual sites");
+  $("#xl-nclouds").textContent = plural(drawn.clouds, "charge distribution", "charge distributions") + ", radius 1/ζ";
+  // Which tab the viewer shows, when it is drawn
+  legend.dataset.tab = state.ui.tab;
+}
+
+/**
+ * A pdb file of alexandria for the viewer: the positions of all particles
+ * in its structures, and the file with the atoms only, since the viewer
+ * would take a shell or a virtual site for an atom.
+ * @param {string} pdb The file.
+ * @returns {object} frames, null if the file has the atoms only, and atoms, the file for the viewer.
+ */
+function pdbParts(pdb) {
+  const frames = pdbFrames(pdb, state.mol.particles.length);
+  return { frames, atoms: frames ? pdbAtoms(pdb, state.mol.particles) : pdb };
+}
 
 /**
  * The largest charge on an atom, for the colour scale.
@@ -206,6 +264,7 @@ function scene() {
   if (!V) return;
   V.stopAnimate(); V.removeAllModels(); V.removeAllShapes(); V.removeAllLabels();
   V.setBackgroundColor(css("--stage"));
+  drawn = { shells: 0, sites: 0, clouds: 0 };
   const s = chargeScale();
   $("#qlo").textContent = `−${s.toFixed(1)} e`;
   $("#qhi").textContent = `+${s.toFixed(1)} e`;
@@ -217,6 +276,7 @@ function scene() {
     m.frames = [m.atoms];   // vibrate() needs a first frame
     m.setStyle({}, styleSpec());
     m.vibrate(12, 0.55, true, V, { radius: 0.06, radiusRatio: 2.2, mid: 0.7, color: css("--accent") });
+    extras([allCoords(state.nma.coordinates.minimized)], mode.displacements);
     V.animate({ loop: "backAndForth", interval: 45 });
   } else if (ui.tab === "minimize" && state.min) {
     const x = state.min.coordinates;
@@ -229,21 +289,26 @@ function scene() {
     m.addAtoms(viewerAtoms(atomCoords(x.after)));
     m.setStyle({}, styleSpec());
     labelAtoms(atomCoords(x.after));
+    extras([allCoords(x.after)]);
   } else if (ui.tab === "scan" && state.scan.pdb) {
     // The minimized dimer at the distance that was clicked
-    const m = V.addModel(state.scan.pdb, "pdb", { keepH: true });
+    const parts = pdbParts(state.scan.pdb);
+    const m = V.addModel(parts.atoms, "pdb", { keepH: true });
     m.selectedAtoms({}).forEach((at, i) => { if (state.mol.atoms[i]) at.properties = { ...at.properties, charge: state.mol.atoms[i].q }; });
     m.setStyle({}, styleSpec());
     scanAtoms(m.selectedAtoms({}).map(at => [at.x, at.y, at.z]));
+    extras(parts.frames);
   } else if (ui.tab === "simulate" && state.sim.pdb) {
     // The viewer leaves out the hydrogen atoms of a pdb file unless told otherwise
-    const m = V.addModelsAsFrames(state.sim.pdb, "pdb", { keepH: true });
+    const parts = pdbParts(state.sim.pdb);
+    const m = V.addModelsAsFrames(parts.atoms, "pdb", { keepH: true });
     // The trajectory has the atoms in the order of the molecule, in every frame
     const frames = m.frames && m.frames.length ? m.frames : [m.selectedAtoms({})];
     frames.forEach(frame => {
       if (Array.isArray(frame)) frame.forEach((at, i) => { if (state.mol.atoms[i]) at.properties = { ...at.properties, charge: state.mol.atoms[i].q }; });
     });
     m.setStyle({}, styleSpec());
+    extras(parts.frames);
     V.animate({ loop: "forward", interval: 70 });
   } else {
     const m = V.addModel();
@@ -255,9 +320,11 @@ function scene() {
       V.addSphere({ center: { x: c[0], y: c[1], z: c[2] }, radius: 0.62, color: css("--accent"), opacity: 0.35 });
     }
     if (ui.tab === "scan") scanAtoms(state.xyz);
+    extras([state.xyzAll]);
   }
   if (!zoomed) { V.zoomTo(); V.zoom($("#gl").clientWidth < 500 ? 0.9 : 1.15); zoomed = true; }
   V.render();
+  extrasLegend();
 }
 
 /* ---------- loading a molecule ---------- */
@@ -281,6 +348,38 @@ function chips() {
   add("net charge", `${m.charge} e`);
   add("mass", `${m.mass.value.toFixed(2)} ${m.mass.unit}`);
   add("force field", state.forcefield.label || state.defaultForcefield);
+}
+
+/** Offer to show what the molecule has besides its atoms, and fetch what that needs. */
+function extraChoices() {
+  const found = countExtras(state.mol.particles), any = found.shells + found.sites > 0;
+  // Without shells and virtual sites there is nothing to switch on
+  $("#extras-label").hidden = !any;
+  $("#extras-text").textContent = found.shells && found.sites ? "Shells and sites" : found.sites ? "Virtual sites" : "Shells";
+  if (!any) { state.ui.sites = false; $("#extras").checked = false; }
+  $("#clouds-label").hidden = false;
+  if (state.ui.clouds) fetchWidths();
+}
+
+/**
+ * Fetch the charge distributions of the force field of the molecule, once
+ * for each force field, and draw them. A force field with point charges
+ * has none, which is told.
+ */
+async function fetchWidths() {
+  const mol = state.mol;
+  if (!mol || state.widths.has(mol.ffkey)) return;
+  const box = $("#clouds");
+  box.disabled = true;
+  try {
+    const job = await runTask({ task: "ff_charges", forcefield: mol.ffref });
+    state.widths.set(mol.ffkey, job.result);
+    if (!hasClouds(job.result)) toast("This force field has point charges, which have no distribution to show.");
+  } catch (e) {
+    state.ui.clouds = false; box.checked = false;
+    alertBox("The charge distributions of the force field could not be fetched. " + e.message);
+  } finally { box.disabled = false; }
+  if (state.mol === mol) scene();
 }
 
 /** Fill the table of charges. */
@@ -338,7 +437,12 @@ async function loadMolecule() {
     const job = await runJob("charges");
     const compound = job.result.molecules[0];
     state.mol = moleculeFrom(compound.molecule);
+    // The force field that the molecule was made with, for its charge distributions
+    state.mol.ffref = state.forcefield.ref || { default: true };
+    state.mol.ffkey = JSON.stringify(state.mol.ffref);
     state.xyz = atomCoords(compound.coordinates.positions);
+    state.xyzAll = allCoords(compound.coordinates.positions);
+    extraChoices();
     resetResults();
     chips(); chargeTable();
     for (const id of ["run-min", "run-nma", "run-sim", "run-omm"]) document.getElementById(id).disabled = false;
@@ -830,6 +934,12 @@ async function openmmPackage() {
 seg($("#style"), v => { state.ui.style = v; scene(); });
 seg($("#colour"), v => { state.ui.colour = v; scene(); });
 $("#labels").onchange = e => { state.ui.labels = e.target.checked; scene(); };
+$("#extras").onchange = e => { state.ui.sites = e.target.checked; scene(); };
+$("#clouds").onchange = e => {
+  state.ui.clouds = e.target.checked;
+  if (state.ui.clouds && state.mol && !state.widths.has(state.mol.ffkey)) fetchWidths();
+  else scene();
+};
 $("#ghost").onchange = e => { state.ui.ghost = e.target.checked; scene(); };
 $("#reset").onclick = () => { zoomed = false; scene(); };
 $("#qtable").onclick = e => {

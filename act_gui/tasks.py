@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import dimerscan, evaluation, ffgen, geometry, library, training, virial
+from . import dimerscan, evaluation, ffgen, geometry, library, particles, training, virial
 from .jobs import InputFile
 from .settings import Settings
 from .uploads import UploadStore
@@ -170,7 +170,9 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          title="Molecular dynamics simulation",
          options=_CHARGE_OPTIONS + ("nsteps", "deltat", "temp", "nstener", "nstxout",
                                     "seed", "minimize", "constrain"),
-         fixed={"json": True},
+         # With the shells and the virtual sites in the trajectory and the
+         # last structure, which the viewer of the page shows when asked
+         fixed={"json": True, "ws": True},
          outputs={"c": "final.pdb"},
          progress=True,
          downloads=("o", "e", "c", "g"),
@@ -200,6 +202,11 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          downloads=OPENMM_FILES,
          plots=("energy", "temperature"),
          needs=(), cluster=True, cluster_only=True),
+    # The widths of the charges of a force field, for the viewer of a molecule
+    Task(name="ff_charges", command="edit_ff",
+         title="The charge distributions of a force field",
+         fixed={"json": True},
+         needs=(FORCEFIELD,), digest=particles.digest),
     # --- the force field workspace ---
     Task(name="gen_ff", command="gen_ff",
          title="Generate a force field",
