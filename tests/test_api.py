@@ -24,6 +24,7 @@ from act_gui.plots import PlotError
 from act_gui.settings import Settings
 from act_gui.tasks import TASKS
 from tests.test_jobs import FakeRun
+from tests.test_evaluation import ION_WATER
 from tests.test_uploads import FF, MP, SDF
 
 
@@ -233,9 +234,10 @@ class ApiTest(unittest.TestCase):
         names = [task["name"] for task in tasks]
         self.assertEqual(["charges", "minimize", "nma", "simulate", "openmm", "dimer_scan",
                           "b2", "openmm_run", "ff_charges", "gen_ff", "geometry_ff", "ff_describe",
-                          "ff_edit", "ff_repair", "mp_describe", "mp_clean", "evaluate", "train"],
+                          "ff_edit", "ff_repair", "mp_describe", "mp_particles", "mp_clean",
+                          "evaluate", "train"],
                          names)
-        self.assertEqual(["molecule"] * 9 + ["forcefield"] * 5 + ["molprop"] * 4,
+        self.assertEqual(["molecule"] * 9 + ["forcefield"] * 5 + ["molprop"] * 5,
                          [task["workspace"] for task in tasks])
         # Only the training runs on several processes; the simulation, the
         # scan and the training tell how far they are
@@ -728,6 +730,51 @@ class ApiTest(unittest.TestCase):
             answer = self.client.post("/api/jobs", headers=self.headers, json=body)
             self.assertEqual(400, answer.status_code, body)
         self.assertEqual(1, len(self.run.calls))
+
+    def test_particles_of_a_calculation(self):
+        """!
+        @brief gentop gets a calculation of the molprop file as an SDF file
+        with the force field of the comparison, to make its shells and
+        virtual sites. The force field has to be given, and the calculation
+        has to be in the file.
+        """
+        molprop = self.upload("mols.xml", "molprop", ION_WATER.encode()).json()["id"]
+        forcefield = self.upload("my.xml", "forcefield", FF).json()["id"]
+        calculation = {"molprop": molprop, "compound": "water#sodium", "datafile": "0719"}
+        answer = self.client.post("/api/jobs", headers=self.headers, json={
+            "task": "mp_particles", "forcefield": {"file": forcefield},
+            "calculation": calculation})
+        self.assertEqual(200, answer.status_code, answer.text)
+        self.wait(answer.json()["id"])
+        call = self.run.calls[-1]
+        self.assertEqual("gentop", call["command"])
+        options = call["options"]
+        self.assertEqual(self.settings.uploads_dir / (forcefield + ".xml"), options["ff"])
+        self.assertTrue(options["json"])
+        self.assertEqual("calculation.sdf", options["f"].name)
+        self.assertEqual("particles.pdb", options["c"].name)
+        self.assertIn("M  CHG  1   4   1", options["f"].read_text())
+        ncalls = len(self.run.calls)
+        wrong = [
+            {"task": "mp_particles", "calculation": calculation},
+            {"task": "mp_particles", "forcefield": {"file": forcefield}},
+            {"task": "mp_particles", "forcefield": {"file": forcefield},
+             "calculation": dict(calculation, molprop=forcefield)},
+            {"task": "mp_particles", "forcefield": {"file": forcefield},
+             "calculation": dict(calculation, datafile="9999")},
+            {"task": "mp_particles", "forcefield": {"file": forcefield},
+             "calculation": dict(calculation, compound=None)},
+            {"task": "mp_particles", "forcefield": {"file": forcefield},
+             "calculation": dict(calculation, compound="x" * 301)},
+            {"task": "mp_particles", "forcefield": {"file": forcefield},
+             "calculation": "water#sodium"},
+            {"task": "mp_particles", "forcefield": {"file": forcefield},
+             "calculation": calculation, "options": {"db": "water"}},
+        ]
+        for body in wrong:
+            answer = self.client.post("/api/jobs", headers=self.headers, json=body)
+            self.assertEqual(400, answer.status_code, body)
+        self.assertEqual(ncalls, len(self.run.calls))
 
     def test_geometry_with_an_older_program(self):
         """!

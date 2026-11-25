@@ -465,6 +465,49 @@ class RealProgramTest(unittest.TestCase):
     # --- the molprop workspace ---
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_particles_of_calculations(self):
+        """!
+        @brief The particles of a polarizable force field for structures of
+        a molprop file: an ion with water, with shells and virtual sites,
+        and a charged compound with water. Each compound keeps its charge
+        and the atoms keep their order.
+        """
+        def send(directory, name, kind):
+            """Upload a file of the test data of ACT"""
+            answer = self.client.post("/api/uploads", params={"kind": kind, "name": name},
+                                      content=(Path(TESTDATA) / directory / name).read_bytes(),
+                                      headers=self.headers)
+            self.assertEqual(200, answer.status_code, answer.text)
+            return answer.json()["id"]
+        for molprop, forcefield, compound, datafile, charge, sites in (
+                ("ion-water.xml", "PG-pol-ions.xml", "water#sodium", "0719", 1, True),
+                ("ion-water.xml", "PG-pol-ions.xml", "water#chloride", None, -1, True),
+                ("mpdimer.xml", "ACS-pol.xml", "guanidinium#water", None, 1, False)):
+            mine = send("molprop", molprop, "molprop")
+            if datafile is None:
+                text = (Path(TESTDATA) / "molprop" / molprop).read_text(encoding="latin-1")
+                start = text.index('molname="%s"' % compound)
+                datafile = text[text.index('datafile="', start) + 10:].split('"')[0]
+            job = self.run_task({"task": "mp_particles",
+                                 "forcefield": {"file": send("forcefields", forcefield, "forcefield")},
+                                 "calculation": {"molprop": mine, "compound": compound,
+                                                 "datafile": datafile}})
+            self.assertEqual("finished", job["status"], (compound, job["error"]))
+            made = job["result"]["molecules"]
+            self.assertEqual(1, len(made), compound)
+            particles = made[0]["molecule"]["particles"]
+            self.assertAlmostEqual(charge, sum(p["charge"] + p.get("charge_vs", 0)
+                                               for p in particles), places=3)
+            kinds = {p["particletype"] for p in particles}
+            self.assertIn("Shell", kinds, compound)
+            self.assertEqual(sites, "VSite" in kinds, compound)
+            self.assertEqual(len(particles), len(made[0]["coordinates"]["positions"]))
+            atoms = self.client.get("/api/molprops/%s/structure" % mine, headers=self.headers,
+                                    params={"molecule": compound, "calculation": datafile}).json()
+            self.assertEqual([a["element"] for a in atoms["atoms"]],
+                             [p["element"] for p in particles if p["particletype"] == "Atom"])
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_describe_molprop_files(self):
         """!
         @brief The content of a file with monomers and of one with dimers,
