@@ -222,8 +222,9 @@ def run_scan(run: Callable[..., Any], command: str, *, workdir: "os.PathLike[str
         here.mkdir(parents=True, exist_ok=True)
         begin = here / "start.pdb"
         begin.write_text(placed(atoms, scan["atom1"], scan["atom2"], distance))
+        # The structure with the shells and the virtual sites, for the viewer
         extra: Dict[str, Any] = {"freeze": freeze, "c": here / STRUCTURE, "json": True,
-                                 "toler": TOLERANCE}
+                                 "toler": TOLERANCE, "ws": True}
         if scan["constrain"]:
             extra["constrain"] = "bonds"
         point: Dict[str, Any] = {"index": index, "distance": distance}

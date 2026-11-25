@@ -232,10 +232,11 @@ class ApiTest(unittest.TestCase):
         tasks = self.client.get("/api/tasks", headers=self.headers).json()["tasks"]
         names = [task["name"] for task in tasks]
         self.assertEqual(["charges", "minimize", "nma", "simulate", "openmm", "dimer_scan",
-                          "b2", "openmm_run", "gen_ff", "geometry_ff", "ff_describe", "ff_edit",
-                          "ff_shells", "ff_repair", "mp_describe", "mp_clean", "evaluate", "train"],
+                          "b2", "openmm_run", "ff_charges", "gen_ff", "geometry_ff", "ff_describe",
+                          "ff_edit", "ff_shells", "ff_repair", "mp_describe", "mp_clean", "evaluate",
+                          "train"],
                          names)
-        self.assertEqual(["molecule"] * 8 + ["forcefield"] * 6 + ["molprop"] * 4,
+        self.assertEqual(["molecule"] * 9 + ["forcefield"] * 6 + ["molprop"] * 4,
                          [task["workspace"] for task in tasks])
         # Only the training runs on several processes; the simulation, the
         # scan and the training tell how far they are
@@ -250,8 +251,9 @@ class ApiTest(unittest.TestCase):
                        "statistics": ["INTERACTION"], "plots": ["INTERACTION"]},
                       session["observables"])
         self.assertEqual(["molecule", "forcefield", "scan"], tasks[5]["needs"])
-        self.assertEqual(["generator"], tasks[8]["needs"])
-        self.assertEqual(["forcefield", "molprop", "chosen"], tasks[9]["needs"])
+        self.assertEqual(["forcefield"], tasks[8]["needs"])
+        self.assertEqual(["generator"], tasks[9]["needs"])
+        self.assertEqual(["forcefield", "molprop", "chosen"], tasks[10]["needs"])
         # The simulation with OpenMM runs on the cluster only
         refused = self.client.post("/api/jobs", headers=self.headers, json={"task": "openmm_run"})
         self.assertEqual(400, refused.status_code)
@@ -1684,6 +1686,8 @@ class ApiTest(unittest.TestCase):
         job_id = answer.json()["id"]
         job = self.wait(job_id)
         self.assertEqual([0, 1, 2], [p["step"] for p in job["progress"]])
+        # The trajectory has the shells and the virtual sites, for the viewer
+        self.assertIs(True, self.run.calls[-1]["options"]["ws"])
         later = self.client.get("/api/jobs/" + job_id, params={"progress_from": 2},
                                 headers=self.headers).json()
         self.assertEqual([2], [p["step"] for p in later["progress"]])
