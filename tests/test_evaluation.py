@@ -45,6 +45,27 @@ MOLPROP = """<?xml version="1.0" encoding="ISO-8859-1"?>
 </molecules>
 """
 
+## A molprop file with an ion and a water, with the bonds and the charges of the compounds
+ION_WATER = """<?xml version="1.0" encoding="ISO-8859-1"?>
+<molecules>
+  <molecule molname="water#sodium">
+    <fragments>
+      <fragment identifier="InChI=1S/H2O/h1H2" charge="0" formula="H2O"> 1 2 3</fragment>
+      <fragment identifier="InChI=1S/Na/q+1" charge="1" formula="Na"> 4</fragment>
+    </fragments>
+    <molinfo iupac="water#sodium" cas="" cid="" inchi=""/>
+    <bond ai="3" aj="1" bondorder="1"/>
+    <bond ai="2" aj="1" bondorder="1"/>
+    <experiment datafile="0719">
+      <atom name="O" obtype="ow" coord_unit="Angstrom"><x>0.237</x><y>0.010</y><z>-3.084</z></atom>
+      <atom name="H" obtype="hw" coord_unit="Angstrom"><x>-0.344</x><y>0.740</y><z>-3.351</z></atom>
+      <atom name="H" obtype="hw" coord_unit="Angstrom"><x>-0.304</x><y>-0.767</y><z>-2.870</z></atom>
+      <atom name="Na" obtype="Na+" coord_unit="Angstrom"><x>-0.137</x><y>-0.006</y><z>2.418</z></atom>
+    </experiment>
+  </molecule>
+</molecules>
+"""
+
 ## The result of train_ff for a comparison of dimers and a compound
 RESULT = {"molecules": {
     "0": {"name": "w2", "dataset": "Train", "atoms": {"0": {"fx": 1.0}},
@@ -182,6 +203,36 @@ class EvaluationTest(unittest.TestCase):
             broken.write_text("<molecules><molecule molname=")
             with self.assertRaises(evaluation.EvaluationError):
                 evaluation.structure([broken], "w2", "0007")
+
+    def test_structure_file_of_a_calculation(self):
+        """!
+        @brief A calculation as an SDF file for gentop: its atoms, the bonds
+        of the compound and the charge of each of its compounds.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mp.xml"
+            path.write_text(ION_WATER)
+            text = evaluation.structure_file([path], "water#sodium", "0719")
+            lines = text.splitlines()
+            self.assertEqual("water#sodium", lines[0])
+            self.assertTrue(lines[3].startswith("  4  2"))
+            self.assertEqual(["O", "H", "H", "Na"], [line.split()[3] for line in lines[4:8]])
+            self.assertEqual("    2.4180", lines[7][20:30])
+            self.assertEqual(["  3  1  1  0", "  2  1  1  0"], lines[8:10])
+            self.assertIn("M  CHG  1   4   1", lines)
+            for name, datafile in (("water#sodium", "0001"), ("nothing", "0719")):
+                with self.assertRaises(evaluation.EvaluationError, msg=(name, datafile)):
+                    evaluation.structure_file([path], name, datafile)
+            # A bond that an SDF file cannot have
+            path.write_text(ION_WATER.replace('bondorder="1"/>\n    <experiment',
+                                              'bondorder="1.25"/>\n    <experiment'))
+            with self.assertRaises(evaluation.EvaluationError):
+                evaluation.structure_file([path], "water#sodium", "0719")
+            # Without bonds and compounds: one compound without charge
+            path.write_text(MOLPROP)
+            lines = evaluation.structure_file([path], "w2", "0007").splitlines()
+            self.assertTrue(lines[3].startswith("  6  0"))
+            self.assertNotIn("M  CHG", "\n".join(lines))
 
     def test_selection_of_the_user(self):
         """!
