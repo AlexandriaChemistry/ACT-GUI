@@ -37,7 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__, cluster, cluster_api, evaluation, ffgen, openmm_package, plots, preferences
-from . import dimerscan, geometry, library, training
+from . import dimerscan, geometry, library, shells, training
 from .cluster_queue import ClusterQueue
 from .jobs import FINISHED, JobError, JobManager
 from .settings import PACKAGE_DIR, Settings
@@ -659,8 +659,10 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         task, prepared = prepare(body)
         if task.cluster_only:
             raise fail(400, "%s runs as a job on the cluster only" % task.title)
-        # A scan runs the command once for each distance, as one job
-        runner = functools.partial(dimerscan.run_scan, run) if task.runner == "dimer_scan" else None
+        # A scan runs the command once for each distance, as one job; the
+        # particles of a molecule take gentop and a single point calculation
+        runners = {"dimer_scan": dimerscan.run_scan, "particles": shells.run_particles}
+        runner = functools.partial(runners[task.runner], run) if task.runner else None
         try:
             job = manager.submit(task.name, task.command, prepared.options,
                                  progress=task.progress, outputs=dict(task.outputs),

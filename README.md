@@ -32,7 +32,19 @@ when that is switched on above it:
   transparent sphere around the atom, a halo that moves off the atom when
   the shell does; a virtual site as a small sphere with a dashed line to
   the nearest of the atoms it belongs to. The box is there for a molecule
-  that has them.
+  that has them. The shells are relaxed: each is where the field of the
+  charges around it puts it, a hundredth to a tenth of an Å from its atom,
+  which is the polarization of the atom. That is too little to see, so an
+  arrow from each atom shows where its shell went, magnified; the line in
+  the viewer gives the magnification, such that the longest arrow is about
+  1.5 Å and at most a hundred times, and the largest displacement itself.
+  A shell cannot go further from its atom than the largest distance of
+  the force field, its wall (the option `shellmaxdistance` of the
+  polarization, 0.2 Å if the force field does not give it). A shell that
+  is at the wall is held there instead of by the forces, which often goes
+  with an energy that is far off: its arrow is thicker and, as its halo,
+  in the colour of an error, and the line in the viewer says how many
+  there are.
 - *Charge distributions*: for a force field with Gaussian or Slater
   charges, a transparent sphere on each atom and on each virtual site with
   a charge, with the width of the distribution, 1/zeta, as its radius, red
@@ -49,8 +61,15 @@ trajectory of a simulation and the dimers of a scan, and a line in the
 viewer says how many of each are drawn. For the trajectory and the scan
 `alexandria` writes the shells and virtual sites to the pdb files (the
 option `-ws`), so the trajectory and the last structure that are saved
-have them as well. The viewers of the structures of a molprop file have
-atoms only, since such a file has no shells or sites.
+have them as well. For the structure that is loaded the shells are
+relaxed by a single point calculation, `alexandria simulate -sp -ws`, in
+the same job as `alexandria gentop -json`, which describes the particles
+and leaves the shells on their atoms; if it fails, the shells are shown on
+their atoms, which is said. `gentop` makes a virtual site of the second
+charge of an atom, which the other programs keep on the atom, where the
+page puts it back. The positions come from a pdb file with three decimals
+in Å, so a displacement is known to about 0.002 Å. The arrows are there
+for a structure that stands still, not for a vibration or a trajectory.
 
 The wavenumber axis of the spectrum can be reversed, to run from high to
 low as in measured spectra. The spectrum and the energies can be saved as PDF files, which
@@ -230,10 +249,13 @@ cannot be clicked. Above the 3D view, *Shells and sites* and *Charge
 distributions* show the shells, the virtual sites and the charge
 distributions of the force field that was compared or trained, as in the
 viewer of the molecule, to help understand a point that lies far from the
-line. They are made when a box is ticked, and again for each point that
-is clicked while it is: `alexandria gentop -json` reads the structure as
+line: the shells are relaxed in the field of both compounds, with the
+arrows of their displacements, and those that are at the wall of the
+force field stand out. They are made when a box is ticked, and again for
+each point that is clicked while it is: `alexandria gentop -json` and
+`alexandria simulate -sp -ws` read the structure as
 an SDF file with the bonds of the molprop file and formal charges that add
-up to the charge of each compound, since `gentop` reads a dimer of a
+up to the charge of each compound, since they read a dimer of a
 molprop file only from a structure file. For a comparison that ran on the
 cluster the force field is not known to the page, and the boxes are not
 there. For a compound with several structures, such as a

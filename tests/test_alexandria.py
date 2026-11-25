@@ -13,6 +13,7 @@
 They run when the environment variable ACT_ALEXANDRIA points to the program,
 and are skipped otherwise.
 """
+import math
 import os
 import tempfile
 import time
@@ -183,11 +184,12 @@ class RealProgramTest(unittest.TestCase):
     def test_charge_distributions(self):
         """!
         @brief The kind of distribution and the widths of the particle types
-        of a force field, and not the rest of its description.
+        of a force field, with how far its shells can go, and not the rest
+        of its description.
         """
         job = self.run_task({"task": "ff_charges", "forcefield": {"default": True}})
         self.assertEqual("finished", job["status"], job["error"])
-        self.assertEqual({"distribution", "types"}, set(job["result"]))
+        self.assertEqual({"distribution", "types", "shell_max_distance"}, set(job["result"]))
         self.assertIn(job["result"]["distribution"], ("Gaussian", "Slater", "Point"))
         described = self.run_task({"task": "ff_describe", "forcefield": {"default": True}})
         types = described["result"]["forcefield"]["particletypes"]["types"]
@@ -511,6 +513,65 @@ class RealProgramTest(unittest.TestCase):
     # --- the molprop workspace ---
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_relaxed_shells_and_the_wall(self):
+        """!
+        @brief The shells of a molecule are where a single point calculation
+        puts them, a little away from their atoms, and not further than the
+        largest distance of the force field, its wall.
+        """
+        def displacements(job):
+            """The distance in nm of each shell from its atom, by the name of the shell"""
+            compound = job["result"]["molecules"][0]
+            particles, x = compound["molecule"]["particles"], compound["coordinates"]["positions"]
+            self.assertEqual(len(particles), len(x))
+            return [(p["name"], math.dist(x[k], x[p["parents"][0]]))
+                    for k, p in enumerate(particles) if p["particletype"] == "Shell"]
+
+        def send(name, kind, content):
+            """Upload a file"""
+            answer = self.client.post("/api/uploads", params={"kind": kind, "name": name},
+                                      content=content, headers=self.headers)
+            self.assertEqual(200, answer.status_code, answer.text)
+            return answer.json()["id"]
+        data = Path(TESTDATA)
+        # Ethanol from a SMILES string: the structure that gentop made of it
+        forcefield = {"file": send("ACS-pg1.xml", "forcefield",
+                                   (data / "forcefields" / "ACS-pg1.xml").read_bytes())}
+        job = self.run_task({"task": "charges", "molecule": {"smiles": "CCO"},
+                             "forcefield": forcefield})
+        self.assertEqual("finished", job["status"], job["error"])
+        self.assertEqual({"present": True, "relaxed": True}, job["result"]["molecules"][0]["shells"])
+        moved = displacements(job)
+        self.assertEqual(9, len(moved))
+        for name, distance in moved:
+            self.assertGreater(distance, 5e-4, name)
+            self.assertLess(distance, 0.02, name)
+        told = self.run_task({"task": "ff_charges", "forcefield": forcefield})
+        self.assertEqual(0.02, told["result"]["shell_max_distance"])
+        # A sodium ion close to a water moves the shell of the oxygen by a
+        # tenth of an Angstrom; a wall at half that distance holds it there
+        text = (data / "forcefields" / "PG-pol-ions.xml").read_text(encoding="latin-1")
+        start = text.index('<interaction type="POLARIZATION"')
+        end = text.index(">", start) + 1
+        near = text[:end] + '\n    <option key="shellmaxdistance" value="0.005"/>' + text[end:]
+        molprop = send("ion-water.xml", "molprop", (data / "molprop" / "ion-water.xml").read_bytes())
+        calculation = {"molprop": molprop, "compound": "water#sodium", "datafile": "0514"}
+        found = {}
+        for label, content in (("far", text), ("near", near)):
+            mine = {"file": send(label + ".xml", "forcefield", content.encode("latin-1"))}
+            job = self.run_task({"task": "mp_particles", "forcefield": mine,
+                                 "calculation": calculation})
+            self.assertEqual("finished", job["status"], (label, job["error"]))
+            self.assertTrue(job["result"]["molecules"][0]["shells"]["relaxed"], label)
+            found[label] = dict(displacements(job))["Os"]
+            wall = self.run_task({"task": "ff_charges", "forcefield": mine})
+            self.assertEqual(0.02 if label == "far" else 0.005,
+                             wall["result"]["shell_max_distance"])
+        self.assertGreater(found["far"], 0.008)
+        self.assertLess(found["far"], 0.02)
+        self.assertAlmostEqual(0.005, found["near"], delta=2e-4)
+
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_particles_of_calculations(self):
         """!
         @brief The particles of a polarizable force field for structures of
@@ -548,6 +609,10 @@ class RealProgramTest(unittest.TestCase):
             self.assertIn("Shell", kinds, compound)
             self.assertEqual(sites, "VSite" in kinds, compound)
             self.assertEqual(len(particles), len(made[0]["coordinates"]["positions"]))
+            # The shells are relaxed, and the second charge of an ion is on its atom
+            self.assertEqual({"present": True, "relaxed": True}, made[0]["shells"], compound)
+            self.assertEqual(molprop == "ion-water.xml",
+                             any("charge_vs" in p for p in particles), compound)
             atoms = self.client.get("/api/molprops/%s/structure" % mine, headers=self.headers,
                                     params={"molecule": compound, "calculation": datafile}).json()
             self.assertEqual([a["element"] for a in atoms["atoms"]],

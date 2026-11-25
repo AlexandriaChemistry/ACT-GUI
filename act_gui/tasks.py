@@ -114,8 +114,9 @@ class Task:
     ## Whether the command runs on several processes, with an individual
     ## of the population of train_ff for each
     parallel: bool = False
-    ## A job that runs the command more than once, such as a scan, by the
-    ## name of the function that does it; None for one run of the command
+    ## A job that runs more than one command, such as a scan or a molecule
+    ## of which the shells are relaxed, by the name of the function that
+    ## does it; None for one run of the command
     runner: Optional[str] = None
     ## Whether the command runs on several processes that share the work,
     ## without a population
@@ -150,12 +151,13 @@ _CHARGE_OPTIONS = ("qalg",)
 
 ## The tasks by name
 TASKS: Dict[str, Task] = {task.name: task for task in (
+    # With the shells relaxed by a single point calculation, see shells
     Task(name="charges", command="gentop",
          title="Charges and topology",
          options=_CHARGE_OPTIONS,
          fixed={"json": True},
          outputs={"c": "molecule.pdb"},
-         downloads=("c",)),
+         downloads=("c",), runner="particles"),
     Task(name="minimize", command="minimize",
          title="Energy minimization",
          options=_CHARGE_OPTIONS + ("minalg", "maxiter", "toler"),
@@ -268,7 +270,7 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          title="The particles of a calculation in a molprop file",
          fixed={"json": True},
          outputs={"c": "particles.pdb"},
-         needs=(FORCEFIELD, CALCULATION), workspace="molprop"),
+         needs=(FORCEFIELD, CALCULATION), workspace="molprop", runner="particles"),
     Task(name="mp_clean", command="edit_mp",
          title="Write a molprop file without calculations that are there twice",
          # As it is validated: the calculations that are there twice with
