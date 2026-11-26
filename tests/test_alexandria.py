@@ -181,6 +181,67 @@ class RealProgramTest(unittest.TestCase):
             self.assertTrue(line[12:16].strip().startswith(particle["name"][:4]),
                             (particle["name"], line))
 
+    @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_simulation_with_beads(self):
+        """!
+        @brief A simulation at constant temperature gives averages, the
+        binding energy of a dimer with the distribution of the distance,
+        and the thermochemistry of a compound.
+        """
+        import act  # pylint: disable=import-outside-toplevel
+        if not act.program_info().find_command("simulate").has_option("thermo"):
+            self.skipTest("This alexandria program has no simulations with beads")
+        dimer = (Path(TESTDATA) / "molecules" / "water_dimer.pdb").read_bytes()
+        upload = self.client.post("/api/uploads", headers=self.headers, content=dimer,
+                                  params={"kind": "molecule", "name": "water_dimer.pdb"})
+        self.assertEqual(200, upload.status_code, upload.text)
+        job = self.run_task({"task": "simulate", "molecule": {"file": upload.json()["id"]},
+                             "options": {"nsteps": 400, "nstener": 40, "nstxout": 100, "temp": 100,
+                                         "deltat": 0.00025, "seed": 7, "minimize": True,
+                                         "nbeads": 4, "rwall": 0.6, "monomers": True}})
+        self.assertEqual("finished", job["status"], job["error"])
+        self.assertEqual(list(range(0, 400, 40)), [p["step"] for p in job["progress"]])
+        self.assertEqual(4, job["progress"][0]["beads"])
+        self.assertIn("distance", job["progress"][0])
+        sim = job["result"]["Simulation with beads"]
+        self.assertEqual(4, sim["all compounds"]["Beads"])
+        for name in ("all compounds", "compound 1", "compound 2"):
+            self.assertIn("Average", sim[name]["Total energy"])
+            self.assertIn("Standard error", sim[name]["Total energy"])
+        self.assertIn("Distance", sim["all compounds"])
+        self.assertLess(sim["Binding"]["Energy"], 0)
+        self.assertIn("Enthalpy", sim["Binding"])
+        histogram = self.client.get("/api/jobs/%s/files/hist" % job["id"], headers=self.headers)
+        self.assertEqual(200, histogram.status_code)
+        self.assertIn("Potential of mean force", histogram.text)
+        trajectory = self.client.get("/api/jobs/%s/files/o" % job["id"], headers=self.headers)
+        self.assertEqual(4, trajectory.text.count("ENDMDL"))
+
+        # One compound: the thermochemistry, with a line of progress for
+        # each simulation of the entropy
+        job = self.run_task({"task": "simulate", "molecule": {"smiles": "O"},
+                             "options": {"nsteps": 2000, "nstener": 200, "nstxout": 500, "temp": 300,
+                                         "deltat": 0.00025, "seed": 7, "nbeads": 8, "thermo": True,
+                                         "nquad": 2}})
+        self.assertEqual("finished", job["status"], job["error"])
+        thermo = job["result"]["Simulation with beads"]["Thermochemistry"]
+        self.assertEqual(8, thermo["Beads"])
+        self.assertEqual(2, thermo["Symmetry number"])
+        for name in ("Internal energy", "Enthalpy", "Heat capacity cV", "Heat capacity cP",
+                     "Standard entropy", "Gibbs energy"):
+            self.assertIn("Harmonic", thermo[name])
+            self.assertIn("Average", thermo[name])
+            self.assertIn("Unit", thermo[name])
+        self.assertNotIn("Average", thermo["Zero point energy"])
+        self.assertIn("Bead correction", thermo)
+        self.assertIn("Quantum effects", thermo["Free energy"])
+        entropy = [p["entropy"] for p in job["progress"] if "entropy" in p]
+        self.assertEqual([{"done": n, "total": 4} for n in range(1, 5)], entropy)
+        self.assertEqual(10, len([p for p in job["progress"] if "step" in p]))
+        # There is no distribution of a distance for one compound
+        histogram = self.client.get("/api/jobs/%s/files/hist" % job["id"], headers=self.headers)
+        self.assertEqual(404, histogram.status_code)
+
     def test_charge_distributions(self):
         """!
         @brief The kind of distribution and the widths of the particle types

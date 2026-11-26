@@ -532,6 +532,122 @@ class PageTest(unittest.TestCase):
         self.click("#extras")
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_2b4_simulation_at_constant_temperature(self):
+        """!
+        @brief A simulation with beads: the thermochemistry of a compound next
+        to that of the normal modes, and a dimer in a wall with its binding
+        energy and the distribution of the distance.
+        """
+        self.open_page()
+        self.click("#load")
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, "#qtable tr.pick"))
+        self.click('#tasks button[data-tab="simulate"]')
+        shown = lambda ident: self.browser.find_element(By.ID, ident).is_displayed()  # noqa: E731
+        if not shown("sim-beads"):
+            self.skipTest("This alexandria program has no simulations with beads")
+
+        def fill(ident, value):
+            box = self.browser.find_element(By.ID, ident)
+            box.clear()
+            box.send_keys(value)
+
+        def run():
+            self.click("#run-sim")
+            self.wait(lambda b: b.find_element(By.ID, "run-sim").is_enabled()
+                      and b.find_element(By.ID, "simbar").get_attribute("style").find("100%") >= 0, 120)
+            self.assertEqual("", self.errors())
+
+        # At constant energy there is nothing to choose
+        for ident in ("nbeads-field", "rwall-field", "monomers-field", "thermo-field"):
+            self.assertFalse(shown(ident), ident)
+        self.assertEqual("", self.text("#sim-note"))
+        self.click('#ensemble button[data-v="nvt"]')
+        # One compound: beads and thermochemistry, no wall
+        self.assertTrue(shown("nbeads-field"))
+        self.assertTrue(shown("thermo-field"))
+        self.assertFalse(shown("rwall-field"))
+        self.assertFalse(shown("monomers-field"))
+        self.assertIn("Classical dynamics with a thermostat", self.text("#sim-note"))
+        fill("nbeads", "8")
+        self.assertIn("ring polymer of 8 beads", self.text("#sim-note"))
+        self.click("#sim-thermo-on")
+        self.assertIn("eight more simulations", self.text("#sim-note"))
+        fill("nsteps", "2000")
+        fill("dt", "0.25")
+        run()
+        self.assertTrue(shown("sim-results"))
+        self.assertEqual("averages at 300 k with 8 beads", self.text("#sim-avg-title").lower())
+        self.assertEqual("thermochemistry at 300 k and 1 bar", self.text("#sim-thermo-title").lower())
+        averages = self.text("#sim-averages")
+        for quantity in ("Potential energy", "Kinetic energy", "Total energy", "Spread of the beads"):
+            self.assertIn(quantity, averages)
+        self.assertIn("±", averages)
+        self.assertNotIn("Distance", averages)
+        self.assertNotIn("Binding", averages)
+        self.assertTrue(shown("sim-thermo-box"))
+        table = self.text("#sim-thermo")
+        for quantity in ("Zero point energy", "Internal energy", "Enthalpy", "Heat capacity cV",
+                         "Heat capacity cP", "Standard entropy", "Gibbs energy"):
+            self.assertIn(quantity, table)
+        self.assertIn("Harmonic", table)
+        self.assertIn("J/mol K", table)
+        note = self.text("#sim-thermo-note")
+        self.assertIn("what harmonic oscillators lack with 8 beads", note)
+        self.assertIn("thermodynamic integration", note)
+        self.assertIn("quantum effects", note)
+        self.assertFalse(shown("sim-hist-box"))
+        # The spread of the beads can be plotted, a distance not
+        self.assertTrue(shown("e-spread"))
+        self.assertFalse(shown("e-distance"))
+        self.click('#eseries button[data-v="RG"]')
+        self.assertIn("Spread of the beads (nm)", self.browser.find_element(
+            By.CSS_SELECTOR, "#eplot svg").get_attribute("aria-label"))
+        self.shot("05b-simulate-thermochemistry")
+        # The plot on paper has the column of the energy file for it
+        self.saved_pdf("e-pdf", "simulate-e-RGYR.pdf")
+
+        # A dimer: a wall and the binding energy, no thermochemistry
+        self.browser.find_element(By.ID, "molfile").send_keys(
+            str(Path(TESTDATA) / "molecules" / "water_dimer.pdb"))
+        self.wait(lambda b: b.find_element(By.ID, "rwall-field").is_displayed())
+        self.assertFalse(shown("sim-results"))
+        self.assertTrue(shown("monomers-field"))
+        self.assertFalse(shown("thermo-field"))
+        self.assertIn("a wall keeps them together", self.text("#sim-note"))
+        fill("nbeads", "4")
+        fill("rwall", "0.6")
+        self.click("#monomers")
+        fill("temp", "100")
+        fill("nsteps", "1000")
+        run()
+        averages = self.text("#sim-averages")
+        for text in ("All compounds", "Compound 1", "Compound 2", "Distance", "Binding energy",
+                     "Binding enthalpy"):
+            self.assertIn(text, averages)
+        self.assertIn("at the wall in", self.text("#sim-avg-note"))
+        self.assertFalse(shown("sim-thermo-box"))
+        self.assertTrue(shown("sim-hist-box"))
+        self.assertTrue(self.browser.find_elements(By.CSS_SELECTOR, "#histplot svg path"))
+        self.assertIn("Probability density", self.browser.find_element(
+            By.CSS_SELECTOR, "#histplot svg").get_attribute("aria-label"))
+        self.click('#histseries button[data-v="w"]')
+        self.assertIn("Potential of mean force", self.browser.find_element(
+            By.CSS_SELECTOR, "#histplot svg").get_attribute("aria-label"))
+        self.assertTrue(shown("e-distance"))
+        self.click('#eseries button[data-v="R"]')
+        self.assertIn("Distance between the compounds (nm)", self.browser.find_element(
+            By.CSS_SELECTOR, "#eplot svg").get_attribute("aria-label"))
+        self.shot("05c-simulate-dimer")
+        # Back at constant energy the series of the beads is gone
+        self.click('#ensemble button[data-v="nve"]')
+        self.assertFalse(shown("nbeads-field"))
+        fill("nsteps", "200")
+        run()
+        self.assertFalse(shown("sim-results"))
+        self.assertFalse(shown("e-distance"))
+        self.assertIn("Potential energy", self.browser.find_element(
+            By.CSS_SELECTOR, "#eplot svg").get_attribute("aria-label"))
+
     def test_2c_dimer_scan(self):
         """!
         @brief The interaction energy of a water dimer at three distances,
