@@ -69,8 +69,11 @@ class Settings:
     forcefield_dirs: Optional[List[Path]] = None
     ## The largest file that can be uploaded, in bytes
     max_upload_bytes: int = 5 * 1024 * 1024
-    ## The largest molprop file that can be uploaded, in bytes
-    max_molprop_bytes: int = 200 * 1024 * 1024
+    ## The largest molprop file that can be uploaded, in bytes. The file is
+    ## written to the directory of the uploads as it comes in, so this is
+    ## about the room there and the memory of the programs of ACT that read
+    ## the file, not about the memory of the interface.
+    max_molprop_bytes: int = 2 * 1024 * 1024 * 1024
     ## The longest SMILES string, the same as alexandria accepts
     max_smiles_length: int = 2000
     ## Seconds after which a calculation is stopped
