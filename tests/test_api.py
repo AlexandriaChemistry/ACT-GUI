@@ -502,6 +502,39 @@ class ApiTest(unittest.TestCase):
         self.assertEqual("WANG_BUCKINGHAM", described["vdw"]["default"])
         self.assertIn("Geometric", described["rules"])
         self.assertEqual(7, len(described["vsites"]))
+        # This program does not tell what functions it has
+        self.assertEqual(["HARMONIC_ANGLES", "UREY_BRADLEY_ANGLES", "CROSS_BOND_ANGLES"],
+                         described["angles"])
+
+    def test_generator_offers_the_functions_of_the_program(self):
+        """!
+        @brief An older alexandria has no cross terms for the angles, which
+        the page then does not offer. Without the program all the choices
+        are shown.
+        """
+        def older():
+            info = fake_program_info()
+            options = dict(info.commands["gen_ff"].options)
+            options["anglefn"] = SimpleNamespace(
+                name="anglefn", type="enum", default="HARMONIC_ANGLES",
+                values=("HARMONIC_ANGLES", "UREY_BRADLEY_ANGLES"))
+            info.commands["gen_ff"] = SimpleNamespace(
+                options=options, has_option=lambda name: name in options)
+            return info
+
+        def missing():
+            raise FileNotFoundError("no alexandria")
+
+        for program, expected in ((older, ["HARMONIC_ANGLES", "UREY_BRADLEY_ANGLES"]),
+                                  (missing, ["HARMONIC_ANGLES", "UREY_BRADLEY_ANGLES",
+                                             "CROSS_BOND_ANGLES"])):
+            app = create_app(self.settings, run=self.run, program_info=program)
+            try:
+                described = TestClient(app).get("/api/generator", headers=self.headers).json()
+            finally:
+                app.state.jobs.shutdown()
+            self.assertEqual(expected, described["angles"])
+            self.assertEqual(4, len(described["bonds"]))
 
     def generate(self, **generator):
         """!

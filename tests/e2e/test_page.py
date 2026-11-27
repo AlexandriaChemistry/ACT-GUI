@@ -1434,6 +1434,40 @@ class PageTest(unittest.TestCase):
         self.click('#fftabs button[data-tab="edit"]')
         self.assertFalse(self.browser.find_element(By.ID, "k-card").is_displayed())
 
+    def test_5e_cross_term_angles(self):
+        """!
+        @brief The functions for angles that the program has can be chosen,
+        the harmonic angle first. A force field is made with the cross terms
+        of the bonds and the angle, if the program has them.
+        """
+        self.open_force_fields()
+        self.click('#fftabs button[data-tab="gen"]')
+        choice = Select(self.browser.find_element(By.ID, "g-angles"))
+        offered = [o.get_attribute("value") for o in choice.options]
+        self.assertEqual(["HARMONIC_ANGLES", "UREY_BRADLEY_ANGLES"], offered[:2])
+        self.assertEqual("HARMONIC_ANGLES", choice.first_selected_option.get_attribute("value"))
+        if "CROSS_BOND_ANGLES" not in offered:
+            self.skipTest("This alexandria has no CROSS_BOND_ANGLES")
+        self.click("#g-none")
+        for name in ("hc", "c3"):
+            self.click('#g-types input[data-name="%s"][data-key="on"]' % name)
+        choice.select_by_value("CROSS_BOND_ANGLES")
+        try:
+            self.click("#run-gen")
+            self.wait(lambda b: b.find_element(By.ID, "gen-pill").text in ("Done", "Failed"))
+            self.assertEqual("", self.errors())
+            self.assertEqual("Done", self.text("#gen-pill"))
+            functions = dict(self.browser.execute_script(
+                "return [...document.querySelectorAll('#g-inter tbody tr')]"
+                ".map(r => [r.cells[0].textContent, r.cells[1].textContent])"))
+            self.assertEqual("CROSS_BOND_ANGLES", functions["ANGLES"])
+            self.assertEqual("LINEAR_ANGLES", functions["LINEAR_ANGLES"])
+            self.shot("13c-ff-cross-term-angles")
+        finally:
+            # The tests after this one make force fields with harmonic angles
+            Select(self.browser.find_element(By.ID, "g-angles")).select_by_value(
+                "HARMONIC_ANGLES")
+
     def test_6_change_a_force_field_and_use_it(self):
         """!
         @brief The default force field is opened, one parameter is fixed,
