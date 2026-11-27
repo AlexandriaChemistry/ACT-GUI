@@ -11,9 +11,12 @@
 @brief Tests of what is accepted as an uploaded file.
 """
 import tempfile
+import tracemalloc
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from act_gui import uploads
 from act_gui.uploads import UploadError, UploadStore, clean_label
 
 ## A small sdf file
@@ -158,6 +161,90 @@ class UploadTest(unittest.TestCase):
                           b'<molecules>\n</molecules>\n')
         self.assertEqual("forcefield", self.store.save("ff.xml", "forcefield", forcefield).kind)
         self.assertEqual("molprop", self.store.save("mp.xml", "molprop", molprop).kind)
+
+    def test_xml_is_checked_in_pieces(self):
+        """!
+        @brief An XML file is read piece by piece. What is looked for is
+        found wherever the pieces end, also in the middle of it or of a
+        character of more than one byte.
+        """
+        ours = b'<!DOCTYPE molprops.dtd PUBLIC "molprops.dtd" "molprops.dtd">\n'
+        good = ours + b'<molecules>\n<molecule molname="\xc3\xa9thanol \xe2\x82\xac"/>\n</molecules>\n'
+        wrong = [
+            (good.replace(b"</molecules>", b'<!ENTITY lol "lol"></molecules>'), "entities"),
+            (good.replace(b"</molecules>", b'<!eNtItY lol "lol"></molecules>'), "entities"),
+            (good + b'<!DOCTYPE b SYSTEM "x">\n', "document type"),
+            (good + b"<!doctype b>\n", "document type"),
+            # The document type is at the start of a file
+            (good[len(ours):] + b" " * uploads.HEAD_CHARS + ours, "document type"),
+            (good + b"\0", "text"),
+            (good + b"\xff", "text"),
+            # The file ends in the middle of a character
+            (good + b"\xe2\x82", "text"),
+            (b" \n" * 40, "empty"),
+            (b" \n" * 40 + b"molecules", "XML"),
+        ]
+        store = UploadStore(self.dir, max_bytes=1 << 20)
+        for piece in list(range(1, 24)) + [64, 1 << 20]:
+            with mock.patch.object(uploads, "PIECE_BYTES", piece):
+                self.assertEqual(len(good), store.save("mp.xml", "molprop", good).size, piece)
+                spaced = b" \n" * 40 + good[len(ours):]
+                self.assertEqual(len(spaced), store.save("mp.xml", "molprop", spaced).size, piece)
+                for data, word in wrong:
+                    with self.assertRaises(UploadError, msg=(piece, data)) as caught:
+                        store.save("mp.xml", "molprop", data)
+                    self.assertIn(word, str(caught.exception), (piece, data))
+        self.assertEqual([], [path.name for path in self.dir.iterdir()
+                              if path.suffix not in (".xml", ".json")])
+
+    def test_a_large_file_is_not_in_memory(self):
+        """!
+        @brief A molprop file can be gigabytes: checking and keeping one
+        that is there as a file takes the memory of a few pieces, whatever
+        its size.
+        """
+        store = UploadStore(self.dir, max_bytes=2048, limits={"molprop": 64 << 20})
+        incoming = store.incoming()
+        line = b'<molecule molname="water"><experiment datafile="w.log"/></molecule>\n'
+        with open(incoming, "wb") as out:
+            out.write(b"<molecules>\n")
+            for _ in range(24):
+                out.write(line * ((1 << 20) // len(line)))
+            out.write(b"</molecules>\n")
+        size = incoming.stat().st_size
+        tracemalloc.start()
+        try:
+            upload = store.keep("large.xml", "molprop", incoming)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(size, upload.size)
+        self.assertEqual(size, store.path(upload).stat().st_size)
+        self.assertFalse(incoming.exists())
+        self.assertLess(peak, 6 * uploads.PIECE_BYTES)
+        self.assertLess(peak, size // 4)
+
+    def test_incoming_files(self):
+        """!
+        @brief A file that is not accepted is removed, as is what a server
+        that was stopped during an upload left behind.
+        """
+        incoming = self.store.incoming()
+        incoming.write_bytes(b"not xml")
+        with self.assertRaises(UploadError):
+            self.store.keep("mp.xml", "molprop", incoming)
+        incoming.write_bytes(MP + b" " * 4000)
+        with self.assertRaises(UploadError) as caught:
+            self.store.keep("mp.xml", "molprop", incoming)
+        self.assertIn("larger", str(caught.exception))
+        self.assertEqual([], list(self.dir.iterdir()))
+        kept = self.store.save("mp.xml", "molprop", MP)
+        self.store.incoming().write_bytes(MP)
+        self.assertEqual(3, len(list(self.dir.iterdir())))
+        again = UploadStore(self.dir, max_bytes=2048)
+        self.assertEqual(sorted([kept.id + ".json", kept.id + ".xml"]),
+                         sorted(path.name for path in self.dir.iterdir()))
+        self.assertEqual(kept, again.get(kept.id))
 
     def test_unknown_identifiers(self):
         """!
