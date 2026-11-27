@@ -61,7 +61,32 @@ class ParticlesTest(unittest.TestCase):
             {"identifier": "he", "type": "Atom", "parameters": [parameter("mass", 4)]}]))
         self.assertEqual({"distribution": "Gaussian",
                           "types": {"ow": {"zeta": 0, "zeta_vs": 4}, "ow_s": {"zeta": 6.5},
-                                    "v3bw": {"zeta": 13}}}, told)
+                                    "v3bw": {"zeta": 13}}, "shell_max_distance": 0.0}, told)
+
+    def test_wall_of_the_shells(self):
+        """!
+        @brief The largest distance between a shell and its atom: the
+        option of the polarization, 0.02 nm without it as in ACT, and none
+        if it is zero or if the force field has no polarization.
+        """
+        def wall(interactions):
+            return particles.wall({"interactions": interactions})
+        self.assertEqual(0.0, wall([{"type": "BONDS", "options": {"shellmaxdistance": "0.05"}}]))
+        self.assertEqual(0.02, wall([{"type": "BONDS"}, {"type": "POLARIZATION", "options": {}}]))
+        self.assertEqual(0.02, wall([{"type": "POLARIZATION"}]))
+        self.assertEqual(0.035, wall([{"type": "POLARIZATION",
+                                       "options": {"shellmaxdistance": "0.035"}}]))
+        self.assertEqual(0.0, wall([{"type": "POLARIZATION", "options": {"shellmaxdistance": "0"}}]))
+        self.assertEqual(0.0, wall([{"type": "POLARIZATION",
+                                     "options": {"shellmaxdistance": "-1"}}]))
+        self.assertEqual(0.02, wall([{"type": "POLARIZATION",
+                                      "options": {"shellmaxdistance": "far"}}]))
+        for other in (None, "POLARIZATION", [None, 3]):
+            self.assertEqual(0.0, wall(other))
+        told = particles.digest({"forcefield": {
+            "interactions": [{"type": "POLARIZATION", "options": {"shellmaxdistance": "0.03"}}],
+            "particletypes": {"options": {}, "types": []}}})
+        self.assertEqual(0.03, told["shell_max_distance"])
 
     def test_what_is_not_as_expected(self):
         """!
@@ -70,7 +95,7 @@ class ParticlesTest(unittest.TestCase):
         """
         for other in (None, [], {"changed": False}, {"forcefield": "ff.xml"}):
             self.assertEqual(other, particles.digest(other))
-        self.assertEqual({"distribution": "", "types": {}},
+        self.assertEqual({"distribution": "", "types": {}, "shell_max_distance": 0.0},
                          particles.digest({"forcefield": {"interactions": []}}))
         told = particles.digest(described([
             "ow", {"type": "Atom"}, {"identifier": 5, "parameters": [parameter("zeta", 4)]},
@@ -78,8 +103,9 @@ class ParticlesTest(unittest.TestCase):
             {"identifier": "b", "parameters": [parameter("zeta", "wide"), parameter("zeta", True),
                                                parameter("zetaVS", -3), "zeta"]},
             {"identifier": "c", "parameters": [parameter("zeta", 12.5)]}], options=[]))
-        self.assertEqual({"distribution": "", "types": {"c": {"zeta": 12.5}}}, told)
-        self.assertEqual({"distribution": "", "types": {}},
+        self.assertEqual({"distribution": "", "types": {"c": {"zeta": 12.5}},
+                          "shell_max_distance": 0.0}, told)
+        self.assertEqual({"distribution": "", "types": {}, "shell_max_distance": 0.0},
                          particles.digest(described("none", {"chargedistribution": 7})))
 
 

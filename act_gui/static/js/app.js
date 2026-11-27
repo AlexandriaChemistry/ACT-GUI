@@ -16,7 +16,7 @@
  */
 import { $, $$, addLibrary, alertBox, withoutDefault, call, el, fmt, libraryChoice, moveInk, pill, runTask, saveFile, seg, session, showOnly, tabs, toast, upload } from "./common.js";
 import { css, esc, limits, markPoint, plot, redrawPlots } from "./plot.js";
-import { countExtras, drawExtras, hasClouds, pdbAtoms, pdbFrames } from "./particles.js";
+import { countExtras, drawExtras, hasClouds, pdbAtoms, pdbFrames, shellsKey, wallKey, wallOf } from "./particles.js";
 import { startForceFields } from "./forcefield.js";
 import { startMolprops } from "./molprop.js";
 import { startCluster } from "./cluster.js";
@@ -139,7 +139,9 @@ const shownWidths = () => (state.ui.clouds && state.mol ? state.widths.get(state
  */
 function extras(frames, disp = null) {
   if (!frames || !(state.ui.sites || state.ui.clouds)) return;
-  drawn = drawExtras(V, state.mol.particles, frames, { sites: state.ui.sites, widths: shownWidths(), disp });
+  // The wall of the shells is known once the force field was described
+  const wall = wallOf(state.widths.get(state.mol.ffkey) || null);
+  drawn = drawExtras(V, state.mol.particles, frames, { sites: state.ui.sites, widths: shownWidths(), disp, wall });
 }
 
 /** How many shells, virtual sites and charge distributions the viewer shows now. */
@@ -148,11 +150,14 @@ let drawn = { shells: 0, sites: 0, clouds: 0 };
 /** Tell under the viewer what the spheres are that are no atoms. */
 function extrasLegend() {
   const legend = $("#xlegend"), plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-  legend.hidden = drawn.shells + drawn.sites + drawn.clouds === 0;
-  $("#xl-shells").hidden = !drawn.shells;
+  const shells = shellsKey(drawn);
+  legend.hidden = !shells && drawn.sites + drawn.clouds === 0;
+  $("#xl-shells").hidden = !shells;
   $("#xl-sites").hidden = !drawn.sites;
   $("#xl-clouds").hidden = !drawn.clouds;
-  $("#xl-nshells").textContent = plural(drawn.shells, "shell", "shells");
+  $("#xl-nshells").textContent = shells;
+  $("#xl-wall").hidden = !wallKey(drawn);
+  $("#xl-nwall").textContent = wallKey(drawn);
   $("#xl-nsites").textContent = plural(drawn.sites, "virtual site", "virtual sites");
   $("#xl-nclouds").textContent = plural(drawn.clouds, "charge distribution", "charge distributions") + ", radius 1/ζ";
   // Which tab the viewer shows, when it is drawn
@@ -358,13 +363,14 @@ function extraChoices() {
   $("#extras-text").textContent = found.shells && found.sites ? "Shells and sites" : found.sites ? "Virtual sites" : "Shells";
   if (!any) { state.ui.sites = false; $("#extras").checked = false; }
   $("#clouds-label").hidden = false;
-  if (state.ui.clouds) fetchWidths();
+  if (state.ui.clouds || state.ui.sites) fetchWidths();
 }
 
 /**
- * Fetch the charge distributions of the force field of the molecule, once
- * for each force field, and draw them. A force field with point charges
- * has none, which is told.
+ * Fetch the charge distributions of the force field of the molecule and
+ * how far its shells can go from their atoms, once for each force field,
+ * and draw them. A force field with point charges has no distributions,
+ * which is told when they are asked for.
  */
 async function fetchWidths() {
   const mol = state.mol;
@@ -374,10 +380,13 @@ async function fetchWidths() {
   try {
     const job = await runTask({ task: "ff_charges", forcefield: mol.ffref });
     state.widths.set(mol.ffkey, job.result);
-    if (!hasClouds(job.result)) toast("This force field has point charges, which have no distribution to show.");
+    if (state.ui.clouds && !hasClouds(job.result)) toast("This force field has point charges, which have no distribution to show.");
   } catch (e) {
-    state.ui.clouds = false; box.checked = false;
-    alertBox("The charge distributions of the force field could not be fetched. " + e.message);
+    // Without them the shells are drawn all the same, the wall is not marked
+    if (state.ui.clouds) {
+      state.ui.clouds = false; box.checked = false;
+      alertBox("The charge distributions of the force field could not be fetched. " + e.message);
+    }
   } finally { box.disabled = false; }
   if (state.mol === mol) scene();
 }
@@ -437,6 +446,10 @@ async function loadMolecule() {
     const job = await runJob("charges");
     const compound = job.result.molecules[0];
     state.mol = moleculeFrom(compound.molecule);
+    // The shells are relaxed by a single point calculation, which may fail
+    if (compound.shells && compound.shells.present && !compound.shells.relaxed) {
+      toast("The shells could not be relaxed, they are shown on their atoms. " + (compound.shells.reason || ""));
+    }
     // The force field that the molecule was made with, for its charge distributions
     state.mol.ffref = state.forcefield.ref || { default: true };
     state.mol.ffkey = JSON.stringify(state.mol.ffref);
@@ -934,7 +947,12 @@ async function openmmPackage() {
 seg($("#style"), v => { state.ui.style = v; scene(); });
 seg($("#colour"), v => { state.ui.colour = v; scene(); });
 $("#labels").onchange = e => { state.ui.labels = e.target.checked; scene(); };
-$("#extras").onchange = e => { state.ui.sites = e.target.checked; scene(); };
+$("#extras").onchange = e => {
+  state.ui.sites = e.target.checked;
+  // The wall of the shells comes with the description of the force field
+  if (state.ui.sites && state.mol && !state.widths.has(state.mol.ffkey)) fetchWidths();
+  scene();
+};
 $("#clouds").onchange = e => {
   state.ui.clouds = e.target.checked;
   if (state.ui.clouds && state.mol && !state.widths.has(state.mol.ffkey)) fetchWidths();

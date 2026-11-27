@@ -11,11 +11,19 @@
  * that make atoms polarizable, the virtual sites, and the distributions of
  * the charges.
  *
- * A shell sits on its atom or very close to it, where a small sphere would
- * be inside that of the atom: it is drawn as a transparent sphere around
- * it, a halo that moves off the atom when the shell does. The halos are
- * left out when the charge distributions are drawn, which have that of the
- * shell in them and would hide them. A virtual site
+ * A shell sits very close to its atom, where a small sphere would be
+ * inside that of the atom: it is drawn as a transparent sphere around it, a
+ * halo that moves off the atom when the shell does. The halos are left out
+ * when the charge distributions are drawn, which have that of the shell in
+ * them and would hide them. A shell that is relaxed is displaced from its
+ * atom by the field of the charges around it, which is the polarization of
+ * the atom: a hundredth to a tenth of an Å, too little to see. An arrow
+ * from each atom therefore shows where its shell went, magnified, see
+ * shellMoves. A shell cannot go further than the largest distance of the
+ * force field, its wall: one that is there is held by the wall instead of
+ * by the forces, which often goes with an energy that is far off. Its
+ * arrow and its halo have the colour of an error, and the key counts them.
+ * A virtual site
  * is a small sphere with a line to the atom it belongs to. Charges with a
  * Gaussian or Slater distribution are drawn as a transparent sphere on each
  * atom and each virtual site, with the width of the distribution, 1/zeta,
@@ -31,14 +39,24 @@ import { css } from "./plot.js";
 
 /** The radius of the sphere of a shell, larger than that of an atom in a ball and stick model, and of a virtual site in Å. */
 const SHELL_RADIUS = 0.58, SITE_RADIUS = 0.2;
-/** How much of what is behind the sphere of a shell shows through. */
-const SHELL_OPACITY = 0.45;
+/** How much of what is behind the sphere of a shell shows through, and of one that is at the wall. */
+const SHELL_OPACITY = 0.45, HELD_OPACITY = 0.75;
 /** The smallest and the largest radius of the sphere of a charge distribution in Å. */
 const CLOUD_RADIUS = [0.15, 3];
 /** How much of what is behind the sphere of a charge distribution shows through. */
 const CLOUD_OPACITY = 0.3;
 /** The smallest charge in e of which the distribution is drawn. */
 const SMALL_CHARGE = 1e-6;
+/** The smallest displacement of a shell in Å that is shown: the positions have three decimals. */
+const SMALL_MOVE = 2e-3;
+/**
+ * The length in Å of the arrow of the shell that moved most, and the largest magnification: a
+ * displacement of a few thousandths of an Å is hardly more than the rounding of the positions,
+ * and its arrow stays small.
+ */
+const ARROW_LENGTH = 1.6, MAX_MAGNIFICATION = 100;
+/** The magnifications that are used, such that the number is easy to read. */
+const MAGNIFICATIONS = [1, 2, 5, 10, 20, 50, 100];
 
 /**
  * Whether a particle is an atom.
@@ -152,6 +170,65 @@ function clouds(particles, widths) {
 }
 
 /**
+ * The displacements of the shells from the atoms they belong to in one
+ * structure, and how much they are magnified to be seen: such that the
+ * arrow of the shell that moved most is about ARROW_LENGTH long, with a
+ * round number, and at most MAX_MAGNIFICATION times.
+ * @param {object[]} particles The particles.
+ * @param {number[][]} x       The position of each particle in Å.
+ * @param {number} wall        The largest distance between a shell and its atom in Å, 0 for none.
+ * @returns {object} moves: for each shell that moved its place k, that of its atom, the displacement
+ * d in Å, its length and whether it is at the wall; largest: the largest displacement in Å; scale:
+ * the magnification, 0 if no shell moved.
+ */
+export function shellMoves(particles, x, wall = 0) {
+  const moves = [];
+  particles.forEach((p, k) => {
+    // The wall is for a shell of one atom, as in ACT
+    const atom = isShell(p) ? (p.parents || [])[0] : undefined;
+    if (atom === undefined || !x[k] || !x[atom]) return;
+    const d = x[k].map((v, i) => v - x[atom][i]), length = Math.hypot(...d);
+    // The positions are rounded, so a shell at the wall can seem to be a little short of it
+    const atWall = wall > 0 && p.parents.length === 1 && length >= wall - Math.min(SMALL_MOVE, 0.05 * wall);
+    if (length >= SMALL_MOVE) moves.push({ k, atom, d, length, atWall });
+  });
+  const largest = Math.max(0, ...moves.map(m => m.length));
+  const wanted = largest > 0 ? Math.min(MAX_MAGNIFICATION, ARROW_LENGTH / largest) : 0;
+  const scale = wanted > 0 ? MAGNIFICATIONS.filter(m => m <= wanted).pop() || 1 : 0;
+  return { moves, largest, scale };
+}
+
+/**
+ * What the key of a viewer says about the shells.
+ * @param {object} drawn What drawExtras drew.
+ * @returns {string} Their number and, if arrows show where they went, the magnification
+ * of the arrows and the largest displacement; empty if nothing of the shells is drawn.
+ */
+export function shellsKey(drawn) {
+  if (!drawn.shells && !drawn.moved) return "";
+  const n = drawn.nshell || drawn.shells;
+  return `${n} ${n === 1 ? "shell" : "shells"}` +
+    (drawn.moved ? `, arrows: displacement ×${drawn.scale}, at most ${drawn.largest.toFixed(3)} Å` : "");
+}
+
+/**
+ * What the key of a viewer says about the shells that are at the wall.
+ * @param {object} drawn What drawExtras drew.
+ * @returns {string} How many are as far from their atom as the force field lets them go, and how far that is; empty if none.
+ */
+export function wallKey(drawn) {
+  if (!drawn.atWall) return "";
+  return `${drawn.atWall} ${drawn.atWall === 1 ? "shell" : "shells"} at the wall, ${drawn.wall.toFixed(3)} Å from ${drawn.atWall === 1 ? "its atom" : "their atoms"}`;
+}
+
+/**
+ * The largest distance between a shell and its atom of a force field.
+ * @param {object|null} described The force field as the task ff_charges describes it; null if it was not fetched.
+ * @returns {number} The distance in Å, 0 if there is none or if it is not known.
+ */
+export const wallOf = described => (described && described.shell_max_distance > 0 ? described.shell_max_distance * 10 : 0);
+
+/**
  * A structure of some of the particles as a pdb file, for the viewer.
  * @param {object[]} entries     The particles to write: { k }, the place of each in the list of particles.
  * @param {number[][][]} frames  For each structure the position of each particle in Å.
@@ -214,12 +291,15 @@ function spheres(viewer, entries, frames, disp, opacity) {
  * @param {object[]} particles  The particles.
  * @param {number[][][]} frames For each structure the position of each particle in Å: one, or those of a trajectory.
  * @param {object} show         What to draw: sites (the shells and virtual sites, true or false), widths (the
- * charge distributions of the force field, null for none) and disp (the displacement of each particle of a
- * vibration of the one structure, which then moves, null for none).
- * @returns {object} How many shells, virtual sites and charge distributions were drawn.
+ * charge distributions of the force field, null for none), disp (the displacement of each particle of a
+ * vibration of the one structure, which then moves, null for none) and wall (the largest distance between a
+ * shell and its atom in Å, 0 if there is none or it is not known).
+ * @returns {object} How many shells, virtual sites and charge distributions were drawn; of the shells
+ * also how many there are (nshell), how many have an arrow (moved), the magnification of the arrows
+ * (scale), the largest displacement in Å (largest), how many are at the wall (atWall) and the wall in Å (wall).
  */
-export function drawExtras(viewer, particles, frames, { sites = false, widths = null, disp = null } = {}) {
-  const count = { shells: 0, sites: 0, clouds: 0 };
+export function drawExtras(viewer, particles, frames, { sites = false, widths = null, disp = null, wall = 0 } = {}) {
+  const count = { shells: 0, sites: 0, clouds: 0, nshell: 0, moved: 0, scale: 0, largest: 0, atWall: 0, wall };
   if (!particles || !frames || !frames.length) return count;
   // What cancels has no sign: in the colour of what is neither
   const colour = charge => css(Math.abs(charge) <= SMALL_CHARGE ? "--series2" : charge < 0 ? "--neg" : "--pos");
@@ -228,16 +308,30 @@ export function drawExtras(viewer, particles, frames, { sites = false, widths = 
   count.clouds = drawn.length;
   if (sites) {
     const shells = [], virtual = [];
+    // Where the shells went, in the one structure that stands still
+    const found = frames.length === 1 && !disp ? shellMoves(particles, frames[0], wall) : { moves: [], largest: 0, scale: 0 };
+    const held = new Set(found.moves.filter(move => move.atWall).map(move => move.k));
     particles.forEach((p, k) => {
       // The viewer does not draw a transparent sphere inside another one: with the charge
       // distributions, which have that of the shell of an atom in them, the shells are left out
-      if (isShell(p)) { if (!drawn.length) shells.push({ k, radius: SHELL_RADIUS, color: css("--shell") }); }
+      if (isShell(p)) { if (!drawn.length) shells.push({ k, radius: SHELL_RADIUS, color: css(held.has(k) ? "--bad" : "--shell") }); }
       else if (isSite(p)) virtual.push({ k, radius: SITE_RADIUS, color: css("--warn") });
     });
-    spheres(viewer, shells, frames, disp, SHELL_OPACITY);
+    // Those at the wall more solid, such that they stand out
+    spheres(viewer, shells.filter(shell => !held.has(shell.k)), frames, disp, SHELL_OPACITY);
+    spheres(viewer, shells.filter(shell => held.has(shell.k)), frames, disp, HELD_OPACITY);
     spheres(viewer, virtual, frames, disp, 1);
     count.shells = shells.length; count.sites = virtual.length;
+    count.nshell = particles.filter(isShell).length;
     if (frames.length === 1 && !disp) {
+      // An arrow from each atom to where its shell went, magnified; thicker for one at the wall
+      for (const move of found.moves) {
+        const from = frames[0][move.atom], to = from.map((v, i) => v + found.scale * move.d[i]);
+        viewer.addArrow({ start: { x: from[0], y: from[1], z: from[2] }, end: { x: to[0], y: to[1], z: to[2] },
+                          radius: move.atWall ? 0.08 : 0.05, radiusRatio: 2.4, mid: 0.72, color: css(move.atWall ? "--bad" : "--shell") });
+      }
+      count.moved = found.moves.length; count.scale = found.scale; count.largest = found.largest;
+      count.atWall = held.size;
       // A line from each virtual site to the nearest of the atoms it belongs to
       const x = frames[0], at = k => ({ x: x[k][0], y: x[k][1], z: x[k][2] });
       for (const site of virtual) {
