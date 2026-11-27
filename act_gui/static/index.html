@@ -117,12 +117,38 @@
             <button class="btn primary end" id="run-sim" type="button" disabled>Run simulation</button>
             <button class="btn end" id="stop-sim" type="button" hidden>Stop</button>
           </div>
+          <div class="row top mt8" id="sim-beads" hidden>
+            <div class="field"><span class="lab">Ensemble</span><div class="seg" id="ensemble" role="group" aria-label="Ensemble of the simulation">
+              <button aria-pressed="true" data-v="nve">Constant energy</button><button aria-pressed="false" data-v="nvt">Constant temperature</button></div></div>
+            <div class="field" id="nbeads-field" hidden><label for="nbeads">Beads</label><input type="number" id="nbeads" value="1" min="1" max="128" step="1" title="One bead is classical dynamics with a thermostat. More beads give path integral molecular dynamics, with the zero point motion of the atoms."></div>
+            <div class="field" id="rwall-field" hidden><label for="rwall">Wall radius (nm)</label><input type="number" id="rwall" value="0" min="0" max="10" step="0.1" title="A wall on the distance between the centers of mass of the compounds keeps them together. Zero for no wall."></div>
+            <div class="field" id="monomers-field" hidden><span class="lab">Binding energy</span><label class="check"><input type="checkbox" id="monomers"> Simulate each compound alone as well</label></div>
+            <div class="field" id="thermo-field" hidden><span class="lab">Thermochemistry</span><label class="check"><input type="checkbox" id="sim-thermo-on"> Energy, heat capacity and entropy</label></div>
+          </div>
+          <p class="muted fine" id="sim-note"></p>
           <div class="progress" aria-hidden="true"><i id="simbar"></i></div>
           <div class="row"><div class="seg" id="eseries" role="group" aria-label="Energy to plot">
-              <button aria-pressed="true" data-v="EPOT">Potential</button><button aria-pressed="false" data-v="EKIN">Kinetic</button><button aria-pressed="false" data-v="ETOT">Total</button><button aria-pressed="false" data-v="T">Temperature</button></div>
+              <button aria-pressed="true" data-v="EPOT">Potential</button><button aria-pressed="false" data-v="EKIN">Kinetic</button><button aria-pressed="false" data-v="ETOT">Total</button><button aria-pressed="false" data-v="T">Temperature</button><button aria-pressed="false" data-v="RG" id="e-spread" hidden>Spread of the beads</button><button aria-pressed="false" data-v="R" id="e-distance" hidden>Distance</button></div>
             <span class="spacer"></span><span class="num muted" id="simtime"></span>
             <button class="btn small" id="e-pdf" type="button" hidden>Save as PDF</button></div>
           <div class="plot" id="eplot"></div>
+          <div id="sim-results" hidden>
+            <h3 class="mb8 mt8" id="sim-avg-title">Averages</h3>
+            <div class="xscroll"><table class="data" id="sim-averages"></table></div>
+            <p class="muted fine" id="sim-avg-note"></p>
+            <div id="sim-thermo-box" hidden>
+              <h3 class="mb8 mt8" id="sim-thermo-title">Thermochemistry</h3>
+              <div class="xscroll"><table class="data" id="sim-thermo"></table></div>
+              <p class="muted fine" id="sim-thermo-note"></p>
+            </div>
+            <div id="sim-hist-box" hidden>
+              <div class="row mt8"><h3>Distance between the compounds</h3><span class="spacer"></span>
+                <div class="seg" id="histseries" role="group" aria-label="What to plot against the distance">
+                  <button aria-pressed="true" data-v="p">Distribution</button><button aria-pressed="false" data-v="w">Potential of mean force</button></div>
+                <button class="btn small" id="hist-xvg" type="button">Save as xvg</button></div>
+              <div class="plot" id="histplot"></div>
+            </div>
+          </div>
         </div>
 
         <div class="body panel" id="tab-openmm" hidden>
@@ -253,6 +279,11 @@
               <div class="row"><label class="check"><input type="checkbox" id="g-ic-atom" checked> Atoms</label>
                 <label class="check"><input type="checkbox" id="g-ic-shell"> Shells</label></div></div>
             <details class="more mt8"><summary>Combination rules</summary><div class="grid2 mt8" id="g-icrules"></div></details></div></div>
+        <div class="group"><h3>Shells</h3>
+          <div class="field"><label for="g-kshell-follows">Force constant of the spring between shell and core</label><select id="g-kshell-follows"></select></div>
+          <div class="field" id="g-kshell-field" hidden><label for="g-kshell">Force constant (kJ/mol nm²)</label>
+            <input type="number" id="g-kshell" min="1" step="any" placeholder="From the starting values"></div>
+          <p class="muted fine" id="g-kshell-help">The force constant is q²/(4πε₀α) for the charge q of the shell and the polarizability α. If it is fixed, training changes only one of the two and the other one follows. Only for atom types with a shell.</p></div>
         <div class="group"><h3>Virtual sites</h3>
           <p class="muted fine" id="g-ownsites"></p>
           <div class="row"><button class="btn small" id="g-tovsites" type="button">Choose virtual sites…</button></div></div>
@@ -414,6 +445,19 @@
             <p class="muted fine" id="p-note"></p>
             <div class="row"><button class="btn primary" id="p-apply" type="button">Apply</button><button class="btn" id="p-cancel" type="button">Cancel</button>
               <span class="pill" id="p-pill" hidden></span></div></div></div>
+        <div class="card" id="k-card" hidden><div class="head"><h2>Force constants of the shells</h2><span class="spacer"></span><span class="pill" id="k-pill" hidden></span></div>
+          <div class="body"><ul class="list" id="k-state"></ul>
+            <div class="grid2">
+              <div class="field"><label for="k-action">Force constant</label><select id="k-action">
+                <option value="charge">Fix it, the charge of the shell follows</option>
+                <option value="alpha">Fix it, the polarizability follows</option>
+                <option value="release">Let it follow from charge and polarizability</option></select></div>
+              <div class="field" id="k-value-field"><label for="k-value">Force constant (kJ/mol nm²)</label>
+                <input type="number" id="k-value" min="1" step="any" placeholder="The current one"></div>
+            </div>
+            <div class="field"><span class="lab">Shell types</span><div class="checks" id="k-types"></div></div>
+            <p class="muted fine">The force constant is q²/(4πε₀α) for the charge q of the shell and the polarizability α. If it is fixed, training changes only one of the two and the other one follows. Releasing it fixes the one that followed at its value.</p>
+            <div class="row"><button class="btn primary" id="k-apply" type="button">Apply</button></div></div></div>
         <div class="card"><div class="head"><h2>Validation</h2><span class="spacer"></span><span class="pill" id="v-pill" hidden></span></div>
           <div class="body"><ul class="list" id="v-list"></ul>
             <p class="muted fine" id="v-note">The parameters are checked each time the force field is read: values within their bounds, a minimum that is not larger than the maximum, no negative value where that is not allowed, and each parameter defined once.</p>

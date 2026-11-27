@@ -532,6 +532,122 @@ class PageTest(unittest.TestCase):
         self.click("#extras")
 
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
+    def test_2b4_simulation_at_constant_temperature(self):
+        """!
+        @brief A simulation with beads: the thermochemistry of a compound next
+        to that of the normal modes, and a dimer in a wall with its binding
+        energy and the distribution of the distance.
+        """
+        self.open_page()
+        self.click("#load")
+        self.wait(lambda b: b.find_elements(By.CSS_SELECTOR, "#qtable tr.pick"))
+        self.click('#tasks button[data-tab="simulate"]')
+        shown = lambda ident: self.browser.find_element(By.ID, ident).is_displayed()  # noqa: E731
+        if not shown("sim-beads"):
+            self.skipTest("This alexandria program has no simulations with beads")
+
+        def fill(ident, value):
+            box = self.browser.find_element(By.ID, ident)
+            box.clear()
+            box.send_keys(value)
+
+        def run():
+            self.click("#run-sim")
+            self.wait(lambda b: b.find_element(By.ID, "run-sim").is_enabled()
+                      and b.find_element(By.ID, "simbar").get_attribute("style").find("100%") >= 0, 120)
+            self.assertEqual("", self.errors())
+
+        # At constant energy there is nothing to choose
+        for ident in ("nbeads-field", "rwall-field", "monomers-field", "thermo-field"):
+            self.assertFalse(shown(ident), ident)
+        self.assertEqual("", self.text("#sim-note"))
+        self.click('#ensemble button[data-v="nvt"]')
+        # One compound: beads and thermochemistry, no wall
+        self.assertTrue(shown("nbeads-field"))
+        self.assertTrue(shown("thermo-field"))
+        self.assertFalse(shown("rwall-field"))
+        self.assertFalse(shown("monomers-field"))
+        self.assertIn("Classical dynamics with a thermostat", self.text("#sim-note"))
+        fill("nbeads", "8")
+        self.assertIn("ring polymer of 8 beads", self.text("#sim-note"))
+        self.click("#sim-thermo-on")
+        self.assertIn("eight more simulations", self.text("#sim-note"))
+        fill("nsteps", "2000")
+        fill("dt", "0.25")
+        run()
+        self.assertTrue(shown("sim-results"))
+        self.assertEqual("averages at 300 k with 8 beads", self.text("#sim-avg-title").lower())
+        self.assertEqual("thermochemistry at 300 k and 1 bar", self.text("#sim-thermo-title").lower())
+        averages = self.text("#sim-averages")
+        for quantity in ("Potential energy", "Kinetic energy", "Total energy", "Spread of the beads"):
+            self.assertIn(quantity, averages)
+        self.assertIn("±", averages)
+        self.assertNotIn("Distance", averages)
+        self.assertNotIn("Binding", averages)
+        self.assertTrue(shown("sim-thermo-box"))
+        table = self.text("#sim-thermo")
+        for quantity in ("Zero point energy", "Internal energy", "Enthalpy", "Heat capacity cV",
+                         "Heat capacity cP", "Standard entropy", "Gibbs energy"):
+            self.assertIn(quantity, table)
+        self.assertIn("Harmonic", table)
+        self.assertIn("J/mol K", table)
+        note = self.text("#sim-thermo-note")
+        self.assertIn("what harmonic oscillators lack with 8 beads", note)
+        self.assertIn("thermodynamic integration", note)
+        self.assertIn("quantum effects", note)
+        self.assertFalse(shown("sim-hist-box"))
+        # The spread of the beads can be plotted, a distance not
+        self.assertTrue(shown("e-spread"))
+        self.assertFalse(shown("e-distance"))
+        self.click('#eseries button[data-v="RG"]')
+        self.assertIn("Spread of the beads (nm)", self.browser.find_element(
+            By.CSS_SELECTOR, "#eplot svg").get_attribute("aria-label"))
+        self.shot("05b-simulate-thermochemistry")
+        # The plot on paper has the column of the energy file for it
+        self.saved_pdf("e-pdf", "simulate-e-RGYR.pdf")
+
+        # A dimer: a wall and the binding energy, no thermochemistry
+        self.browser.find_element(By.ID, "molfile").send_keys(
+            str(Path(TESTDATA) / "molecules" / "water_dimer.pdb"))
+        self.wait(lambda b: b.find_element(By.ID, "rwall-field").is_displayed())
+        self.assertFalse(shown("sim-results"))
+        self.assertTrue(shown("monomers-field"))
+        self.assertFalse(shown("thermo-field"))
+        self.assertIn("a wall keeps them together", self.text("#sim-note"))
+        fill("nbeads", "4")
+        fill("rwall", "0.6")
+        self.click("#monomers")
+        fill("temp", "100")
+        fill("nsteps", "1000")
+        run()
+        averages = self.text("#sim-averages")
+        for text in ("All compounds", "Compound 1", "Compound 2", "Distance", "Binding energy",
+                     "Binding enthalpy"):
+            self.assertIn(text, averages)
+        self.assertIn("at the wall in", self.text("#sim-avg-note"))
+        self.assertFalse(shown("sim-thermo-box"))
+        self.assertTrue(shown("sim-hist-box"))
+        self.assertTrue(self.browser.find_elements(By.CSS_SELECTOR, "#histplot svg path"))
+        self.assertIn("Probability density", self.browser.find_element(
+            By.CSS_SELECTOR, "#histplot svg").get_attribute("aria-label"))
+        self.click('#histseries button[data-v="w"]')
+        self.assertIn("Potential of mean force", self.browser.find_element(
+            By.CSS_SELECTOR, "#histplot svg").get_attribute("aria-label"))
+        self.assertTrue(shown("e-distance"))
+        self.click('#eseries button[data-v="R"]')
+        self.assertIn("Distance between the compounds (nm)", self.browser.find_element(
+            By.CSS_SELECTOR, "#eplot svg").get_attribute("aria-label"))
+        self.shot("05c-simulate-dimer")
+        # Back at constant energy the series of the beads is gone
+        self.click('#ensemble button[data-v="nve"]')
+        self.assertFalse(shown("nbeads-field"))
+        fill("nsteps", "200")
+        run()
+        self.assertFalse(shown("sim-results"))
+        self.assertFalse(shown("e-distance"))
+        self.assertIn("Potential energy", self.browser.find_element(
+            By.CSS_SELECTOR, "#eplot svg").get_attribute("aria-label"))
+
     def test_2c_dimer_scan(self):
         """!
         @brief The interaction energy of a water dimer at three distances,
@@ -1176,6 +1292,41 @@ class PageTest(unittest.TestCase):
             self.assertEqual(2, len(self.browser.find_elements(By.CSS_SELECTOR,
                                                                "#vs-list li button")))
 
+    def test_5b2_second_charges_of_a_charge_model(self):
+        """!
+        @brief The charge model with a second charge on every atom ticks the
+        boxes of the second charges; another model puts back what was
+        chosen before (issue 58 of ACT-GUI).
+        """
+        self.open_force_fields()
+        self.click('#fftabs button[data-tab="gen"]')
+        self.click('#g-qmodel button[data-v="GAUSSIAN"]')
+        self.click("#g-none")
+        for name in ("hc", "c3", "cl"):
+            self.click('#g-types input[data-name="%s"][data-key="on"]' % name)
+
+        def second():
+            return {name: self.browser.find_element(
+                By.CSS_SELECTOR, '#g-types input[data-name="%s"][data-key="vsite"]' % name).is_selected()
+                for name in ("hc", "c3", "cl")}
+        # One of the types with a second charge of its own
+        self.click('#g-types input[data-name="cl"][data-key="vsite"]')
+        self.assertEqual({"hc": False, "c3": False, "cl": True}, second())
+        self.click('#g-qmodel button[data-v="P+G"]')
+        self.assertEqual({"hc": True, "c3": True, "cl": True}, second())
+        # Choosing it again changes nothing
+        self.click('#g-qmodel button[data-v="P+G"]')
+        self.assertEqual({"hc": True, "c3": True, "cl": True}, second())
+        self.click('#g-qmodel button[data-v="POINT"]')
+        self.assertEqual({"hc": False, "c3": False, "cl": True}, second())
+        # Another model keeps them
+        self.click('#g-qmodel button[data-v="SLATER"]')
+        self.assertEqual({"hc": False, "c3": False, "cl": True}, second())
+        self.assertEqual("", self.errors())
+        # As the tests after this one expect it
+        self.click('#g-types input[data-name="cl"][data-key="vsite"]')
+        self.click('#g-qmodel button[data-v="GAUSSIAN"]')
+
     def test_5c_fixed_parameters(self):
         """!
         @brief Parameters of a file, as actgui read them, are fixed at their
@@ -1257,6 +1408,100 @@ class PageTest(unittest.TestCase):
         while self.browser.find_elements(By.CSS_SELECTOR, "#g-fixed li button"):
             self.click("#g-fixed li button")
         self.assertEqual("", self.text("#g-fixed"))
+
+    def test_5d_force_constants_of_the_shells(self):
+        """!
+        @brief A force field is made with a fixed force constant of its
+        shells, from which the charge of the shell follows; the edit tab
+        shows it, releases it and fixes it again with alpha following.
+        """
+        self.open_force_fields()
+        # Without the sites of the tests before
+        self.click('#fftabs button[data-tab="vsite"]')
+        while self.browser.find_elements(By.CSS_SELECTOR, "#vs-list li button"):
+            self.click("#vs-list li button")
+        self.click('#fftabs button[data-tab="gen"]')
+        self.click("#g-none")
+        for name in ("hc", "c3"):
+            self.click('#g-types input[data-name="%s"][data-key="on"]' % name)
+        self.click('#g-types input[data-name="c3"][data-key="shell"]')
+        # The field of the force constant is only there if it is fixed
+        self.assertFalse(self.browser.find_element(By.ID, "g-kshell-field").is_displayed())
+        Select(self.browser.find_element(By.ID, "g-kshell-follows")).select_by_value("charge")
+        self.assertTrue(self.browser.find_element(By.ID, "g-kshell-field").is_displayed())
+        self.browser.find_element(By.ID, "g-kshell").send_keys("300000")
+        self.click("#run-gen")
+        self.wait(lambda b: b.find_element(By.ID, "gen-pill").text in ("Done", "Failed"))
+        self.assertEqual("", self.errors())
+        self.assertEqual("Done", self.text("#gen-pill"))
+        # The edit tab tells how it is
+        self.click('#fftabs button[data-tab="edit"]')
+        self.assertTrue(self.browser.find_element(By.ID, "k-card").is_displayed())
+        self.assertIn("c3_s: 300000 kJ/mol nm², the charge follows", self.text("#k-state"))
+        self.assertEqual(["c3_s"], self.browser.execute_script(
+            "return [...document.querySelectorAll('#k-types input')].map(b => b.dataset.name)"))
+        self.assertTrue(self.browser.find_element(By.ID, "k-apply").is_enabled())
+        self.shot("13b-ff-shells")
+        # Released, there is no force constant to give
+        Select(self.browser.find_element(By.ID, "k-action")).select_by_value("release")
+        self.assertFalse(self.browser.find_element(By.ID, "k-value-field").is_displayed())
+        self.click("#k-apply")
+        self.wait(lambda b: "(1 change)" in b.find_element(By.ID, "ffchips").text)
+        self.assertEqual("", self.errors())
+        self.assertIn("Each force constant follows", self.text("#k-state"))
+        # Fixed again, at another value, with the polarizability following
+        Select(self.browser.find_element(By.ID, "k-action")).select_by_value("alpha")
+        self.assertTrue(self.browser.find_element(By.ID, "k-value-field").is_displayed())
+        self.browser.find_element(By.ID, "k-value").send_keys("500000")
+        self.click("#k-apply")
+        self.wait(lambda b: "(2 changes)" in b.find_element(By.ID, "ffchips").text)
+        self.assertEqual("", self.errors())
+        self.assertIn("c3_s: 500000 kJ/mol nm², the polarizability follows", self.text("#k-state"))
+        self.show_parameters("POLARIZATION", "c3_s")
+        alpha = [r for r in self.parameter_rows() if r[1] == "alpha"][0]
+        self.assertIn("Dependent", alpha)
+        # A force field without shells has no such card
+        self.click('#fftabs button[data-tab="gen"]')
+        self.click('#g-types input[data-name="c3"][data-key="shell"]')
+        Select(self.browser.find_element(By.ID, "g-kshell-follows")).select_by_value("no")
+        self.click("#run-gen")
+        self.wait(lambda b: b.find_element(By.ID, "gen-pill").text in ("Done", "Failed"))
+        self.click('#fftabs button[data-tab="edit"]')
+        self.assertFalse(self.browser.find_element(By.ID, "k-card").is_displayed())
+
+    def test_5e_cross_term_angles(self):
+        """!
+        @brief The functions for angles that the program has can be chosen,
+        the harmonic angle first. A force field is made with the cross terms
+        of the bonds and the angle, if the program has them.
+        """
+        self.open_force_fields()
+        self.click('#fftabs button[data-tab="gen"]')
+        choice = Select(self.browser.find_element(By.ID, "g-angles"))
+        offered = [o.get_attribute("value") for o in choice.options]
+        self.assertEqual(["HARMONIC_ANGLES", "UREY_BRADLEY_ANGLES"], offered[:2])
+        self.assertEqual("HARMONIC_ANGLES", choice.first_selected_option.get_attribute("value"))
+        if "CROSS_BOND_ANGLES" not in offered:
+            self.skipTest("This alexandria has no CROSS_BOND_ANGLES")
+        self.click("#g-none")
+        for name in ("hc", "c3"):
+            self.click('#g-types input[data-name="%s"][data-key="on"]' % name)
+        choice.select_by_value("CROSS_BOND_ANGLES")
+        try:
+            self.click("#run-gen")
+            self.wait(lambda b: b.find_element(By.ID, "gen-pill").text in ("Done", "Failed"))
+            self.assertEqual("", self.errors())
+            self.assertEqual("Done", self.text("#gen-pill"))
+            functions = dict(self.browser.execute_script(
+                "return [...document.querySelectorAll('#g-inter tbody tr')]"
+                ".map(r => [r.cells[0].textContent, r.cells[1].textContent])"))
+            self.assertEqual("CROSS_BOND_ANGLES", functions["ANGLES"])
+            self.assertEqual("LINEAR_ANGLES", functions["LINEAR_ANGLES"])
+            self.shot("13c-ff-cross-term-angles")
+        finally:
+            # The tests after this one make force fields with harmonic angles
+            Select(self.browser.find_element(By.ID, "g-angles")).select_by_value(
+                "HARMONIC_ANGLES")
 
     def test_6_change_a_force_field_and_use_it(self):
         """!

@@ -161,8 +161,10 @@ DEFAULT_CHARGE_MODEL = "GAUSSIAN"
 
 ## The functions for bonds, angles and dihedrals, the proposed one first
 BOND_FUNCTIONS = ("HUA_BONDS", "HARMONIC_BONDS", "CUBIC_BONDS", "MORSE_BONDS")
-ANGLE_FUNCTIONS = ("HARMONIC_ANGLES", "UREY_BRADLEY_ANGLES")
+ANGLE_FUNCTIONS = ("HARMONIC_ANGLES", "UREY_BRADLEY_ANGLES", "CROSS_BOND_ANGLES")
 DIHEDRAL_FUNCTIONS = ("FOURIER_DIHEDRALS", "PROPER_DIHEDRALS")
+## The options of gen_ff that take these functions
+FUNCTION_OPTIONS = {"bonds": "bondfn", "angles": "anglefn", "dihedrals": "dihfn"}
 
 ## The files with predefined virtual sites: name, what the page calls them
 ## and whether they are sigma-holes, which can get an exchange correction
@@ -225,6 +227,15 @@ _VDW_CORRECTION_RULES = (("aexp", "Kronecker"), ("bexp", "Arithmetic"), ("vsite"
 NEXCL_RANGE = (0, 3)
 EPSILONR_RANGE = (0.1, 100.0)
 ROW_RANGE = (1, 6)
+## The force constants of shells that can be given, in kJ/mol nm2
+KSHELL_RANGE = (1.0, 1e9)
+## Which parameter of the shells follows from a fixed force constant, see
+## the option -fixkshell of gen_ff: none, alpha or the charge of the shell
+SHELL_FOLLOWS = {
+    "no": "The force constant follows from the polarizability and the charge of the shell",
+    "alpha": "The force constant is fixed, the polarizability follows from it and the charge",
+    "charge": "The force constant is fixed, the charge of the shell follows from it and the polarizability",
+}
 
 
 @dataclass(frozen=True)
@@ -386,6 +397,12 @@ class Choices:
     ## The parameters that the user fixed at a value: interaction, type,
     ## parameter, value and unit, see _fixed
     fixed: Tuple[Mapping[str, Any], ...] = ()
+    ## Which parameter of the shells follows from a fixed force constant,
+    ## one of SHELL_FOLLOWS
+    shell_follows: str = "no"
+    ## That force constant in kJ/mol nm2, None for that of the charge and
+    ## the middle of the range of the polarizability
+    kshell: Optional[float] = None
 
 
 def default_rules(vdw: str, induction: str) -> Dict[str, Dict[str, str]]:
@@ -639,15 +656,16 @@ def parse_choices(request: Any, atom_types: Mapping[str, AtomType]) -> Choices:
     charge (model, epsilonr, maxrow, symmetric), bonds, angles, dihedrals,
     induction (potential, particles), vsites (files, exchange, charge with
     the min and max of the charge of a site, and sites, the virtual sites of
-    the user), rules (by interaction and parameter) and fixed (the
-    parameters that the user fixed, see _fixed).
+    the user), rules (by interaction and parameter), fixed (the parameters
+    that the user fixed, see _fixed) and shells (follows, one of
+    SHELL_FOLLOWS, and kshell, the fixed force constant, or none).
     @param atom_types The atom types that can be chosen.
     @return The choices.
     @throws GeneratorError if something is not one of the possibilities.
     """
     request = _object(request, "The choices for the force field")
     known = ("atomtypes", "vdw", "charge", "bonds", "angles", "dihedrals", "induction",
-             "vsites", "rules", "fixed")
+             "vsites", "rules", "fixed", "shells")
     for key in request:
         if key not in known:
             raise GeneratorError("Unknown choice '%s'" % (key,))
@@ -700,6 +718,22 @@ def parse_choices(request: Any, atom_types: Mapping[str, AtomType]) -> Choices:
                 raise GeneratorError("%s has no parameter '%s'" % (itype, param))
             rules[itype][param] = _one_of(rule, COMBINATION_RULES, "", "combination rule")
 
+    # The force constants of the shells
+    shells = _object(request.get("shells"), "shells")
+    for key in shells:
+        if key not in ("follows", "kshell"):
+            raise GeneratorError("Unknown choice for the shells '%s'" % (key,))
+    shell_follows = _one_of(shells.get("follows"), SHELL_FOLLOWS, "no",
+                            "parameter of the shells that follows")
+    kshell = shells.get("kshell")
+    if kshell is not None:
+        kshell = float(_number(kshell, 0, KSHELL_RANGE, "The force constant of the shells"))
+        if shell_follows == "no":
+            raise GeneratorError("A force constant of the shells is only used if it is fixed")
+    if shell_follows != "no" and not any(t.shell for t in types):
+        raise GeneratorError("The force constant of the shells can only be fixed if an atom type "
+                             "has a shell")
+
     return Choices(
         types=tuple(types),
         vdw=vdw_name,
@@ -731,7 +765,9 @@ def parse_choices(request: Any, atom_types: Mapping[str, AtomType]) -> Choices:
         vsite_charge=_vsite_charge(vsites.get("charge")),
         rules=rules,
         sites=_sites(vsites.get("sites"), types, atom_types),
-        fixed=_fixed(request.get("fixed")))
+        fixed=_fixed(request.get("fixed")),
+        shell_follows=shell_follows,
+        kshell=kshell)
 
 
 class _Table:
@@ -1024,6 +1060,10 @@ def build(choices: Choices, atom_types: Mapping[str, AtomType],
     }
     if choices.induction != "NONE":
         options["icfn"] = choices.induction
+    if choices.shell_follows != "no":
+        options["fixkshell"] = choices.shell_follows
+        if choices.kshell is not None:
+            options["kshell"] = choices.kshell
     rules = ["%s:%s:%s" % (itype, param, rule)
              for itype, params in choices.rules.items() for param, rule in params.items()]
     if correction:
@@ -1044,10 +1084,33 @@ def build(choices: Choices, atom_types: Mapping[str, AtomType],
     return GeneratorInput(atomtypes=table.text(), vsites=vsites, options=options)
 
 
-def describe(atom_types: Mapping[str, AtomType]) -> Dict[str, Any]:
+def offered(functions: Tuple[str, ...], gen_ff: Optional[Any], option: str) -> List[str]:
+    """!
+    @brief The functions that the program has, as an older alexandria does
+    not know the newest ones, such as CROSS_BOND_ANGLES.
+    @param functions The functions that can be chosen here.
+    @param gen_ff    The description of the command gen_ff from
+    act.program_info(), None if it is not known.
+    @param option    The option of gen_ff that takes the function.
+    @return The functions that the option accepts, in the same order; all
+    of them if the program does not tell what it accepts or accepts none of
+    them.
+    """
+    if gen_ff is None or not gen_ff.has_option(option):
+        return list(functions)
+    accepted = gen_ff.options[option].values
+    known = [name for name in functions if name in accepted]
+    # A list without any choice is of no use to the page
+    return known or list(functions)
+
+
+def describe(atom_types: Mapping[str, AtomType], gen_ff: Optional[Any] = None) -> Dict[str, Any]:
     """!
     @brief What the browser needs to show the choices.
     @param atom_types The atom types that can be chosen.
+    @param gen_ff     The description of the command gen_ff from
+    act.program_info(), which tells what functions the program has. With
+    None all the functions are offered.
     @return The atom types, the potentials with their parameters and the
     combination rules that are proposed, the charge models, the functions,
     the predefined virtual sites with what their files say about them and
@@ -1071,9 +1134,9 @@ def describe(atom_types: Mapping[str, AtomType]) -> Dict[str, Any]:
                               for name, comment in CHARGE_MODELS.items()],
                    "epsilonr": list(EPSILONR_RANGE), "maxrow": list(ROW_RANGE),
                    "second_charge": POINT_GAUSSIAN},
-        "bonds": list(BOND_FUNCTIONS),
-        "angles": list(ANGLE_FUNCTIONS),
-        "dihedrals": list(DIHEDRAL_FUNCTIONS),
+        "bonds": offered(BOND_FUNCTIONS, gen_ff, FUNCTION_OPTIONS["bonds"]),
+        "angles": offered(ANGLE_FUNCTIONS, gen_ff, FUNCTION_OPTIONS["angles"]),
+        "dihedrals": offered(DIHEDRAL_FUNCTIONS, gen_ff, FUNCTION_OPTIONS["dihedrals"]),
         "induction": {"default": "NONE", "potentials": potentials(INDUCTION_POTENTIALS)},
         "vsites": [{"name": name, "label": label, "sigma_hole": sigma,
                     "description": describe_vsites(name), "sites": read_vsites(name)}
@@ -1083,4 +1146,7 @@ def describe(atom_types: Mapping[str, AtomType]) -> Dict[str, Any]:
         "rules": list(COMBINATION_RULES),
         "site_kinds": [{"name": name, "atoms": natom, "parameters": list(names)}
                        for name, (natom, names) in SITE_KINDS.items()],
+        "shells": {"follows": [{"name": name, "comment": comment}
+                               for name, comment in SHELL_FOLLOWS.items()],
+                   "kshell": list(KSHELL_RANGE)},
     }

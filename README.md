@@ -23,7 +23,10 @@ In development. What is there:
   the RMSD and the energy terms; normal modes with the infrared spectrum,
   the animated vibrations and the thermochemistry; short simulations with
   the energies plotted while the simulation runs and the trajectory
-  animated afterwards.
+  animated afterwards. A simulation can be at constant temperature, with
+  beads for path integral molecular dynamics: with the thermochemistry of
+  a compound next to that of the normal modes, or for a dimer a wall, the
+  binding energy and the distribution of the distance.
 
 The viewer of the molecule shows what a molecule has besides its atoms
 when that is switched on above it:
@@ -126,7 +129,15 @@ there or opened from a file:
   `interaction|potential|atom type|parameter|value|unit` for each, as
   `actgui` read them. It does what the program `actgui` of
   ACT-utilities, which it replaces, did. The table of atom types and the virtual sites that
-  `gen_ff` got can be saved as well.
+  `gen_ff` got can be saved as well. Only the functions for bonds, angles
+  and dihedrals that your `alexandria` has are offered: `CROSS_BOND_ANGLES`,
+  the cross terms between the two bonds and the angle with a harmonic
+  potential on the distance between the outer atoms, as in flexible TIP4P
+  water, needs a program that is newer than version 1.95. Under *Shells* the force constant of
+  the spring between shell and core can be fixed (`gen_ff -fixkshell`),
+  such that training changes only the charge of the shell or its
+  polarizability and the other one follows; its value is given or comes
+  from the starting values (`-kshell`).
 - *Geometry* takes the bond lengths, angles and dihedral angles from the
   compounds of a molprop file with `alexandria geometry_ff`. The file is
   one of its own, or the file that is open in the tab *Molprop data*, and
@@ -184,7 +195,14 @@ there or opened from a file:
   and the width of its distribution (zeta) can be changed, also those of a
   virtual site; the mass cannot. A parameter that training does not change
   (Fixed) can be made one that it does (Bounded), and the page says when
-  its minimum and maximum are the same and leave no room for that.
+  its minimum and maximum are the same and leave no room for that. For a
+  force field with shells the card
+  *Force constants of the shells* tells which are fixed and fixes them,
+  with the charge or the polarizability following, or lets them follow
+  from both again, for all shell types or those that are ticked
+  (`edit_ff -fixkshell`, `-kshell`, `-a`); without a value the current
+  force constant is kept. This needs an `alexandria` that has these
+  options.
 
 - *Compare* lists what differs between the force field of the workspace
   and another one, the default or a file: the parameters with another

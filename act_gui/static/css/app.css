@@ -245,6 +245,7 @@ table.data tr.off td { color: var(--muted); }
 table.data tr.off td:first-child { color: var(--ink); }
 .list li span.what { font-family: var(--mono); font-size: 13px; }
 .list li.more { grid-template-columns: minmax(0, 1fr); color: var(--muted); }
+.list li.plain { grid-template-columns: minmax(0, 1fr); }
 #p-search { width: 170px; }
 #fftab-edit .head .field { display: block; }
 .range.fixed i { background: var(--muted); }
@@ -318,6 +319,8 @@ pre.jobtext mark { background: color-mix(in srgb, var(--bad) 22%, transparent); 
 pre.jobtext mark.here { outline: 2px solid var(--bad); }
 .jobcard pre.code { max-height: 300px; overflow-y: auto; }
 #ev-clusteropts input[type="number"] { width: 7.5em; }
+/* The force constants of the shells, with a placeholder that says what an empty field means */
+#g-kshell, #k-value { width: 100%; }
 #ev-jobname { width: 16em; }
 table.data td.mono { font-family: var(--mono); font-size: 12.5px; }
 .stack-s { display: grid; gap: 10px; min-width: 0; }

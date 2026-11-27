@@ -13,6 +13,7 @@ choices of the user.
 """
 import json
 import unittest
+from types import SimpleNamespace
 
 from act_gui import ffgen
 
@@ -306,6 +307,30 @@ class GeneratorTest(unittest.TestCase):
         # The type without a shell has no columns of the shell
         self.assertEqual("", rows["hc"]["POLARIZATION:alpha:min"])
         self.assertEqual("", rows["hc"]["poltype"])
+
+    def test_fixed_force_constant_of_the_shells(self):
+        """!
+        @brief A fixed force constant of the shells is an option of gen_ff,
+        with or without its value; it needs a shell.
+        """
+        shell = [{"name": "c3", "shell": True}, {"name": "hc"}]
+        made = ffgen.build(self.choices(atomtypes=shell), self.types)
+        self.assertNotIn("fixkshell", made.options)
+        made = ffgen.build(self.choices(atomtypes=shell, shells={"follows": "charge"}), self.types)
+        self.assertEqual("charge", made.options["fixkshell"])
+        self.assertNotIn("kshell", made.options)
+        made = ffgen.build(self.choices(atomtypes=shell, shells={"follows": "alpha", "kshell": 3e5}),
+                           self.types)
+        self.assertEqual(("alpha", 3e5), (made.options["fixkshell"], made.options["kshell"]))
+        for wrong in ({"follows": "both"}, {"follows": "no", "kshell": 3e5},
+                      {"follows": "alpha", "kshell": -1}, {"follows": "alpha", "kshell": "3e5"},
+                      {"follows": "alpha", "other": 1}):
+            with self.subTest(wrong=wrong):
+                with self.assertRaises(ffgen.GeneratorError):
+                    self.choices(atomtypes=shell, shells=wrong)
+        # Without a shell there is nothing to fix
+        with self.assertRaises(ffgen.GeneratorError):
+            self.choices(shells={"follows": "alpha"})
 
     def test_second_charge(self):
         """!
@@ -634,6 +659,49 @@ class GeneratorTest(unittest.TestCase):
             site = {"type": "vx", "interaction": kind["name"], "atoms": atoms,
                     "parameters": {name: {"min": 0, "max": 0.3} for name in kind["parameters"]}}
             self.assertEqual((site,), self.choices(vsites={"sites": [site]}).sites)
+
+    def test_cross_term_angles(self):
+        """!
+        @brief The cross terms of the bonds and the angle can be chosen as
+        the function for angles, which gen_ff is told.
+        """
+        self.assertIn("CROSS_BOND_ANGLES", ffgen.ANGLE_FUNCTIONS)
+        self.assertEqual("HARMONIC_ANGLES", ffgen.ANGLE_FUNCTIONS[0])
+        chosen = self.choices(atomtypes=[{"name": "ow"}, {"name": "hw"}],
+                              angles="CROSS_BOND_ANGLES")
+        self.assertEqual("CROSS_BOND_ANGLES", chosen.angles)
+        made = ffgen.build(chosen, self.types)
+        self.assertEqual("CROSS_BOND_ANGLES", made.options["anglefn"])
+        self.assertIn("CROSS_BOND_ANGLES", ffgen.describe(self.types)["angles"])
+
+    def test_only_the_functions_of_the_program(self):
+        """!
+        @brief A function that the program does not have is not offered, in
+        the order of the interface. A program that does not tell what it
+        accepts gets all of them.
+        """
+        def program(**values):
+            """A gen_ff with these values of its options"""
+            table = {name: SimpleNamespace(name=name, values=tuple(allowed))
+                     for name, allowed in values.items()}
+            return SimpleNamespace(options=table, has_option=lambda name: name in table)
+
+        # An older program, without the cross terms and with a function
+        # that the interface does not have
+        older = program(anglefn=("UREY_BRADLEY_ANGLES", "QUARTIC_ANGLES", "HARMONIC_ANGLES"),
+                        bondfn=ffgen.BOND_FUNCTIONS)
+        described = ffgen.describe(self.types, older)
+        self.assertEqual(["HARMONIC_ANGLES", "UREY_BRADLEY_ANGLES"], described["angles"])
+        self.assertEqual(list(ffgen.BOND_FUNCTIONS), described["bonds"])
+        # It has no -dihfn that tells its values
+        self.assertEqual(list(ffgen.DIHEDRAL_FUNCTIONS), described["dihedrals"])
+        newer = program(anglefn=ffgen.ANGLE_FUNCTIONS)
+        self.assertEqual(list(ffgen.ANGLE_FUNCTIONS),
+                         ffgen.describe(self.types, newer)["angles"])
+        for silent in (program(anglefn=()), program(anglefn=("QUARTIC_ANGLES",))):
+            self.assertEqual(list(ffgen.ANGLE_FUNCTIONS),
+                             ffgen.describe(self.types, silent)["angles"])
+        self.assertEqual(list(ffgen.ANGLE_FUNCTIONS), ffgen.describe(self.types)["angles"])
 
     def test_description(self):
         """!
