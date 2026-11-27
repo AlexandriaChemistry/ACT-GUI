@@ -32,6 +32,10 @@ from .app import create_app
 from .settings import DEFAULT_LIBRARY_ID, Settings
 
 
+## The number of bytes in a megabyte, as the interface counts them
+MEGABYTE = 1024 * 1024
+
+
 def free_port() -> int:
     """!
     @brief Find a port on the local machine that is not in use.
@@ -40,6 +44,22 @@ def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def megabytes(text: str) -> int:
+    """!
+    @brief Read a size from the command line.
+    @param text A whole number of megabytes, at least 1.
+    @return The size in bytes.
+    @throws argparse.ArgumentTypeError if it is not such a number.
+    """
+    try:
+        size = int(text)
+    except ValueError:
+        size = 0
+    if size < 1:
+        raise argparse.ArgumentTypeError("'%s' is not a number of megabytes" % text)
+    return size * MEGABYTE
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -68,6 +88,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "that was computed on the cluster are put when the job is done, in a "
                         "directory with the name of the job; the directory in which the "
                         "interface is started by default")
+    parser.add_argument("--max-molprop", type=megabytes, default=None, metavar="MB",
+                        help="largest molprop file that can be opened, in megabytes; "
+                        "%d by default. Reading a molprop file takes the programs of ACT "
+                        "many times its size in memory" % (Settings.max_molprop_bytes // MEGABYTE))
     parser.add_argument("--no-browser", action="store_true",
                         help="do not open the browser, only print the address")
     parser.add_argument("--version", action="version", version="act-gui " + __version__)
@@ -78,7 +102,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if data_dir is None:
         temporary = tempfile.TemporaryDirectory(prefix="act-gui-")
         data_dir = Path(temporary.name)
-    settings = Settings(data_dir=data_dir, mode="desktop",
+    limits = {"max_molprop_bytes": args.max_molprop} if args.max_molprop else {}
+    settings = Settings(data_dir=data_dir, mode="desktop", **limits,
                         config_file=args.config or cluster.default_config_file(),
                         cluster_jobs_dir=args.cluster_jobs or cluster.default_jobs_dir(),
                         work_dir=args.workdir or Path.cwd())
