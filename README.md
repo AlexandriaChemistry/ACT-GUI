@@ -129,7 +129,11 @@ there or opened from a file:
   `interaction|potential|atom type|parameter|value|unit` for each, as
   `actgui` read them. It does what the program `actgui` of
   ACT-utilities, which it replaces, did. The table of atom types and the virtual sites that
-  `gen_ff` got can be saved as well. Under *Shells* the force constant of
+  `gen_ff` got can be saved as well. Only the functions for bonds, angles
+  and dihedrals that your `alexandria` has are offered: `CROSS_BOND_ANGLES`,
+  the cross terms between the two bonds and the angle with a harmonic
+  potential on the distance between the outer atoms, as in flexible TIP4P
+  water, needs a program that is newer than version 1.95. Under *Shells* the force constant of
   the spring between shell and core can be fixed (`gen_ff -fixkshell`),
   such that training changes only the charge of the shell or its
   polarizability and the other one follows; its value is given or comes

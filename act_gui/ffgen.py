@@ -161,8 +161,10 @@ DEFAULT_CHARGE_MODEL = "GAUSSIAN"
 
 ## The functions for bonds, angles and dihedrals, the proposed one first
 BOND_FUNCTIONS = ("HUA_BONDS", "HARMONIC_BONDS", "CUBIC_BONDS", "MORSE_BONDS")
-ANGLE_FUNCTIONS = ("HARMONIC_ANGLES", "UREY_BRADLEY_ANGLES")
+ANGLE_FUNCTIONS = ("HARMONIC_ANGLES", "UREY_BRADLEY_ANGLES", "CROSS_BOND_ANGLES")
 DIHEDRAL_FUNCTIONS = ("FOURIER_DIHEDRALS", "PROPER_DIHEDRALS")
+## The options of gen_ff that take these functions
+FUNCTION_OPTIONS = {"bonds": "bondfn", "angles": "anglefn", "dihedrals": "dihfn"}
 
 ## The files with predefined virtual sites: name, what the page calls them
 ## and whether they are sigma-holes, which can get an exchange correction
@@ -1082,10 +1084,33 @@ def build(choices: Choices, atom_types: Mapping[str, AtomType],
     return GeneratorInput(atomtypes=table.text(), vsites=vsites, options=options)
 
 
-def describe(atom_types: Mapping[str, AtomType]) -> Dict[str, Any]:
+def offered(functions: Tuple[str, ...], gen_ff: Optional[Any], option: str) -> List[str]:
+    """!
+    @brief The functions that the program has, as an older alexandria does
+    not know the newest ones, such as CROSS_BOND_ANGLES.
+    @param functions The functions that can be chosen here.
+    @param gen_ff    The description of the command gen_ff from
+    act.program_info(), None if it is not known.
+    @param option    The option of gen_ff that takes the function.
+    @return The functions that the option accepts, in the same order; all
+    of them if the program does not tell what it accepts or accepts none of
+    them.
+    """
+    if gen_ff is None or not gen_ff.has_option(option):
+        return list(functions)
+    accepted = gen_ff.options[option].values
+    known = [name for name in functions if name in accepted]
+    # A list without any choice is of no use to the page
+    return known or list(functions)
+
+
+def describe(atom_types: Mapping[str, AtomType], gen_ff: Optional[Any] = None) -> Dict[str, Any]:
     """!
     @brief What the browser needs to show the choices.
     @param atom_types The atom types that can be chosen.
+    @param gen_ff     The description of the command gen_ff from
+    act.program_info(), which tells what functions the program has. With
+    None all the functions are offered.
     @return The atom types, the potentials with their parameters and the
     combination rules that are proposed, the charge models, the functions,
     the predefined virtual sites with what their files say about them and
@@ -1109,9 +1134,9 @@ def describe(atom_types: Mapping[str, AtomType]) -> Dict[str, Any]:
                               for name, comment in CHARGE_MODELS.items()],
                    "epsilonr": list(EPSILONR_RANGE), "maxrow": list(ROW_RANGE),
                    "second_charge": POINT_GAUSSIAN},
-        "bonds": list(BOND_FUNCTIONS),
-        "angles": list(ANGLE_FUNCTIONS),
-        "dihedrals": list(DIHEDRAL_FUNCTIONS),
+        "bonds": offered(BOND_FUNCTIONS, gen_ff, FUNCTION_OPTIONS["bonds"]),
+        "angles": offered(ANGLE_FUNCTIONS, gen_ff, FUNCTION_OPTIONS["angles"]),
+        "dihedrals": offered(DIHEDRAL_FUNCTIONS, gen_ff, FUNCTION_OPTIONS["dihedrals"]),
         "induction": {"default": "NONE", "potentials": potentials(INDUCTION_POTENTIALS)},
         "vsites": [{"name": name, "label": label, "sigma_hole": sigma,
                     "description": describe_vsites(name), "sites": read_vsites(name)}

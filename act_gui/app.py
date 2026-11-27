@@ -441,9 +441,16 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         @brief What a new force field can be made from.
         @return The atom types, the potentials, the charge models and the
         predefined virtual sites that can be chosen, see ffgen.describe().
+        Only the functions for bonds, angles and dihedrals that the program
+        has are offered.
         """
         try:
-            return ffgen.describe(ffgen.read_atom_types())
+            gen_ff = program_info().commands.get("gen_ff")
+        except Exception:  # pylint: disable=broad-except
+            # Without the program the choices can still be shown
+            gen_ff = None
+        try:
+            return ffgen.describe(ffgen.read_atom_types(), gen_ff)
         except (OSError, ffgen.GeneratorError) as exc:
             raise fail(500, "The atom types cannot be read: %s" % exc) from exc
 

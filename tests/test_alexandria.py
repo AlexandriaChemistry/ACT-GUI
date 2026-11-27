@@ -522,6 +522,24 @@ class RealProgramTest(unittest.TestCase):
                                "options": {"fixkshell": "alpha", "a": ["c3"]}})
         self.assertEqual("failed", wrong["status"])
 
+    def test_generate_cross_term_angles(self):
+        """!
+        @brief A force field with the cross terms of the bonds and the angle
+        as the function for angles, if the program has them.
+        """
+        described = self.client.get("/api/generator", headers=self.headers).json()
+        self.assertEqual("HARMONIC_ANGLES", described["angles"][0])
+        if "CROSS_BOND_ANGLES" not in described["angles"]:
+            self.skipTest("This alexandria has no CROSS_BOND_ANGLES")
+        made = self.run_task({"task": "gen_ff", "generator": {
+            "atomtypes": self.default_types(), "angles": "CROSS_BOND_ANGLES"}})
+        self.assertEqual("finished", made["status"], made["error"])
+        self.assertTrue(made["result"]["validation"]["ok"])
+        kinds = {inter["type"]: inter["function"]
+                 for inter in made["result"]["forcefield"]["interactions"]}
+        self.assertEqual("CROSS_BOND_ANGLES", kinds["ANGLES"])
+        self.assertEqual("LINEAR_ANGLES", kinds["LINEAR_ANGLES"])
+
     @unittest.skipUnless(os.path.isdir(TESTDATA), "ACT_TESTDATA is not set")
     def test_geometry_from_a_molprop_file(self):
         """!
