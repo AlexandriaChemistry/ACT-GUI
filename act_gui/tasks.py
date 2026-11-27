@@ -127,6 +127,10 @@ class Task:
     ## the job is done: the files that it wrote are put in the working
     ## directory of the user and the page shows its plots
     deliver: bool = False
+    ## Output files of a simulation at constant temperature, with beads, by
+    ## option name. They are asked for only in such a simulation, and if
+    ## the program has the option.
+    bead_outputs: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -144,10 +148,18 @@ class Prepared:
     ## The properties that a comparison or a training compares, in the
     ## order in which they were chosen
     observables: Tuple[str, ...] = ()
+    ## Output files in addition to those of the task, by option name
+    outputs: Dict[str, str] = field(default_factory=dict)
 
 
 ## The options to choose how the charges are made, the same for all tasks
 _CHARGE_OPTIONS = ("qalg",)
+
+## The options of a simulation at constant temperature: the number of beads
+## of the ring polymers (one for classical dynamics with a thermostat), the
+## thermostat, the steps that are left out of the averages, the wall that
+## keeps compounds together, the binding energy and the thermochemistry
+BEAD_OPTIONS = ("nbeads", "tau", "equil", "rwall", "kwall", "monomers", "thermo", "nquad")
 
 ## The tasks by name
 TASKS: Dict[str, Task] = {task.name: task for task in (
@@ -174,14 +186,16 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
     Task(name="simulate", command="simulate",
          title="Molecular dynamics simulation",
          options=_CHARGE_OPTIONS + ("nsteps", "deltat", "temp", "nstener", "nstxout",
-                                    "seed", "minimize", "constrain"),
+                                    "seed", "minimize", "constrain") + BEAD_OPTIONS,
          # With the shells and the virtual sites in the trajectory and the
          # last structure, which the viewer of the page shows when asked
          fixed={"json": True, "ws": True},
          outputs={"c": "final.pdb"},
          progress=True,
-         downloads=("o", "e", "c", "g"),
-         plots=("e",)),
+         downloads=("o", "e", "c", "g", "hist"),
+         plots=("e", "hist"),
+         # The distribution of the distance between two compounds
+         bead_outputs={"hist": "distance.xvg"}),
     Task(name="openmm", command="gentop",
          title="Files for a simulation with OpenMM",
          options=_CHARGE_OPTIONS,
@@ -301,6 +315,46 @@ TASKS: Dict[str, Task] = {task.name: task for task in (
          workspace="molprop", collect=evaluation.DIMER_FILES, scatter=True,
          digest=training.digest, cluster=True, parallel=True),
 )}
+
+def _bead_options(given: Dict[str, Any]) -> Dict[str, Any]:
+    """!
+    @brief Check the options of a simulation at constant temperature.
+
+    The program checks them as well. Here the user hears what to change in
+    the words of the interface, before a job is started.
+    @param given The options of the request that the task lists.
+    @return The options for simulate.
+    @throws RequestError if they do not go together.
+    """
+    options = dict(given)
+    beads = options.get("nbeads", 0)
+    if isinstance(beads, bool) or not isinstance(beads, int):
+        raise RequestError("The number of beads must be a whole number")
+    for name in ("monomers", "thermo"):
+        if name in options and not isinstance(options[name], bool):
+            raise RequestError("Option '%s' must be true or false" % name)
+    for name in ("equil", "nquad"):
+        if name in options and (isinstance(options[name], bool) or not isinstance(options[name], int)):
+            raise RequestError("Option '%s' must be a whole number" % name)
+    if beads == 0:
+        # Without beads the simulation is at constant energy
+        used = [name for name in BEAD_OPTIONS if name != "nbeads" and options.get(name) not in (None, False, 0)]
+        if used:
+            raise RequestError("Option '%s' is for a simulation at constant temperature: give the "
+                               "number of beads as well" % used[0])
+        options.pop("nbeads", None)
+        return options
+    if not options.get("temp", 0) > 0:
+        raise RequestError("A simulation at constant temperature needs a temperature above zero")
+    if options.get("constrain") not in (None, "", "none", "None", "no"):
+        raise RequestError("Constraints cannot be combined with a simulation at constant temperature")
+    if "equil" in options and "nsteps" in options and options["equil"] >= options["nsteps"]:
+        raise RequestError("The steps that are left out of the averages must be fewer than the steps")
+    if options.get("thermo") and (options.get("rwall", 0) > 0 or options.get("monomers")):
+        raise RequestError("The thermochemistry is that of one compound: it cannot be combined with "
+                           "a wall or the binding energy")
+    return options
+
 
 ## The values that the option mut of edit_ff takes
 _MUTABILITIES = ("Fixed", "Bounded")
@@ -629,6 +683,8 @@ def build_request(task: Task, request: Mapping[str, Any], settings: Settings,
         chosen = _edit_options(chosen)
     elif task.name == "ff_shells":
         chosen = _shell_options(chosen)
+    elif task.name == "simulate":
+        chosen = _bead_options(chosen)
     number = 1
     if task.parallel:
         # The processes, the individuals, and an optimizer that can do with them
@@ -731,5 +787,6 @@ def describe_task(task: Task, command_info: Optional[Any]) -> Dict[str, Any]:
     return {"name": task.name, "title": task.title, "command": task.command,
             "progress": task.progress, "downloads": list(task.downloads),
             "plots": list(task.plots), "package": task.package,
+            "bead_outputs": list(task.bead_outputs),
             "needs": list(task.needs), "workspace": task.workspace,
             "cluster": task.cluster, "parallel": task.parallel, "options": described}

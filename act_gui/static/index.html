@@ -117,12 +117,38 @@
             <button class="btn primary end" id="run-sim" type="button" disabled>Run simulation</button>
             <button class="btn end" id="stop-sim" type="button" hidden>Stop</button>
           </div>
+          <div class="row top mt8" id="sim-beads" hidden>
+            <div class="field"><span class="lab">Ensemble</span><div class="seg" id="ensemble" role="group" aria-label="Ensemble of the simulation">
+              <button aria-pressed="true" data-v="nve">Constant energy</button><button aria-pressed="false" data-v="nvt">Constant temperature</button></div></div>
+            <div class="field" id="nbeads-field" hidden><label for="nbeads">Beads</label><input type="number" id="nbeads" value="1" min="1" max="128" step="1" title="One bead is classical dynamics with a thermostat. More beads give path integral molecular dynamics, with the zero point motion of the atoms."></div>
+            <div class="field" id="rwall-field" hidden><label for="rwall">Wall radius (nm)</label><input type="number" id="rwall" value="0" min="0" max="10" step="0.1" title="A wall on the distance between the centers of mass of the compounds keeps them together. Zero for no wall."></div>
+            <div class="field" id="monomers-field" hidden><span class="lab">Binding energy</span><label class="check"><input type="checkbox" id="monomers"> Simulate each compound alone as well</label></div>
+            <div class="field" id="thermo-field" hidden><span class="lab">Thermochemistry</span><label class="check"><input type="checkbox" id="sim-thermo-on"> Energy, heat capacity and entropy</label></div>
+          </div>
+          <p class="muted fine" id="sim-note"></p>
           <div class="progress" aria-hidden="true"><i id="simbar"></i></div>
           <div class="row"><div class="seg" id="eseries" role="group" aria-label="Energy to plot">
-              <button aria-pressed="true" data-v="EPOT">Potential</button><button aria-pressed="false" data-v="EKIN">Kinetic</button><button aria-pressed="false" data-v="ETOT">Total</button><button aria-pressed="false" data-v="T">Temperature</button></div>
+              <button aria-pressed="true" data-v="EPOT">Potential</button><button aria-pressed="false" data-v="EKIN">Kinetic</button><button aria-pressed="false" data-v="ETOT">Total</button><button aria-pressed="false" data-v="T">Temperature</button><button aria-pressed="false" data-v="RG" id="e-spread" hidden>Spread of the beads</button><button aria-pressed="false" data-v="R" id="e-distance" hidden>Distance</button></div>
             <span class="spacer"></span><span class="num muted" id="simtime"></span>
             <button class="btn small" id="e-pdf" type="button" hidden>Save as PDF</button></div>
           <div class="plot" id="eplot"></div>
+          <div id="sim-results" hidden>
+            <h3 class="mb8 mt8" id="sim-avg-title">Averages</h3>
+            <div class="xscroll"><table class="data" id="sim-averages"></table></div>
+            <p class="muted fine" id="sim-avg-note"></p>
+            <div id="sim-thermo-box" hidden>
+              <h3 class="mb8 mt8" id="sim-thermo-title">Thermochemistry</h3>
+              <div class="xscroll"><table class="data" id="sim-thermo"></table></div>
+              <p class="muted fine" id="sim-thermo-note"></p>
+            </div>
+            <div id="sim-hist-box" hidden>
+              <div class="row mt8"><h3>Distance between the compounds</h3><span class="spacer"></span>
+                <div class="seg" id="histseries" role="group" aria-label="What to plot against the distance">
+                  <button aria-pressed="true" data-v="p">Distribution</button><button aria-pressed="false" data-v="w">Potential of mean force</button></div>
+                <button class="btn small" id="hist-xvg" type="button">Save as xvg</button></div>
+              <div class="plot" id="histplot"></div>
+            </div>
+          </div>
         </div>
 
         <div class="body panel" id="tab-openmm" hidden>

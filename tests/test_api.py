@@ -53,7 +53,10 @@ def fake_program_info():
         "minimize": list(common), "nma": common + [option("linewidth", "real", 24)],
         "gentop": [option("qalg", "string")],
         "simulate": [option("qalg", "string"), option("nsteps", "int", 0),
-                     option("temp", "real", 0)],
+                     option("temp", "real", 0), option("nbeads", "int", 0),
+                     option("rwall", "real", 0), option("monomers", "bool", False),
+                     option("thermo", "bool", False), option("nquad", "int", 4),
+                     written("hist", "distance.xvg")],
         "train_ff": [written("g", "train_ff.log"), written("sensout", "sensitivity.json"),
                      written("gpout", "genepool.csv"), written("o", "ff_train.xml")],
     }
@@ -304,6 +307,51 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(call["workdir"] / "minimized.pdb", call["options"]["c"])
         self.assertEqual(self.settings.job_timeout, call["timeout"])
 
+    def test_simulation_at_constant_temperature(self):
+        """!
+        @brief The beads, the wall, the binding energy and the thermochemistry
+        become options of simulate, and the distribution of the distance is
+        asked for with beads only.
+        """
+        answer = self.client.post("/api/jobs", headers=self.headers, json={
+            "task": "simulate", "molecule": {"smiles": "O"},
+            "options": {"nsteps": 100, "temp": 300, "nbeads": 16, "rwall": 0.8, "monomers": True}})
+        self.assertEqual(200, answer.status_code, answer.text)
+        self.wait(answer.json()["id"])
+        call = self.run.calls[0]
+        self.assertEqual("simulate", call["command"])
+        self.assertEqual(16, call["options"]["nbeads"])
+        self.assertEqual(0.8, call["options"]["rwall"])
+        self.assertIs(True, call["options"]["monomers"])
+        self.assertEqual(call["workdir"] / "distance.xvg", call["options"]["hist"])
+        # The thermochemistry of one compound
+        answer = self.client.post("/api/jobs", headers=self.headers, json={
+            "task": "simulate", "molecule": {"smiles": "O"},
+            "options": {"nsteps": 100, "temp": 300, "nbeads": 1, "thermo": True, "nquad": 2}})
+        self.assertEqual(200, answer.status_code, answer.text)
+        self.wait(answer.json()["id"])
+        call = self.run.calls[1]
+        self.assertIs(True, call["options"]["thermo"])
+        self.assertEqual(2, call["options"]["nquad"])
+        # At constant energy no beads are given and no distribution is asked for
+        for options in ({"nsteps": 100, "temp": 300}, {"nsteps": 100, "temp": 300, "nbeads": 0}):
+            answer = self.client.post("/api/jobs", headers=self.headers, json={
+                "task": "simulate", "molecule": {"smiles": "O"}, "options": options})
+            self.assertEqual(200, answer.status_code, answer.text)
+            self.wait(answer.json()["id"])
+            call = self.run.calls[-1]
+            self.assertNotIn("nbeads", call["options"])
+            self.assertNotIn("hist", call["options"])
+        tasks = {t["name"]: t for t in self.client.get("/api/tasks",
+                                                       headers=self.headers).json()["tasks"]}
+        self.assertEqual(["hist"], tasks["simulate"]["bead_outputs"])
+        beads = [o for o in tasks["simulate"]["options"] if o["name"] == "nbeads"]
+        self.assertEqual("int", beads[0]["type"])
+        # An option that this stand-in for the program does not have, has no type:
+        # the page then does not offer it
+        tau = [o for o in tasks["simulate"]["options"] if o["name"] == "tau"]
+        self.assertNotIn("type", tau[0])
+
     def test_job_from_uploaded_files(self):
         """!
         @brief Uploaded files are passed by the path the server gave them.
@@ -348,6 +396,30 @@ class ApiTest(unittest.TestCase):
             {"task": "simulate", "molecule": smiles, "options": {"nsteps": 10**9}},
             {"task": "simulate", "molecule": smiles, "options": {"nsteps": "many"}},
             {"task": "simulate", "molecule": smiles, "options": {"temp": -5}},
+            # A simulation at constant temperature: too many beads, beads
+            # that are no number, no temperature, and what needs beads
+            {"task": "simulate", "molecule": smiles, "options": {"nbeads": 1000, "temp": 300}},
+            {"task": "simulate", "molecule": smiles, "options": {"nbeads": 2.5, "temp": 300}},
+            {"task": "simulate", "molecule": smiles, "options": {"nbeads": 8}},
+            {"task": "simulate", "molecule": smiles, "options": {"nbeads": 8, "temp": 0}},
+            {"task": "simulate", "molecule": smiles, "options": {"rwall": 1.0, "temp": 300}},
+            {"task": "simulate", "molecule": smiles, "options": {"monomers": True, "temp": 300}},
+            {"task": "simulate", "molecule": smiles, "options": {"thermo": True, "temp": 300}},
+            {"task": "simulate", "molecule": smiles,
+             "options": {"nbeads": 0, "thermo": True, "temp": 300}},
+            # The thermochemistry is that of one compound
+            {"task": "simulate", "molecule": smiles,
+             "options": {"nbeads": 8, "temp": 300, "thermo": True, "rwall": 1.0}},
+            {"task": "simulate", "molecule": smiles,
+             "options": {"nbeads": 8, "temp": 300, "thermo": True, "monomers": True}},
+            {"task": "simulate", "molecule": smiles,
+             "options": {"nbeads": 8, "temp": 300, "thermo": "yes"}},
+            {"task": "simulate", "molecule": smiles,
+             "options": {"nbeads": 8, "temp": 300, "constrain": "h-bonds"}},
+            {"task": "simulate", "molecule": smiles,
+             "options": {"nbeads": 8, "temp": 300, "nsteps": 100, "equil": 100}},
+            {"task": "simulate", "molecule": smiles,
+             "options": {"nbeads": 8, "temp": 300, "nquad": 99}},
             ["not", "an", "object"],
         ]
         for body in wrong:
@@ -1821,7 +1893,7 @@ class ApiTest(unittest.TestCase):
         self.assertTrue(client.get("/api/session", headers=self.headers).json()["pdf"])
         tasks = {t["name"]: t for t in client.get("/api/tasks", headers=self.headers).json()["tasks"]}
         self.assertEqual(["ir"], tasks["nma"]["plots"])
-        self.assertEqual(["e"], tasks["simulate"]["plots"])
+        self.assertEqual(["e", "hist"], tasks["simulate"]["plots"])
         self.assertEqual([], tasks["minimize"]["plots"])
 
         job_id = self.finished_job(client, "simulate")

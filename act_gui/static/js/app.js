@@ -39,7 +39,7 @@ const state = {
   widths: new Map(),    // the charge distributions of the force fields that were asked for, see the task ff_charges
   min: null,            // result of the minimization
   nma: null,            // result of the normal mode analysis
-  sim: { points: [], series: "EPOT", job: null, pdb: null, nsteps: 0 },
+  sim: { points: [], series: "EPOT", job: null, pdb: null, nsteps: 0, beads: false, thermo: false, hist: [], histSeries: "p" },  // beads, thermo: whether the program can simulate at constant temperature and compute the thermochemistry; hist: the distribution of the distance in a dimer
   scan: { parts: [], points: [], job: null, running: null, picked: -1, pdb: null },  // the scan of a dimer: its compounds, points and the structure shown
   ui: { style: "ball", colour: "charge", labels: true, tab: "charges", focus: -1, ghost: true, mode: 0,
         reverse: false,     // reverse: wavenumbers from high to low in the spectrum
@@ -412,7 +412,8 @@ function resetResults() {
   state.min = null; state.nma = null; state.jobs = { nma: null, sim: null, openmm: null };
   pill("omm-pill", "");
   $("#ir-pdf").hidden = true; $("#ir-xvg").hidden = true; $("#e-pdf").hidden = true;
-  state.sim = { points: [], series: state.sim.series, job: null, pdb: null, nsteps: 0 };
+  state.sim = { points: [], series: state.sim.series, job: null, pdb: null, nsteps: 0, beads: state.sim.beads, thermo: state.sim.thermo, hist: [], histSeries: state.sim.histSeries };
+  $("#sim-results").hidden = true; $("#e-spread").hidden = true; $("#e-distance").hidden = true;
   state.ui.focus = -1; state.ui.mode = 0;
   $("#rmsd").textContent = "–"; $("#dE").textContent = "–";
   for (const id of ["etable", "modetable", "thermo"]) document.getElementById(id).textContent = "";
@@ -461,6 +462,7 @@ async function loadMolecule() {
     for (const id of ["run-min", "run-nma", "run-sim", "run-omm"]) document.getElementById(id).disabled = false;
     scanForm();
     b2Form();
+    simForm();
     zoomed = false;
     scene();
   } catch (e) {
@@ -590,13 +592,112 @@ $("#modetable").addEventListener("click", e => { const r = e.target.closest("tr.
 function energyPlot() {
   const pts = state.sim.points, key = state.sim.series;
   if (!pts.length) return;
-  const x = pts.map(p => p.time.value), y = pts.map(p => key === "T" ? p.temperature.value : p.energies[key]);
-  const names = { EPOT: "Potential energy (kJ/mol)", EKIN: "Kinetic energy (kJ/mol)", ETOT: "Total energy (kJ/mol)", T: "Temperature (K)" };
+  const value = { T: p => p.temperature.value, RG: p => p.gyration ? p.gyration.value : NaN, R: p => p.distance ? p.distance.value : NaN };
+  const x = pts.map(p => p.time.value), y = pts.map(value[key] || (p => p.energies[key]));
+  const names = { EPOT: "Potential energy (kJ/mol)", EKIN: "Kinetic energy (kJ/mol)", ETOT: "Total energy (kJ/mol)", T: "Temperature (K)",
+                  RG: "Spread of the beads (nm)", R: "Distance between the compounds (nm)" };
   const last = pts[pts.length - 1];
   const xmax = Math.max(last.time.value * (last.nsteps / Math.max(1, last.step)), last.time.value, 1e-6);
   plot("eplot", { label: names[key] + " during the simulation", xlim: [0, last.step ? xmax : 1], ylim: limits(y),
-    xlabel: "Time (ps)", ylabel: names[key], height: 260, yfmt: v => Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(1),
+    xlabel: "Time (ps)", ylabel: names[key], height: 260,
+    yfmt: v => key === "RG" || key === "R" ? v.toFixed(3) : Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(1),
     series: [{ type: "line", x, y, endpoint: true }] });
+}
+
+/** @returns {boolean} Whether the simulation is at constant temperature. */
+function constantTemperature() {
+  return state.sim.beads && $("#ensemble button[aria-pressed=true]").dataset.v === "nvt";
+}
+
+/** Offer what a simulation at constant temperature can do for this molecule, and say what the choices mean. */
+function simForm() {
+  const nvt = constantTemperature(), parts = state.mol ? compoundsOf().length : 1;
+  const beads = Math.round(+$("#nbeads").value);
+  $("#sim-beads").hidden = !state.sim.beads;
+  $("#nbeads-field").hidden = !nvt;
+  // A wall and the binding energy are for a dimer or a cluster, the thermochemistry for one compound
+  $("#rwall-field").hidden = $("#monomers-field").hidden = !nvt || parts < 2;
+  $("#thermo-field").hidden = !nvt || parts !== 1 || !state.sim.thermo;
+  let note = "";
+  if (nvt) {
+    note = beads > 1
+      ? `Path integral molecular dynamics: each atom is a ring polymer of ${beads} beads, which gives the zero point motion and other quantum effects of the atoms on the energies and the structure. Water at room temperature needs 32 beads, a lower temperature more.`
+      : "Classical dynamics with a thermostat. More than one bead gives path integral molecular dynamics, with the quantum effects of the atoms.";
+    if (parts > 1) note += " In vacuum compounds that move apart do not come back: a wall keeps them together.";
+    if (parts === 1 && state.sim.thermo && $("#sim-thermo-on").checked) note += " The thermochemistry is compared to that of the normal mode analysis. Its entropy takes eight more simulations, two to three times as long as the simulation itself.";
+  }
+  $("#sim-note").textContent = note;
+}
+
+/**
+ * An average with its standard error.
+ * @param {object} q      The object with "Average" and "Standard error".
+ * @param {number} digits The number of decimals.
+ * @returns {string} The text, a dash if there is no average.
+ */
+function plusMinus(q, digits) {
+  if (!q || typeof q.Average !== "number") return "–";
+  return q.Average.toFixed(digits) + (typeof q["Standard error"] === "number" ? " ± " + q["Standard error"].toFixed(digits) : "");
+}
+
+/**
+ * Show the averages of a simulation at constant temperature, the binding
+ * energy and the thermochemistry.
+ * @param {object} result The result of the job.
+ */
+function simResults(result) {
+  const sim = result && result["Simulation with beads"];
+  $("#sim-results").hidden = !sim;
+  if (!sim) return;
+  // What was simulated: the compound, or all compounds and each alone
+  const names = Object.keys(sim).filter(k => sim[k] && typeof sim[k] === "object" && "Total energy" in sim[k]);
+  if (!names.length) { $("#sim-results").hidden = true; return; }
+  const first = sim[names[0]];
+  const rows = [["Potential energy", 3], ["Kinetic energy", 3], ["Total energy", 3], ["Spread of the beads", 5], ["Distance", 4], ["Largest distance", 4]]
+    .filter(([q]) => names.some(n => sim[n][q]));
+  $("#sim-averages").innerHTML = `<tr><th>Quantity</th>${names.map(n => `<th class="n">${esc(n[0].toUpperCase() + n.slice(1))}</th>`).join("")}<th>Unit</th></tr>` +
+    rows.map(([q, digits]) => `<tr><td>${esc(q)}</td>${names.map(n => `<td class="n">${plusMinus(sim[n][q], digits)}</td>`).join("")}` +
+      `<td>${esc((names.map(n => sim[n][q]).find(v => v) || {}).Unit || "")}</td></tr>`).join("") +
+    (sim.Binding ? `<tr><td>Binding energy</td><td class="n">${sim.Binding.Energy.toFixed(3)} ± ${sim.Binding["Standard error"].toFixed(3)}</td>${names.slice(1).map(() => "<td></td>").join("")}<td>${esc(sim.Binding.Unit)}</td></tr>` +
+      `<tr><td>Binding enthalpy</td><td class="n">${sim.Binding.Enthalpy.toFixed(3)} ± ${sim.Binding["Standard error"].toFixed(3)}</td>${names.slice(1).map(() => "<td></td>").join("")}<td>${esc(sim.Binding.Unit)}</td></tr>` : "");
+  const beads = first.Beads, T = first.Temperature ? first.Temperature.value : NaN;
+  $("#sim-avg-title").textContent = `Averages at ${Math.round(T * 100) / 100} K with ${beads} ${beads === 1 ? "bead" : "beads"}`;
+  let note = `Over ${first.Steps} steps, after the first tenth of the simulation. The standard errors are from eight blocks: they are too small if the simulation is short. The kinetic energy includes the translation of the center of mass.`;
+  if (typeof first["Fraction at the wall"] === "number") note += ` The compounds were at the wall in ${(100 * first["Fraction at the wall"]).toFixed(1)} % of the steps.`;
+  if (first["Moved apart"]) note += " The compounds moved apart: the averages are not those of a bound cluster. A wall keeps them together.";
+  if (sim.Binding) note += " The binding energy is the total energy of all compounds minus those of the compounds alone, the enthalpy has −kT for each compound that binds. They are those of a bound cluster only if the compounds stay together without the wall.";
+  $("#sim-avg-note").textContent = note;
+
+  const tc = sim.Thermochemistry;
+  $("#sim-thermo-box").hidden = !tc;
+  if (tc) {
+    const quantities = Object.keys(tc).filter(k => tc[k] && typeof tc[k] === "object" && "Harmonic" in tc[k]);
+    $("#sim-thermo-title").textContent = `Thermochemistry at ${Math.round(tc.Temperature.value * 100) / 100} K and 1 bar`;
+    $("#sim-thermo").innerHTML = `<tr><th>Quantity</th><th class="n">Harmonic</th><th class="n">Simulation</th><th>Unit</th></tr>` +
+      quantities.map(q => `<tr><td>${esc(q)}</td><td class="n">${tc[q].Harmonic.toFixed(3)}</td><td class="n">${plusMinus(tc[q], 3)}</td><td>${esc(tc[q].Unit)}</td></tr>`).join("");
+    let text = `Harmonic: the rigid rotor with harmonic oscillators of the normal mode analysis of the minimized compound. The energies are relative to that minimum. The rotational symmetry number is ${tc["Symmetry number"]}.`;
+    const bead = tc["Bead correction"];
+    if (bead) text += ` The simulation includes what harmonic oscillators lack with ${tc.Beads} beads: ${bead.Energy.value.toFixed(3)} kJ/mol in the energy and ${bead["Heat capacity"].value.toFixed(2)} J/mol K in the heat capacity. If that is much, use more beads.`;
+    else if (tc.Beads === 1) text += " With one bead the simulation is classical, while the harmonic oscillators are quantum mechanical.";
+    const free = tc["Free energy"];
+    if (free) {
+      text += ` The entropy is from thermodynamic integration: the anharmonicity of the classical compound changes the free energy by ${plusMinus(free.Anharmonicity, 3)} kJ/mol`;
+      if (free["Quantum effects"]) text += `, the quantum effects by ${plusMinus(free["Quantum effects"], 3)} kJ/mol (harmonic oscillators: ${free["Quantum effects"].Harmonic.toFixed(3)})`;
+      text += ".";
+    }
+    $("#sim-thermo-note").textContent = text;
+  }
+}
+
+/** Draw the distribution of the distance between two compounds, or the potential of mean force along it. */
+function histPlot() {
+  const rows = state.sim.hist, w = state.sim.histSeries === "w";
+  $("#sim-hist-box").hidden = !rows.length;
+  if (!rows.length) return;
+  const x = rows.map(r => r[0]), y = rows.map(r => r[w ? 2 : 1]);
+  const ylabel = w ? "Potential of mean force (kJ/mol)" : "Probability density (1/nm)";
+  plot("histplot", { label: ylabel + " against the distance between the centers of mass", xlim: limits(x, 0.02), ylim: limits(y),
+    xlabel: "Distance (nm)", ylabel, height: 240, yfmt: v => v.toFixed(w ? 1 : 2), series: [{ type: "line", x, y }] });
 }
 
 /** Run a simulation, plot the energies as they come and show the trajectory. */
@@ -606,28 +707,59 @@ async function simulate() {
   // About two hundred points in the plot and fifty frames in the viewer
   const options = { nsteps, deltat, temp, minimize: true, nstener: Math.max(1, Math.round(nsteps / 200)),
                     nstxout: Math.max(1, Math.round(nsteps / 50)) };
+  const nvt = constantTemperature(), parts = compoundsOf().length;
+  if (nvt) {
+    const beads = Math.round(+$("#nbeads").value), rwall = +$("#rwall").value;
+    if (!(beads >= 1) || !(temp > 0)) { toast("A simulation at constant temperature needs one or more beads and a temperature above zero."); return; }
+    options.nbeads = beads;
+    if (parts > 1 && rwall > 0) options.rwall = rwall;
+    if (parts > 1 && $("#monomers").checked) options.monomers = true;
+    if (parts === 1 && state.sim.thermo && $("#sim-thermo-on").checked) options.thermo = true;
+  }
   const button = $("#run-sim"), stop = $("#stop-sim");
   button.disabled = true; stop.hidden = false; alertBox("");
-  state.sim.points = []; state.sim.pdb = null; state.sim.nsteps = nsteps;
-  state.jobs.sim = null; $("#e-pdf").hidden = true;
+  state.sim.points = []; state.sim.pdb = null; state.sim.nsteps = nsteps; state.sim.hist = [];
+  state.jobs.sim = null; $("#e-pdf").hidden = true; $("#sim-results").hidden = true;
+  // The spread of the beads and the distance are there with beads only
+  $("#e-spread").hidden = !nvt; $("#e-distance").hidden = !nvt || parts < 2;
+  if ((state.sim.series === "RG" && !nvt) || (state.sim.series === "R" && (!nvt || parts < 2))) $('#eseries button[data-v="EPOT"]').click();
   $("#simbar").style.width = "0";
   scene();
   try {
     const job = await runJob("simulate", options, j => {
       state.sim.job = j.id;
-      if (j.progress.length) {
-        state.sim.points.push(...j.progress);
+      // After the simulation itself those for the entropy report how many are done
+      const entropy = j.progress.filter(p => p.entropy).pop(), points = j.progress.filter(p => !p.entropy);
+      if (points.length) {
+        state.sim.points.push(...points);
         const last = state.sim.points[state.sim.points.length - 1];
         $("#simbar").style.width = Math.min(100, 100 * last.step / nsteps) + "%";
         $("#simtime").textContent = `${last.time.value.toFixed(3)} ps · ${last.temperature.value.toFixed(0)} K`;
         energyPlot();
+      }
+      const done = state.sim.points.length ? state.sim.points[state.sim.points.length - 1].step + options.nstener >= nsteps : false;
+      if (entropy) {
+        $("#simbar").style.width = Math.min(100, 100 * entropy.entropy.done / entropy.entropy.total) + "%";
+        $("#simtime").textContent = `Entropy: simulation ${entropy.entropy.done} of ${entropy.entropy.total} done`;
       } else if (j.status === "running" && !state.sim.points.length) {
         $("#simtime").textContent = "Minimizing first…";
+      } else if (j.status === "running" && !points.length && done && options.thermo && !$("#simtime").textContent.startsWith("Entropy")) {
+        $("#simtime").textContent = "Simulations for the entropy…";
       }
     });
     $("#simbar").style.width = "100%";
     state.sim.pdb = await (await call(`/jobs/${job.id}/files/o`)).text();
     state.jobs.sim = job.id; $("#e-pdf").hidden = !session.pdf;
+    simResults(job.result);
+    if (nvt && parts === 2) {
+      // The distribution of the distance, if the program wrote it
+      try { state.sim.hist = parseXvg(await (await call(`/jobs/${job.id}/files/hist`)).text()); } catch (e) { state.sim.hist = []; }
+    }
+    histPlot();
+    if (nvt && state.sim.points.length) {
+      const last = state.sim.points[state.sim.points.length - 1];
+      $("#simtime").textContent = `${last.time.value.toFixed(3)} ps · ${last.temperature.value.toFixed(0)} K`;
+    }
     scene();
   } catch (e) {
     if (e.message !== "The calculation was stopped") alertBox("The simulation failed. " + e.message);
@@ -914,6 +1046,10 @@ document.addEventListener("act-show-result", e => {
 $("#scan-xvg").onclick = e => { if (state.scan.job) saveFile(e.currentTarget, `/jobs/${state.scan.job}/files/xvg`, {}, "Saving…", "dimer-scan.xvg"); };
 for (const id of ["scan-atom1", "scan-atom2"]) $("#" + id).onchange = () => { if (state.ui.tab === "scan") scene(); };
 seg($("#eseries"), v => { state.sim.series = v; energyPlot(); });
+seg($("#ensemble"), simForm);
+seg($("#histseries"), v => { state.sim.histSeries = v; histPlot(); });
+for (const id of ["nbeads", "sim-thermo-on"]) document.getElementById(id).addEventListener("input", simForm);
+$("#hist-xvg").onclick = e => { if (state.jobs.sim) saveFile(e.currentTarget, `/jobs/${state.jobs.sim}/files/hist`, {}, "Saving…", "distance.xvg"); };
 
 /* ---------- files for OpenMM ---------- */
 
@@ -1042,7 +1178,7 @@ try {
   if (localStorage.getItem("act-spectrum-reverse") === "1") reverseSpectrum(true);
 } catch (e) { /* no storage */ }
 $("#e-pdf").onclick = e => savePdf(e.currentTarget, state.jobs.sim, "simulate", "e",
-  state.sim.series === "T" ? "TEMPERATURE" : state.sim.series);
+  ({ T: "TEMPERATURE", RG: "RGYR", R: "DISTANCE" })[state.sim.series] || state.sim.series);
 
 const TABS = { charges: "tab-charges", minimize: "tab-minimize", modes: "tab-modes", simulate: "tab-simulate", openmm: "tab-openmm", scan: "tab-scan", b2: "tab-b2" };
 tabs($("#tasks"), name => { state.ui.tab = name; showOnly(Object.values(TABS), TABS[name]); scene(); });
@@ -1063,6 +1199,13 @@ async function start() {
     session.pdf = !!told.pdf;
     session.maxProcesses = told.max_processes || 1;
     session.workDir = told.work_dir || "";
+    // A simulation at constant temperature needs a program that has the beads
+    call("/tasks").then(answer => answer.json()).then(listed => {
+      const sim = (listed.tasks || []).find(t => t.name === "simulate");
+      state.sim.beads = !!sim && sim.options.some(o => o.name === "nbeads" && o.type);
+      state.sim.thermo = state.sim.beads && sim.options.some(o => o.name === "thermo" && o.type);
+      simForm();
+    }).catch(() => {});
     $('#ffsel option[value="default"]').textContent = told.default_forcefield;
     addLibrary($("#ffsel"), told.forcefields);
     withoutDefault($("#ffsel"), told);

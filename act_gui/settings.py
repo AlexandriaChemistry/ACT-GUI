@@ -99,7 +99,10 @@ class Settings:
     limits: Dict[str, Dict[str, Tuple[float, float]]] = field(default_factory=lambda: {
         "simulate": {"nsteps": (1, 200000), "nstener": (1, 100000),
                      "nstxout": (1, 100000), "temp": (0, 5000),
-                     "deltat": (1e-6, 0.01)},
+                     "deltat": (1e-6, 0.01),
+                     # A simulation at constant temperature, with beads
+                     "nbeads": (0, 128), "tau": (0.001, 10), "equil": (0, 200000),
+                     "rwall": (0, 10), "kwall": (0, 1000000), "nquad": (0, 8)},
         "minimize": {"maxiter": (1, 100000)},
         "nma": {"maxiter": (1, 100000), "linewidth": (0.1, 500)},
         "geometry_ff": {"bfactor": (0.01, 1), "afactor": (0.01, 1), "factor": (0.01, 1)},

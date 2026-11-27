@@ -23,7 +23,10 @@ In development. What is there:
   the RMSD and the energy terms; normal modes with the infrared spectrum,
   the animated vibrations and the thermochemistry; short simulations with
   the energies plotted while the simulation runs and the trajectory
-  animated afterwards.
+  animated afterwards. A simulation can be at constant temperature, with
+  beads for path integral molecular dynamics: with the thermochemistry of
+  a compound next to that of the normal modes, or for a dimer a wall, the
+  binding energy and the distribution of the distance.
 
 The viewer of the molecule shows what a molecule has besides its atoms
 when that is switched on above it:

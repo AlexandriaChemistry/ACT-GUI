@@ -557,6 +557,11 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
             for name, value in task.optional.items():
                 if command is not None and command.has_option(name):
                     prepared.options[name] = value
+            # The files that only a simulation with beads writes
+            if prepared.options.get("nbeads", 0) > 0:
+                for name, filename in task.bead_outputs.items():
+                    if command is not None and command.has_option(name):
+                        prepared.outputs[name] = filename
             if task.name == "train" and limit and limit > 0 and command is not None \
                     and command.has_option("maxh"):
                 prepared.options["maxh"] = training.max_hours(limit)
@@ -665,7 +670,8 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         runner = functools.partial(runners[task.runner], run) if task.runner else None
         try:
             job = manager.submit(task.name, task.command, prepared.options,
-                                 progress=task.progress, outputs=dict(task.outputs),
+                                 progress=task.progress,
+                                 outputs={**task.outputs, **prepared.outputs},
                                  inputs=prepared.inputs, collect=task.collect,
                                  digest=task.digest, processes=prepared.processes,
                                  observables=prepared.observables, runner=runner)
