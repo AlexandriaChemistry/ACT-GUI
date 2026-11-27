@@ -30,6 +30,7 @@ const state = {
   gen: null,           // what a force field can be made from, see /api/generator
   types: new Map(),    // the atom types by name: { on, shell, vsite }
   qmodel: "",          // the charge model
+  vsiteBefore: null,   // the second charges of the types before the model with a second charge on every atom
   current: null,       // the force field: { ref, base, changes, data }, data as edit_ff describes it
   genJob: null,        // the calculation that made a force field, for its files
   genSites: "",        // the virtual sites that the force field was made with, see sitesChosen
@@ -292,10 +293,21 @@ function generatorForm() {
                                  "aria-pressed": String(model.name === state.qmodel) }, MODEL_NAMES[model.name] || model.name));
   }
   seg(models, name => {
+    const before = state.qmodel;
     state.qmodel = name;
-    if (name === gen.charge.second_charge) {
-      // This model is a second charge on every atom
+    if (name === gen.charge.second_charge && before !== name) {
+      // This model is a second charge on every atom. What was chosen for
+      // each type before is kept, to come back with another model.
+      state.vsiteBefore = new Map([...state.types].map(([type, choice]) => [type, choice.vsite]));
       for (const choice of state.types.values()) choice.vsite = true;
+      typeTable();
+    } else if (before === gen.charge.second_charge && name !== before) {
+      // The second charges that came with that model go again, see
+      // https://github.com/AlexandriaChemistry/ACT-GUI/issues/58
+      for (const [type, choice] of state.types) {
+        choice.vsite = state.vsiteBefore ? Boolean(state.vsiteBefore.get(type)) : false;
+      }
+      state.vsiteBefore = null;
       typeTable();
     }
     chargeModel();

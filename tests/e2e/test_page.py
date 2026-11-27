@@ -1292,6 +1292,41 @@ class PageTest(unittest.TestCase):
             self.assertEqual(2, len(self.browser.find_elements(By.CSS_SELECTOR,
                                                                "#vs-list li button")))
 
+    def test_5b2_second_charges_of_a_charge_model(self):
+        """!
+        @brief The charge model with a second charge on every atom ticks the
+        boxes of the second charges; another model puts back what was
+        chosen before (issue 58 of ACT-GUI).
+        """
+        self.open_force_fields()
+        self.click('#fftabs button[data-tab="gen"]')
+        self.click('#g-qmodel button[data-v="GAUSSIAN"]')
+        self.click("#g-none")
+        for name in ("hc", "c3", "cl"):
+            self.click('#g-types input[data-name="%s"][data-key="on"]' % name)
+
+        def second():
+            return {name: self.browser.find_element(
+                By.CSS_SELECTOR, '#g-types input[data-name="%s"][data-key="vsite"]' % name).is_selected()
+                for name in ("hc", "c3", "cl")}
+        # One of the types with a second charge of its own
+        self.click('#g-types input[data-name="cl"][data-key="vsite"]')
+        self.assertEqual({"hc": False, "c3": False, "cl": True}, second())
+        self.click('#g-qmodel button[data-v="P+G"]')
+        self.assertEqual({"hc": True, "c3": True, "cl": True}, second())
+        # Choosing it again changes nothing
+        self.click('#g-qmodel button[data-v="P+G"]')
+        self.assertEqual({"hc": True, "c3": True, "cl": True}, second())
+        self.click('#g-qmodel button[data-v="POINT"]')
+        self.assertEqual({"hc": False, "c3": False, "cl": True}, second())
+        # Another model keeps them
+        self.click('#g-qmodel button[data-v="SLATER"]')
+        self.assertEqual({"hc": False, "c3": False, "cl": True}, second())
+        self.assertEqual("", self.errors())
+        # As the tests after this one expect it
+        self.click('#g-types input[data-name="cl"][data-key="vsite"]')
+        self.click('#g-qmodel button[data-v="GAUSSIAN"]')
+
     def test_5c_fixed_parameters(self):
         """!
         @brief Parameters of a file, as actgui read them, are fixed at their
