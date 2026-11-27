@@ -90,8 +90,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "interface is started by default")
     parser.add_argument("--max-molprop", type=megabytes, default=None, metavar="MB",
                         help="largest molprop file that can be opened, in megabytes; "
-                        "%d by default. Reading a molprop file takes the programs of ACT "
-                        "many times its size in memory" % (Settings.max_molprop_bytes // MEGABYTE))
+                        "%d by default. The programs of ACT that read the file need memory "
+                        "for its compounds, up to a few times the size of the file"
+                        % (Settings.max_molprop_bytes // MEGABYTE))
     parser.add_argument("--no-browser", action="store_true",
                         help="do not open the browser, only print the address")
     parser.add_argument("--version", action="version", version="act-gui " + __version__)
