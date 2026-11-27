@@ -45,8 +45,9 @@ requirements:
     # The Python package act and the program alexandria. The interface uses
     # options of ACT 1.95b, such as geometry_ff -samples.
     - alexandria-python >=1.95b
-    # To save plots as PDF files
-    - plotxvg >=1.3
+    # To save plots as PDF files; 1.3.1 does not import tkinter, which needs
+    # X11 on Linux
+    - plotxvg >=1.3.1
     # The force fields that can be chosen, in share/act/forcefields, with
     # the default force field Alexandria/ACS-pg1 since 0.95
     - forcefields >=0.95
