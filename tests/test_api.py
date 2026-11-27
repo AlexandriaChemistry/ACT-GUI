@@ -279,6 +279,35 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(400, self.upload(data=b"nothing").status_code)
         self.assertEqual(413, self.upload(data=SDF + b" " * 5000).status_code)
         self.assertIn("larger", self.upload(data=SDF + b" " * 5000).json()["detail"])
+        self.assertEqual(400, self.upload(kind="program").status_code)
+
+    def test_upload_in_pieces(self):
+        """!
+        @brief A file is written to the directory of the uploads as it comes
+        in. One that is too large is refused when it is, also if its size
+        was not announced, and nothing of a refused file is left behind.
+        """
+        def pieces(data, size=100):
+            """A body of which the size is not known before it was sent."""
+            for at in range(0, len(data), size):
+                yield data[at:at + size]
+
+        def post(data, name="water.sdf", kind="molecule"):
+            return self.client.post("/api/uploads", params={"kind": kind, "name": name},
+                                    content=pieces(data), headers=self.headers)
+
+        answer = post(SDF)
+        self.assertEqual(200, answer.status_code, answer.text)
+        self.assertEqual(len(SDF), answer.json()["size"])
+        kept = sorted(path.name for path in self.settings.uploads_dir.iterdir())
+        self.assertEqual(sorted([answer.json()["id"] + ".sdf", answer.json()["id"] + ".json"]), kept)
+        self.assertEqual(SDF, (self.settings.uploads_dir / kept[1]).read_bytes())
+        large = post(SDF + b" " * 5000)
+        self.assertEqual(413, large.status_code)
+        self.assertIn("larger", large.json()["detail"])
+        self.assertEqual(400, post(b"nothing").status_code)
+        self.assertEqual(400, post(SDF, name="water.exe").status_code)
+        self.assertEqual(kept, sorted(path.name for path in self.settings.uploads_dir.iterdir()))
 
     # --- jobs ---
 

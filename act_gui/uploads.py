@@ -16,15 +16,22 @@ has a name made by the server. The size is limited, the extension must be
 one that the kind of file can have, the content must be text and must look
 like the format, and XML files cannot declare a document type, with which a
 file could make the reader fetch other files or addresses.
+
+A molprop file can be gigabytes. A file is therefore never in memory as a
+whole: what the browser sends is written to a file in the store as it comes
+in, that file is checked piece by piece, and it is kept by giving it its
+name. Only the files of molecules, which are small, are read as a whole.
 """
 from __future__ import annotations
 
+import codecs
 import json
+import os
 import re
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Mapping, Optional
+from typing import Dict, Mapping, Optional, Tuple
 
 ## The extensions that each kind of file can have
 KINDS: Dict[str, tuple] = {
@@ -42,8 +49,20 @@ _DOCTYPES: Dict[str, str] = {
     "forcefield": "alexandria_chemistry.dtd",
     "molprop": "molprops.dtd",
 }
-## Where a document type starts, and one as ACT writes it
-_DOCTYPE_START = re.compile(r"<!doctype", re.IGNORECASE)
+## Where a document type and an entity start, in the bytes of a file
+_DOCTYPE_START = re.compile(rb"<!doctype", re.IGNORECASE)
+_ENTITY_START = re.compile(rb"<!entity", re.IGNORECASE)
+## How much of the end of a piece of a file is looked at again with the
+## next piece: one character less than the longest of the two above
+_CARRY = len("<!doctype") - 1
+## The size in bytes of the pieces in which an XML file is checked
+PIECE_BYTES = 1024 * 1024
+## The number of characters at the start of an XML file in which its
+## document type is looked for
+HEAD_CHARS = 65536
+## The extension of a file that is coming in or is not checked yet
+PART = ".part"
+## A document type as ACT writes it
 _DOCTYPE = re.compile(r'<!DOCTYPE\s+(\S+)\s+PUBLIC\s+"([^"<>\[\]]*)"\s+"([^"<>\[\]]*)"\s*>')
 
 
@@ -98,10 +117,10 @@ def _check_text(data: bytes) -> str:
         raise UploadError("The file is not a text file in UTF-8") from exc
 
 
-def _check_format(kind: str, extension: str, text: str) -> None:
+def _check_molecule(extension: str, text: str) -> None:
     """!
-    @brief Check that the content looks like the format of the extension.
-    @param kind      The kind of file.
+    @brief Check that the content of a file with a molecule looks like the
+    format of the extension.
     @param extension The extension, with the dot.
     @param text      The content.
     @throws UploadError if it does not.
@@ -109,29 +128,7 @@ def _check_format(kind: str, extension: str, text: str) -> None:
     lines = text.splitlines()
     if not text.strip():
         raise UploadError("The file is empty")
-    if extension == ".xml":
-        head = text.lstrip()[:200]
-        if not head.startswith("<"):
-            raise UploadError("The file is not an XML file")
-        # A document type is how a file makes an XML reader fetch other
-        # files or addresses, or expand to gigabytes. Only the one that ACT
-        # writes itself is accepted: it names the description of the format
-        # and defines no entities.
-        lowered = text.lower()
-        if "<!entity" in lowered:
-            raise UploadError("XML files with entities are not accepted")
-        declared = _DOCTYPE_START.findall(text)
-        if declared:
-            match = _DOCTYPE.search(text)
-            names = set(match.groups()) if match else set()
-            if len(declared) > 1 or names != {_DOCTYPES[kind]}:
-                raise UploadError("XML files with another document type than that of ACT "
-                                  "are not accepted")
-        expected = "<alexandria" if kind == "forcefield" else "<molecules"
-        if expected not in lowered[:5000]:
-            raise UploadError("The file is not %s file of ACT"
-                              % ("a force field" if kind == "forcefield" else "a molprop"))
-    elif extension == ".sdf":
+    if extension == ".sdf":
         if not any(("V2000" in line or "V3000" in line) for line in lines[:10]):
             raise UploadError("The file is not an sdf file: there is no counts line")
     elif extension == ".pdb":
@@ -145,6 +142,72 @@ def _check_format(kind: str, extension: str, text: str) -> None:
                               "the number of atoms") from exc
         if natom < 1 or len(lines) < natom + 2:
             raise UploadError("The file is not an xyz file: there are fewer lines than atoms")
+
+
+def _check_xml(kind: str, path: Path) -> None:
+    """!
+    @brief Check that a file is text and looks like an XML file of ACT.
+    A molprop file can be gigabytes: the file is read piece by piece, such
+    that the check needs the memory of one piece, whatever the size of the
+    file. What is looked for has ASCII characters only, which in UTF-8 are
+    never part of another character, so the search is done in the bytes.
+    @param kind forcefield or molprop.
+    @param path The file.
+    @throws UploadError if it does not.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    # The end of the piece before, such that what is looked for is found
+    # when it is in two pieces: one character less than the longest of them,
+    # so that nothing is counted twice
+    carry = b""
+    head = ""
+    started = False
+    doctypes = 0
+    with open(path, "rb") as stream:
+        while True:
+            piece = stream.read(PIECE_BYTES)
+            if not piece:
+                break
+            if b"\0" in piece:
+                raise UploadError("The file is not a text file")
+            try:
+                text = decoder.decode(piece)
+            except UnicodeDecodeError as exc:
+                raise UploadError("The file is not a text file in UTF-8") from exc
+            if len(head) < HEAD_CHARS:
+                head = (head + text)[:HEAD_CHARS]
+            if not started:
+                first = text.lstrip()
+                if first:
+                    started = True
+                    if not first.startswith("<"):
+                        raise UploadError("The file is not an XML file")
+            # A document type is how a file makes an XML reader fetch other
+            # files or addresses, or expand to gigabytes. Only the one that
+            # ACT writes itself is accepted: it names the description of the
+            # format and defines no entities.
+            window = carry + piece
+            if _ENTITY_START.search(window):
+                raise UploadError("XML files with entities are not accepted")
+            doctypes += len(_DOCTYPE_START.findall(window))
+            carry = window[-_CARRY:]
+    try:
+        decoder.decode(b"", final=True)
+    except UnicodeDecodeError as exc:
+        raise UploadError("The file is not a text file in UTF-8") from exc
+    if not started:
+        raise UploadError("The file is empty")
+    if doctypes:
+        # The document type is before the first element, so at the start
+        match = _DOCTYPE.search(head)
+        names = set(match.groups()) if match else set()
+        if doctypes > 1 or names != {_DOCTYPES[kind]}:
+            raise UploadError("XML files with another document type than that of ACT "
+                              "are not accepted")
+    expected = "<alexandria" if kind == "forcefield" else "<molecules"
+    if expected not in head[:5000].lower():
+        raise UploadError("The file is not %s file of ACT"
+                          % ("a force field" if kind == "forcefield" else "a molprop"))
 
 
 class UploadStore:
@@ -165,6 +228,9 @@ class UploadStore:
         self._dir.mkdir(parents=True, exist_ok=True)
         self._max_bytes = max_bytes
         self._limits = dict(limits or {})
+        # What a server that was stopped during an upload left behind
+        for left in self._dir.glob("*" + PART):
+            left.unlink(missing_ok=True)
 
     def limit(self, kind: str) -> int:
         """!
@@ -174,30 +240,76 @@ class UploadStore:
         """
         return self._limits.get(kind, self._max_bytes)
 
+    def named(self, name: str, kind: str) -> Tuple[str, str]:
+        """!
+        @brief Check the kind and the name of a file, which can be done
+        before any of its content is there.
+        @param name The file name the user gave.
+        @param kind molecule, forcefield or molprop.
+        @return The label and the extension, with the dot.
+        @throws UploadError for an unknown kind, or an extension that the
+        kind of file cannot have.
+        """
+        if kind not in KINDS:
+            raise UploadError("Unknown kind of file '%s'" % kind)
+        label = clean_label(name)
+        extension = Path(label).suffix.lower()
+        if extension not in KINDS[kind]:
+            raise UploadError("A %s file must have the extension %s"
+                              % (kind, " or ".join(KINDS[kind])))
+        return label, extension
+
+    def incoming(self) -> Path:
+        """!
+        @brief Where to write a file that is coming in, in the directory of
+        the store, such that keeping it is giving it its name.
+        @return A path that is not in use, see keep().
+        """
+        return self._dir / (uuid.uuid4().hex + PART)
+
+    def keep(self, name: str, kind: str, incoming: Path) -> Upload:
+        """!
+        @brief Check a file that was written to a path of incoming() and
+        keep it. The file is moved or, if it is not accepted, removed.
+        @param name     The file name the user gave.
+        @param kind     molecule, forcefield or molprop.
+        @param incoming The file.
+        @return The upload, with the identifier to refer to it.
+        @throws UploadError if the file is not accepted.
+        """
+        try:
+            label, extension = self.named(name, kind)
+            size = incoming.stat().st_size
+            if size > self.limit(kind):
+                raise UploadError("The file is larger than %d kB" % (self.limit(kind) // 1024))
+            if extension == ".xml":
+                _check_xml(kind, incoming)
+            else:
+                _check_molecule(extension, _check_text(incoming.read_bytes()))
+            upload = Upload(id=uuid.uuid4().hex, label=label, kind=kind,
+                            extension=extension, size=size)
+            os.replace(incoming, self.path(upload))
+            (self._dir / (upload.id + ".json")).write_text(json.dumps(asdict(upload)))
+            return upload
+        finally:
+            incoming.unlink(missing_ok=True)
+
     def save(self, name: str, kind: str, data: bytes) -> Upload:
         """!
-        @brief Check a file and keep it.
+        @brief Check a file that is in memory and keep it, see keep() for
+        one that is not.
         @param name The file name the user gave.
         @param kind molecule, forcefield or molprop.
         @param data The content.
         @return The upload, with the identifier to refer to it.
         @throws UploadError if the file is not accepted.
         """
-        if kind not in KINDS:
-            raise UploadError("Unknown kind of file '%s'" % kind)
+        self.named(name, kind)
         if len(data) > self.limit(kind):
             raise UploadError("The file is larger than %d kB" % (self.limit(kind) // 1024))
-        label = clean_label(name)
-        extension = Path(label).suffix.lower()
-        if extension not in KINDS[kind]:
-            raise UploadError("A %s file must have the extension %s"
-                              % (kind, " or ".join(KINDS[kind])))
-        _check_format(kind, extension, _check_text(data))
-        upload = Upload(id=uuid.uuid4().hex, label=label, kind=kind,
-                        extension=extension, size=len(data))
-        self.path(upload).write_bytes(data)
-        (self._dir / (upload.id + ".json")).write_text(json.dumps(asdict(upload)))
-        return upload
+        incoming = self.incoming()
+        incoming.write_bytes(data)
+        return self.keep(name, kind, incoming)
 
     def get(self, upload_id: str) -> Optional[Upload]:
         """!

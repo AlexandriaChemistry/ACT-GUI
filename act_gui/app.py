@@ -34,6 +34,7 @@ from typing import Any, AsyncIterator, Callable, Dict, Mapping, Optional, Tuple
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__, cluster, cluster_api, evaluation, ffgen, openmm_package, plots, preferences
@@ -471,17 +472,33 @@ def create_app(settings: Settings, run: Optional[Callable[..., Any]] = None,
         @param name    The name of the file, used as a label only.
         @return The identifier with which the file is referred to.
         """
-        # Stop reading as soon as the file is too large
-        limit = uploads.limit(kind)
-        data = bytearray()
-        async for chunk in request.stream():
-            data.extend(chunk)
-            if len(data) > limit:
-                raise fail(413, "The file is larger than %d kB" % (limit // 1024))
+        # A molprop file can be gigabytes: it is written to a file as it
+        # comes in and checked there, and is never in memory as a whole
         try:
-            saved = uploads.save(name, kind, bytes(data))
+            uploads.named(name, kind)
         except UploadError as exc:
             raise fail(400, str(exc)) from exc
+        limit = uploads.limit(kind)
+        too_large = fail(413, "The file is larger than %d kB" % (limit // 1024))
+        announced = request.headers.get("content-length", "")
+        if announced.isdigit() and int(announced) > limit:
+            raise too_large
+        incoming = uploads.incoming()
+        try:
+            size = 0
+            with open(incoming, "wb") as out:
+                async for chunk in request.stream():
+                    # Stop reading as soon as the file is too large
+                    size += len(chunk)
+                    if size > limit:
+                        raise too_large
+                    await run_in_threadpool(out.write, chunk)
+            # Reading gigabytes takes seconds, in which the server answers others
+            saved = await run_in_threadpool(uploads.keep, name, kind, incoming)
+        except UploadError as exc:
+            raise fail(400, str(exc)) from exc
+        finally:
+            incoming.unlink(missing_ok=True)
         return {"id": saved.id, "label": saved.label, "kind": saved.kind, "size": saved.size}
 
     def written_forcefield(job_id: str) -> Optional[Path]:

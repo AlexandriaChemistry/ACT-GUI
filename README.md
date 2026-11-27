@@ -417,6 +417,14 @@ without which the server does not answer. Uploads and results are kept in
 a temporary directory that is removed at the end; `--data DIR` keeps them
 in a directory.
 
+A molprop file can be up to 200 MB, `--max-molprop MB` sets another largest
+size. The interface itself needs little memory for a large file: it writes
+the file to the directory of the uploads as it comes in and checks it
+there piece by piece. That directory needs the room, so on a machine where
+the temporary directory is in memory, name another with `--data DIR`. The
+programs of ACT that read the file do need memory, many times the size of
+the file.
+
 Without installing ACT-GUI, the script `actgui` in this directory starts
 it from here, with the Python of `.venv` here if there is one (or that of
 `ACT_GUI_PYTHON`, or `python3`). The Python package `act` and the program
