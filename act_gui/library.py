@@ -75,18 +75,24 @@ def default_dirs() -> List[Path]:
     @return In this order: those of the environment variable ACT_FORCEFIELDS,
     forcefields in the directory of the environment variable ACTDATA, and
     share/act/forcefields of the installation of ACT, or of this Python if
-    the package act is not there.
+    the package act is not there or has no classes to tell where ACT is,
+    as the package alexandria-python of conda-forge.
     """
     dirs = [Path(d) for d in os.environ.get(ENV_DIRS, "").split(os.pathsep) if d]
     actdata = os.environ.get("ACTDATA")
     if actdata:
         dirs.append(Path(actdata) / "forcefields")
+    data = ""
     try:
         import act
-        dirs.append(Path(act.data_directory()) / "forcefields")
+        # Empty without the classes of ACT
+        data = act.data_directory()
     except (ImportError, AttributeError, OSError):
+        pass
+    if not data:
         import sys
-        dirs.append(Path(sys.prefix) / "share" / "act" / "forcefields")
+        data = os.path.join(sys.prefix, "share", "act")
+    dirs.append(Path(data) / "forcefields")
     unique: List[Path] = []
     for d in dirs:
         d = d.expanduser()

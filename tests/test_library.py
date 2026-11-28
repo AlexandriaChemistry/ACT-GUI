@@ -11,8 +11,10 @@
 @brief Tests of the installed force fields that can be chosen.
 """
 import os
+import sys
 import tempfile
 import time
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -129,6 +131,21 @@ class LibraryTest(unittest.TestCase):
         self.assertEqual([self.first, self.second, self.second.parent / "forcefields"], dirs[:3])
         self.assertTrue(str(dirs[-1]).endswith(os.path.join("share", "act", "forcefields")))
         self.assertEqual(len(dirs), len(set(dirs)))
+
+    def test_default_dirs_of_act(self):
+        """!
+        @brief The installed directory comes from the package act if it has
+        the classes of ACT, else from this Python, as with the package act
+        without classes of conda-forge or without the package act.
+        """
+        own = Path(sys.prefix) / "share" / "act" / "forcefields"
+        for data, expected in (("/opt/act/share/act", Path("/opt/act/share/act/forcefields")),
+                               ("", own), (None, own)):
+            # None: no package act
+            fake = None if data is None else types.SimpleNamespace(data_directory=lambda d=data: d)
+            with mock.patch.dict(os.environ, {library.ENV_DIRS: "", "ACTDATA": ""}), \
+                 mock.patch.dict(sys.modules, {"act": fake}):
+                self.assertEqual([expected], library.default_dirs(), data)
 
 
 class LibraryApiTest(unittest.TestCase):
